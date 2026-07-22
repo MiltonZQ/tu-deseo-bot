@@ -13,7 +13,7 @@ from fastapi.responses import PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature
-from app import escalations, admin, leads, follow_ups
+from app import escalations, admin, leads, follow_ups, sedes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -356,6 +356,21 @@ async def _process_message(payload: dict) -> None:
     await db.save_message(wa_id, "user", user_text)
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
+
+    # Si la respuesta del bot menciona una sede, enviar su ubicación automáticamente.
+    sede_mencionada = sedes.detectar_sede(reply) or sedes.detectar_sede(user_text)
+    if sede_mencionada:
+        coords = sedes.get_coords(sede_mencionada)
+        if coords:
+            try:
+                await whatsapp_client.send_location(
+                    wa_id, coords["lat"], coords["lng"],
+                    name=f"Tu Deseo — {sede_mencionada}",
+                    address=coords["dir"],
+                )
+                log.info("Ubicación de sede '%s' enviada a %s", sede_mencionada, wa_id)
+            except Exception:
+                log.exception("Error enviando ubicación de sede %s", sede_mencionada)
 
     await escalations.record_if_escalated(
         wa_id=wa_id, user_text=user_text, bot_reply=reply,

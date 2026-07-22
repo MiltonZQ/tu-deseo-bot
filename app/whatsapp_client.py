@@ -11,6 +11,74 @@ async def send_text(to_wa_id: str, body: str) -> dict:
     return await _send_meta_text(to_wa_id, body)
 
 
+async def send_location(
+    to_wa_id: str, latitude: float, longitude: float,
+    name: str = "", address: str = "",
+) -> dict:
+    """Envía una ubicación (mensaje tipo location) por WhatsApp.
+
+    Se usa para compartir la sede física de Tu Deseo cuando un cliente la pide
+    o cuando el bot recomienda la sede más cercana a su barrio.
+    """
+    if config.WHATSAPP_PROVIDER == "ycloud":
+        return await _send_ycloud_location(to_wa_id, latitude, longitude, name, address)
+    return await _send_meta_location(to_wa_id, latitude, longitude, name, address)
+
+
+async def _send_ycloud_location(
+    to_wa_id: str, latitude: float, longitude: float,
+    name: str, address: str,
+) -> dict:
+    url = f"{config.YCLOUD_API_BASE_URL.rstrip('/')}/v2/whatsapp/messages/sendDirectly"
+    headers = {"X-API-Key": config.YCLOUD_API_KEY, "Content-Type": "application/json"}
+    payload = {
+        "from": config.YCLOUD_WHATSAPP_FROM,
+        "to": _ensure_e164(to_wa_id),
+        "type": "location",
+        "location": {
+            "latitude": latitude,
+            "longitude": longitude,
+            "name": name[:256] if name else None,
+            "address": address[:256] if address else None,
+        },
+    }
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+async def _send_meta_location(
+    to_wa_id: str, latitude: float, longitude: float,
+    name: str, address: str,
+) -> dict:
+    url = (
+        f"https://graph.facebook.com/{GRAPH_VERSION}/"
+        f"{config.WHATSAPP_PHONE_NUMBER_ID}/messages"
+    )
+    headers = {
+        "Authorization": f"Bearer {config.WHATSAPP_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_wa_id,
+        "type": "location",
+        "location": {
+            "latitude": latitude,
+            "longitude": longitude,
+            "name": name or None,
+            "address": address or None,
+        },
+    }
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+
 async def _send_meta_text(to_wa_id: str, body: str) -> dict:
     url = (
         f"https://graph.facebook.com/{GRAPH_VERSION}/"
