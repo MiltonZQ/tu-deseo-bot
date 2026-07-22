@@ -1,0 +1,32 @@
+# Secretos y entorno
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Logs / ejecución
+*.log
+execution/
+.mcp.json
+META_SETUP.md
+
+# Archivos de datos / reportes locales
+*.xls
+*.xlsx
+*.csv
+reporte*

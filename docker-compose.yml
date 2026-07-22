@@ -1,0 +1,36 @@
+# Desarrollo local: PostgreSQL + app. En producción se usa Coolify + Postgres gestionado.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: tudeseo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tudeseo
+      POSTGRES_PASSWORD: tudeseo_dev
+      POSTGRES_DB: tudeseo
+    ports:
+      - "5432:5432"
+    volumes:
+      - tudeseo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tudeseo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: tudeseo-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://tudeseo:tudeseo_dev@db:5432/tudeseo
+    ports:
+      - "8000:8000"
+
+volumes:
+  tudeseo_pgdata:
