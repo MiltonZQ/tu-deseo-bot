@@ -142,8 +142,9 @@ async def _process_message_safe(payload: dict) -> None:
         log.exception("Error procesando mensaje")
 
 
-# wabaIds no autorizados (anti-spam multi-línea)
-BLOCKED_WABA_IDS: set[str] = set()
+# wabaId AUTORIZADO: la automatización SOLO se activa para este número de negocio.
+# Cualquier otro wabaId se ignora silenciosamente (no responde, no procesa, no guarda).
+ALLOWED_WABA_IDS: set[str] = {"784305537529187"}
 
 # Mensaje de marca para media genérica (no comprobante)
 MEDIA_REPLY = (
@@ -220,8 +221,10 @@ async def _process_message(payload: dict) -> None:
     if config.WHATSAPP_PROVIDER == "ycloud":
         inner = payload.get("whatsappInboundMessage") or payload.get("whatsappMessage") or {}
         waba_id = payload.get("wabaId") or inner.get("wabaId") or ""
-        if waba_id in BLOCKED_WABA_IDS:
-            log.info("Webhook ignorado: wabaId=%s bloqueado", waba_id)
+        # FILTRO ESTRICTO: solo responder al wabaId autorizado.
+        if waba_id not in ALLOWED_WABA_IDS:
+            log.info("Webhook ignorado: wabaId=%s no autorizado (solo %s)",
+                     waba_id, ", ".join(ALLOWED_WABA_IDS))
             return
 
     msg = whatsapp_client.extract_message(payload)
