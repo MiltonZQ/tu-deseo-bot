@@ -30,3 +30,6 @@ META_SETUP.md
 *.xlsx
 *.csv
 reporte*
+
+# Excepción: el catálogo SÍ va al repo (no contiene secretos)
+!prompts/knowledge/catalogo.csv

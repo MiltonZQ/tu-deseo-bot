@@ -33,6 +33,14 @@ async def lifespan(_app: FastAPI):
         log.warning("Config incompleta, faltan: %s", ", ".join(missing))
     await db.init_pool()
     await db.run_migrations()
+    # Cargar catálogo de productos automáticamente si la tabla está vacía
+    try:
+        csv_path = config.PROMPTS_DIR / "knowledge" / "catalogo.csv"
+        loaded = await db.seed_catalogo_if_empty(csv_path)
+        if loaded:
+            log.info("Catálogo cargado: %d productos", loaded)
+    except Exception:
+        log.exception("No se pudo cargar el catálogo (no bloquea el arranque)")
     deleted = await db.purge_old(config.HISTORY_TTL_DAYS)
     if deleted:
         log.info("Purgados %d mensajes viejos (>%dd)", deleted, config.HISTORY_TTL_DAYS)

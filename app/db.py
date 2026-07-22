@@ -182,6 +182,58 @@ async def run_migrations() -> None:
         )
 
 
+async def seed_catalogo_if_empty(csv_path) -> int:
+    """Carga el catálogo desde un CSV a la tabla productos, solo si está vacía.
+
+    CSV esperado (con header): nombre, descripcion, categoria, precio, sku_pos, activo.
+    Idempotente: si ya hay productos, no hace nada. Devuelve el número de insertados.
+    """
+    import csv as _csv
+    from pathlib import Path
+
+    p = Path(csv_path)
+    if not p.exists():
+        return 0
+
+    async with _pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM productos")
+        if count and count > 0:
+            return 0  # ya poblada
+
+        rows = []
+        with p.open(newline="", encoding="utf-8") as f:
+            reader = _csv.DictReader(f)
+            for r in reader:
+                nombre = (r.get("nombre") or "").strip()
+                try:
+                    precio = int(str(r.get("precio", "0")).replace(".", "").replace(",", "").replace("$", "").strip() or "0")
+                except ValueError:
+                    precio = 0
+                if not nombre:
+                    continue
+                rows.append((
+                    nombre[:200],
+                    (r.get("descripcion") or "").strip() or None,
+                    (r.get("categoria") or "").strip() or None,
+                    precio,
+                    (r.get("sku_pos") or "").strip() or None,
+                    str(r.get("activo", "true")).strip().lower() in ("true", "1", "si", "yes"),
+                ))
+
+        if not rows:
+            return 0
+        await conn.executemany(
+            """
+            INSERT INTO productos (nombre, descripcion, categoria, precio, sku_pos, activo)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT DO NOTHING
+            """,
+            rows,
+        )
+        return len(rows)
+
+
+
 async def purge_old(ttl_days: int) -> int:
     async with _pool.acquire() as conn:
         result = await conn.execute(
