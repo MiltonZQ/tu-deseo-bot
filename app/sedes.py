@@ -1,22 +1,24 @@
 """Data de sedes físicas de Tu Deseo + detección de menciones en mensajes.
 
 Cuando el bot menciona una sede en su respuesta, el hook de main.py usa
-`detectar_sede(texto)` para enviar la ubicación automáticamente por WhatsApp.
+`detectar_sede(texto)` para enviar el link de Google Maps (ubicación exacta)
+automáticamente por WhatsApp.
 """
 from __future__ import annotations
 
 
-# Sedes con coordenadas (lat, lng). Nombre -> datos.
+# Sede -> {dir, link}. El link es el de Google Maps (con kgmid/daddr) que
+# resuelve la ubicación EXACTA del negocio al tocarlo.
 SEDES: dict[str, dict] = {
-    'Unicentro': {"lat": 4.6482975, "lng": -74.107807, "dir": 'Cra 15 # 119 56, Bogotá'},
-    'Frente Unicentro': {"lat": 4.6011126, "lng": -74.0827716, "dir": 'Cra 15 # 124 17 local 117, Bogotá'},
-    'Cedritos': {"lat": 4.6533817, "lng": -74.0836331, "dir": 'Cra 19 # 138 44, Bogotá'},
-    'Engativá': {"lat": 4.6901387, "lng": -74.1173778, "dir": 'Transversal 93a # 80c 6, Bogotá'},
-    'Chapinero': {"lat": 4.6674931, "lng": -74.0563171, "dir": 'Cra 11 # 71 40 segundo piso, Bogotá'},
-    'Ferias': {"lat": 4.6518184, "lng": -74.0510026, "dir": 'Cll 72 # 70 44, Bogotá'},
-    'Usaquén': {"lat": 4.6011126, "lng": -74.0827716, "dir": 'Cra 15 #119-80, Bogotá'},
-    'Colina': {"lat": 4.720158, "lng": -74.0683547, "dir": 'Cll 130 #58 20 Local 134 Plaza Aventura, Suba, Bogotá'},
-    'C.C Panamá': {"lat": 4.758657, "lng": -74.0436105, "dir": 'Dg.182 #20-91 Local 103E, Usaquén, Bogotá'},
+    'Unicentro': {"dir": 'Cra 15 # 119 56, Bogotá', "link": 'https://www.google.com/maps/dir//Tu+Deseo+Sex+Shop+Unicentro,+Ak+15+%23119+-+56,+Bogot%C3%A1/@4.6482975,-74.107807,11z/data=!4m8!4m7!1m0!1m5!1m1!1s0x8e3f9b300e29a321:0xea9cb26b10737dc2!2m2!1d-74.042773!2d4.699921'},
+    'Frente Unicentro': {"dir": 'Cra 15 # 124 17 local 117, Bogotá', "link": 'https://www.google.com/maps?sca_esv=cb0b2358a0071c17&hl=es&um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KdmJhd5bmz-OMffdZJjabxrX&daddr=Ak+15+%23124+-17+Loc+117,+Bogot%C3%A1&kgmid=/g/11wr1c_vzs'},
+    'Cedritos': {"dir": 'Cra 19 # 138 44, Bogotá', "link": 'https://www.google.com/maps?sca_esv=cb0b2358a0071c17&hl=es&um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KZWFS9CVhT-OMXF4ZXA6Th-s&daddr=Cra+19+%23138-44,+Bogot%C3%A1&kgmid=/g/11y3_jfhly'},
+    'Engativá': {"dir": 'Transversal 93a # 80c 6, Bogotá', "link": 'https://www.google.com/maps?hl=es&um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KcPmFKozmz-OMZRBXfGS8OYn&daddr=Tv.+93a+%2380c+06,+Bogot%C3%A1&kgmid=/g/11rd_bvps8'},
+    'Chapinero': {"dir": 'Cra 11 # 71 40 segundo piso, Bogotá', "link": 'https://www.google.com/maps?hl=es&um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KQFM9Cpfmz-OMR_PQxmC9ObW&daddr=Cra.+11+%2371-40,+Bogot%C3%A1&kgmid=/g/11p5l87p42'},
+    'Ferias': {"dir": 'Cll 72 # 70 44, Bogotá', "link": 'https://www.google.com/maps?hl=es&um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KZl_MfY1mz-OMWSwHt0BSihY&daddr=Cl+72+%2370-44,+Bogot%C3%A1&kgmid=/g/11x0tkxd2d'},
+    'Usaquén': {"dir": 'Cra 15 #119-80, Bogotá', "link": 'https://www.google.com/maps?hl=es&um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KemQ1wVGmz-OMUOUOVTaHzSK&daddr=Ak+15+%23119-80,+Bogot%C3%A1&kgmid=/g/11w9ydcm_b'},
+    'Colina': {"dir": 'Cll 130 #58 20 Local 134 Plaza Aventura, Suba, Bogotá', "link": 'https://www.google.com/maps?um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KccUdseuhT-OMcjvu7N1xbyK&daddr=Centro+Comercial+Plaza+Aventura,+Cl.+130+%2358+20+Local+134,+Suba,+Bogot%C3%A1,+Cundinamarca&kgmid=/g/11s7ym7c8n'},
+    'C.C Panamá': {"dir": 'Dg.182 #20-91 Local 103E, Usaquén, Bogotá', "link": 'https://www.google.com/maps?um=1&ie=UTF-8&fb=1&gl=co&sa=X&geocode=KS1OdtgChT-OMQ-qTMeBJvA5&daddr=Dg.+182+%2320-91,+Usaqu%C3%A9n,+Bogot%C3%A1,+Cundinamarca&kgmid=/g/11spm8xk6g'},
 }
 
 
@@ -28,11 +30,8 @@ def detectar_sede(texto: str) -> str | None:
     """
     if not texto:
         return None
-    t = texto.lower()
-    # Quitar acentos para matching tolerante
     import unicodedata
-    t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode()
-    # Apodos/variantes -> nombre canónico
+    t = unicodedata.normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode()
     variantes = {
         "unicentro": "Unicentro",
         "frente unicentro": "Frente Unicentro",
@@ -55,9 +54,6 @@ def detectar_sede(texto: str) -> str | None:
     return None
 
 
-def get_coords(nombre: str) -> dict | None:
-    """Devuelve {lat, lng, dir} de una sede por su nombre canónico."""
-    s = SEDES.get(nombre)
-    if s:
-        return {"lat": s["lat"], "lng": s["lng"], "dir": s["dir"]}
-    return None
+def get_info(nombre: str) -> dict | None:
+    """Devuelve {dir, link} de una sede por su nombre canónico."""
+    return SEDES.get(nombre)
