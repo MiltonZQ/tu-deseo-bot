@@ -357,8 +357,8 @@ async def _process_message(payload: dict) -> None:
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
 
-    # Si la respuesta del bot menciona una sede, enviar el pin de ubicación nativo de WhatsApp.
-    sede_mencionada = sedes.detectar_sede(reply) or sedes.detectar_sede(user_text)
+    # Si la conversación se refiere a UNA sede específica, enviar el pin de ubicación nativo de WhatsApp.
+    sede_mencionada = sedes.detectar_sede_para_enviar(user_text, reply)
     if sede_mencionada:
         info = sedes.get_info(sede_mencionada)
         if info and "lat" in info and "lng" in info:
