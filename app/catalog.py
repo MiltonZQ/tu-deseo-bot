@@ -112,7 +112,7 @@ async def search(query: str, limit: int = 5) -> list[dict]:
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
         rows = await conn.fetch(
             """
-            SELECT id, nombre, descripcion, categoria, precio, sku_pos
+            SELECT id, nombre, descripcion, categoria, precio, precio_regular, precio_oferta, sku_pos, imagen_url, permalink
             FROM productos
             WHERE activo = TRUE
               AND (nombre ILIKE '%' || $1 || '%' OR categoria ILIKE '%' || $1 || '%'
@@ -123,6 +123,31 @@ async def search(query: str, limit: int = 5) -> list[dict]:
             query, limit,
         )
     return [dict(r) for r in rows]
+
+
+async def get_producto_con_imagen(query: str) -> dict | None:
+    """Busca el producto más relevante que contenga una URL de imagen válida."""
+    if not query:
+        return None
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        row = await conn.fetchrow(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+              AND (nombre ILIKE '%' || $1 || '%' OR categoria ILIKE '%' || $1 || '%'
+                   OR descripcion ILIKE '%' || $1 || '%')
+            ORDER BY
+                CASE WHEN nombre ILIKE $1 THEN 1
+                     WHEN nombre ILIKE $1 || '%' THEN 2
+                     ELSE 3 END,
+                nombre
+            LIMIT 1
+            """,
+            query,
+        )
+    return dict(row) if row else None
 
 
 async def sync_from_sidde() -> dict:

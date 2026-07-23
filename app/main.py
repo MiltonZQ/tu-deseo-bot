@@ -41,6 +41,16 @@ async def lifespan(_app: FastAPI):
             log.info("Catálogo cargado: %d productos", loaded)
     except Exception:
         log.exception("No se pudo cargar el catálogo (no bloquea el arranque)")
+
+    # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado
+    if config.WOOCOMMERCE_SYNC_ENABLED:
+        try:
+            from app import woocommerce
+            log.info("WooCommerce activado: iniciando sincronización inicial de productos e imágenes...")
+            asyncio.create_task(woocommerce.sync_catalog_from_woocommerce(full_replace=True))
+        except Exception:
+            log.exception("No se pudo iniciar sincronización de WooCommerce")
+
     deleted = await db.purge_old(config.HISTORY_TTL_DAYS)
     if deleted:
         log.info("Purgados %d mensajes viejos (>%dd)", deleted, config.HISTORY_TTL_DAYS)
@@ -401,9 +411,43 @@ async def _process_message(payload: dict) -> None:
         log.info("Insistencia detectada para %s — bot pausado", wa_id)
         return
 
+    # Si el usuario pide foto/imagen de un producto, enviarle la foto oficial desde WooCommerce
+    if re.search(r"\b(foto|fotos|imagen|imagenes|ver|muestra|muestramelo|fotografia)\b", user_text.lower()):
+        try:
+            prod_foto = await catalog.get_producto_con_imagen(user_text) or await catalog.get_producto_con_imagen(reply)
+            if prod_foto and prod_foto.get("imagen_url"):
+                caption = f"📸 *{prod_foto['nombre']}*\n💰 ${prod_foto['precio']:,}"
+                await whatsapp_client.send_image(wa_id, prod_foto["imagen_url"], caption)
+                log.info("Foto de producto '%s' enviada a %s", prod_foto["nombre"], wa_id)
+        except Exception:
+            log.exception("Error enviando foto de producto a %s", wa_id)
+
     # Programar follow-up solo si la conversación aún está en progreso
     lead = await db.get_lead(wa_id)
     if not lead or lead.get("qualification_status") == "en_progreso":
         await follow_ups.schedule(wa_id)
 
     log.info("Respondido a %s (%d chars)", wa_id, len(reply))
+
+
+@app.post("/webhooks/woocommerce")
+async def woocommerce_webhook(
+    request: Request,
+    x_wc_webhook_signature: str = Header(default="", alias="X-WC-Webhook-Signature"),
+    x_wc_webhook_topic: str = Header(default="", alias="X-WC-Webhook-Topic"),
+):
+    """Endpoint para recibir webhooks de WooCommerce en tiempo real (product.created, product.updated, product.deleted)."""
+    body = await request.body()
+    from app import woocommerce
+
+    if not woocommerce.verify_signature(body, x_wc_webhook_signature):
+        log.warning("Firma de webhook de WooCommerce inválida")
+        raise HTTPException(status_code=401, detail="Firma de webhook inválida")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+        await woocommerce.process_webhook_payload(payload, x_wc_webhook_topic)
+        return {"status": "ok"}
+    except Exception as e:
+        log.exception("Error procesando webhook de WooCommerce: %s", e)
+        return {"status": "error", "detail": str(e)}

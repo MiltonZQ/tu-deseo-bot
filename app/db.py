@@ -180,6 +180,30 @@ async def run_migrations() -> None:
         await conn.execute(
             "ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_paused BOOLEAN NOT NULL DEFAULT FALSE"
         )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS woo_id BIGINT UNIQUE"
+        )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS precio_regular INT"
+        )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS precio_oferta INT"
+        )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS stock_status TEXT DEFAULT 'instock'"
+        )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT"
+        )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS galeria_urls TEXT"
+        )
+        await conn.execute(
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS permalink TEXT"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_productos_woo_id ON productos(woo_id)"
+        )
 
 
 async def seed_catalogo_if_empty(csv_path) -> int:

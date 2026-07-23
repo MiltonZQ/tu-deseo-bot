@@ -87,6 +87,15 @@ SIDDE_POS_ENABLED = os.getenv("SIDDE_POS_ENABLED", "false").strip().lower() in {
     "1", "true", "yes", "on"
 }
 
+# ── WooCommerce (sincronización tienda web e imágenes) ──
+WOOCOMMERCE_URL = os.getenv("WOOCOMMERCE_URL", "")
+WOOCOMMERCE_CONSUMER_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY", "")
+WOOCOMMERCE_CONSUMER_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "")
+WOOCOMMERCE_WEBHOOK_SECRET = os.getenv("WOOCOMMERCE_WEBHOOK_SECRET", "")
+WOOCOMMERCE_SYNC_ENABLED = os.getenv("WOOCOMMERCE_SYNC_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
 # ── URL opcional para leads calificados (checkout, landing) ──
 QUALIFIED_CTA_URL = os.getenv("QUALIFIED_CTA_URL", "")
 
