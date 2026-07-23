@@ -23,7 +23,7 @@ YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
 
 # ── IA / Modelos ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-2.5-flash")  # chat conversacional Gemini
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-3.5-flash")  # chat conversacional Gemini 3.5 Flash
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
