@@ -357,21 +357,22 @@ async def _process_message(payload: dict) -> None:
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
 
-    # Si la respuesta del bot menciona una sede, enviar el link de Google Maps (ubicación exacta).
+    # Si la respuesta del bot menciona una sede, enviar el pin de ubicación nativo de WhatsApp.
     sede_mencionada = sedes.detectar_sede(reply) or sedes.detectar_sede(user_text)
     if sede_mencionada:
         info = sedes.get_info(sede_mencionada)
-        if info:
+        if info and "lat" in info and "lng" in info:
             try:
-                ubicacion_msg = (
-                    f"📍 *Tu Deseo — {sede_mencionada}*\n"
-                    f"📪 {info['dir']}\n"
-                    f"👉 {info['link']}"
+                await whatsapp_client.send_location(
+                    to_wa_id=wa_id,
+                    latitude=info["lat"],
+                    longitude=info["lng"],
+                    name=f"Tu Deseo — {sede_mencionada}",
+                    address=info["dir"],
                 )
-                await whatsapp_client.send_text(wa_id, ubicacion_msg)
-                log.info("Link de sede '%s' enviado a %s", sede_mencionada, wa_id)
+                log.info("Pin de ubicación de sede '%s' enviado a %s", sede_mencionada, wa_id)
             except Exception:
-                log.exception("Error enviando link de sede %s", sede_mencionada)
+                log.exception("Error enviando pin de ubicación de sede %s", sede_mencionada)
 
     await escalations.record_if_escalated(
         wa_id=wa_id, user_text=user_text, bot_reply=reply,
