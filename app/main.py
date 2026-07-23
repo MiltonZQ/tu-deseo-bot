@@ -411,10 +411,26 @@ async def _process_message(payload: dict) -> None:
         log.info("Insistencia detectada para %s — bot pausado", wa_id)
         return
 
-    # Si el usuario pide foto/imagen de un producto, enviarle la foto oficial desde WooCommerce
-    if re.search(r"\b(foto|fotos|imagen|imagenes|ver|muestra|muestramelo|fotografia)\b", user_text.lower()):
+    # Si el usuario pide foto/imagen de un producto o confirma querer ver la foto del producto anterior
+    is_photo_keyword = bool(re.search(r"\b(foto|fotos|imagen|imagenes|ver|muestra|muestramelo|fotografia|mandamela|mandala|enviamela|enviala|envia|enviame|si|claro)\b", user_text.lower()))
+    has_photo_context = any(
+        re.search(r"\b(foto|fotos|imagen|imagenes|producto)\b", m.get("content", "").lower())
+        for m in history[-3:]
+    ) if history else False
+
+    if is_photo_keyword and (has_photo_context or any(w in user_text.lower() for w in ["foto", "imagen", "ver", "muestra", "fotografia", "envia"])):
         try:
-            prod_foto = await catalog.get_producto_con_imagen(user_text) or await catalog.get_producto_con_imagen(reply)
+            prod_foto = await catalog.get_producto_con_imagen(user_text)
+            if not prod_foto:
+                prod_foto = await catalog.get_producto_con_imagen(reply)
+            if not prod_foto and history:
+                # Buscar en los mensajes anteriores del asistente para mantener el contexto conversacional
+                for prev_msg in reversed(history[-4:]):
+                    if prev_msg.get("role") == "assistant":
+                        prod_foto = await catalog.get_producto_con_imagen(prev_msg.get("content", ""))
+                        if prod_foto:
+                            break
+
             if prod_foto and prod_foto.get("imagen_url"):
                 caption = f"📸 *{prod_foto['nombre']}*\n💰 ${prod_foto['precio']:,}"
                 await whatsapp_client.send_image(wa_id, prod_foto["imagen_url"], caption)
