@@ -130,7 +130,9 @@ STOP_WORDS = {
     "foto", "fotos", "imagen", "imagenes", "fotografia", "muestra",
     "muestramelo", "muestrame", "por", "favor", "tienen", "quiero", "dame",
     "enviar", "mandar", "manda", "envia", "como", "es", "tienes", "verla",
-    "verlo", "verlos", "verlas", "con", "para", "este", "chat", "puedes"
+    "verlo", "verlos", "verlas", "con", "para", "este", "chat", "puedes",
+    "cada", "uno", "unos", "unas", "diferencias", "principales", "me", "no",
+    "enciaste", "enviaste", "mandaste", "llegado", "llego", "hijueputa", "puta"
 }
 
 
@@ -138,9 +140,12 @@ def _extract_search_tokens(text: str) -> list[str]:
     if not text:
         return []
     import unicodedata, re
-    clean = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
-    words = re.findall(r"\b\w+\b", clean)
-    tokens = [w for w in words if w not in STOP_WORDS and len(w) > 1]
+    # Eliminar valores de precios en dinero (ej: $100,000, 100.000, 24900) y números
+    text_no_prices = re.sub(r"\$?\b\d+([.,]\d+)*\b", "", text)
+    clean = unicodedata.normalize("NFKD", text_no_prices.lower()).encode("ascii", "ignore").decode()
+    # Extraer palabras alfabéticas puras de longitud >= 2
+    words = re.findall(r"\b[a-z]{2,}\b", clean)
+    tokens = [w for w in words if w not in STOP_WORDS]
     return tokens
 
 

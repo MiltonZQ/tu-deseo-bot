@@ -411,25 +411,28 @@ async def _process_message(payload: dict) -> None:
         log.info("Insistencia detectada para %s — bot pausado", wa_id)
         return
 
-    # Si el usuario pide foto/imagen de un producto o confirma querer ver la foto del producto anterior
-    is_photo_keyword = bool(re.search(r"\b(foto|fotos|imagen|imagenes|ver|muestra|muestramelo|fotografia|mandamela|mandala|enviamela|enviala|envia|enviame|si|claro)\b", user_text.lower()))
-    has_photo_context = any(
-        re.search(r"\b(foto|fotos|imagen|imagenes|producto)\b", m.get("content", "").lower())
-        for m in history[-3:]
-    ) if history else False
+    # Detectar si el usuario pide, confirma o reclama la foto de un producto
+    is_photo_request = bool(re.search(
+        r"\b(foto|fotos|imagen|imagenes|ver|muestra|muestramelo|fotografia|mandamela|mandala|enviamela|enviala|envia|enviame|si|claro|no\s+me|donde\s+esta|enciaste|enviaste)\b",
+        user_text.lower()
+    ))
 
-    if is_photo_keyword and (has_photo_context or any(w in user_text.lower() for w in ["foto", "imagen", "ver", "muestra", "fotografia", "envia"])):
+    if is_photo_request:
         try:
+            # 1. Intentar buscar el producto directamente en el mensaje del usuario
             prod_foto = await catalog.get_producto_con_imagen(user_text)
+
+            # 2. Si no se encontró en el mensaje del usuario, buscar en la respuesta recién generada por la IA
             if not prod_foto:
                 prod_foto = await catalog.get_producto_con_imagen(reply)
+
+            # 3. Si aún no se encontró (ej: "no me enviaste la foto" o "sí envíamela"), buscar en los mensajes del historial (usuario y asistente)
             if not prod_foto and history:
-                # Buscar en los mensajes anteriores del asistente para mantener el contexto conversacional
-                for prev_msg in reversed(history[-4:]):
-                    if prev_msg.get("role") == "assistant":
-                        prod_foto = await catalog.get_producto_con_imagen(prev_msg.get("content", ""))
-                        if prod_foto:
-                            break
+                for prev_msg in reversed(history[-6:]):
+                    content = prev_msg.get("content", "")
+                    prod_foto = await catalog.get_producto_con_imagen(content)
+                    if prod_foto:
+                        break
 
             if prod_foto and prod_foto.get("imagen_url"):
                 caption = f"📸 *{prod_foto['nombre']}*\n💰 ${prod_foto['precio']:,}"

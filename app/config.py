@@ -36,8 +36,8 @@ BUSINESS_NAME = os.getenv("BUSINESS_NAME", "Tu Deseo")
 BUSINESS_TAGLINE = os.getenv("BUSINESS_TAGLINE", "Sex Shop & Bienestar Sexual")
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "America/Bogota")
 
-HISTORY_WINDOW = int(os.getenv("HISTORY_WINDOW", "10"))
-MAX_PROMPT_TOKENS = int(os.getenv("MAX_PROMPT_TOKENS", "6000"))
+HISTORY_WINDOW = int(os.getenv("HISTORY_WINDOW", "30"))
+MAX_PROMPT_TOKENS = int(os.getenv("MAX_PROMPT_TOKENS", "12000"))
 MAX_USER_MESSAGE_CHARS = int(os.getenv("MAX_USER_MESSAGE_CHARS", "4000"))
 HISTORY_TTL_DAYS = int(os.getenv("HISTORY_TTL_DAYS", "30"))
 
