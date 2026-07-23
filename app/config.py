@@ -21,11 +21,9 @@ YCLOUD_API_KEY = os.getenv("YCLOUD_API_KEY", "")
 YCLOUD_WHATSAPP_FROM = os.getenv("YCLOUD_WHATSAPP_FROM", "")
 YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
 
-# ── OpenAI ──
+# ── IA / Modelos ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2-chat-latest")  # chat conversacional
-# URL base opcional (para usar OpenRouter u otra pasarela compatible con la API de OpenAI).
-# Si está vacío, el cliente usa el endpoint por defecto de OpenAI.
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-2.5-flash")  # chat conversacional Gemini
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
