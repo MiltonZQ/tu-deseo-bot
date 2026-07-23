@@ -419,25 +419,46 @@ async def _process_message(payload: dict) -> None:
 
     if is_photo_request:
         try:
-            # 1. Intentar buscar el producto directamente en el mensaje del usuario
-            prod_foto = await catalog.get_producto_con_imagen(user_text)
+            prods_to_send = []
 
-            # 2. Si no se encontró en el mensaje del usuario, buscar en la respuesta recién generada por la IA
-            if not prod_foto:
-                prod_foto = await catalog.get_producto_con_imagen(reply)
+            # A. Verificar si el usuario solicita "fotos de cada uno" o múltiples fotos
+            is_multi = bool(re.search(r"\b(cada\s+uno|todas|todos|cada\s+una|los\s+masturbadores|los\s+vibradores|los\s+dildos)\b", user_text.lower()))
 
-            # 3. Si aún no se encontró (ej: "no me enviaste la foto" o "sí envíamela"), buscar en los mensajes del historial (usuario y asistente)
-            if not prod_foto and history:
+            # 1. Buscar productos directamente en el mensaje del usuario
+            if not is_multi:
+                p_user = await catalog.get_producto_con_imagen(user_text)
+                if p_user:
+                    prods_to_send.append(p_user)
+
+            # 2. Si es solicitud múltiple o no se encontró producto específico en user_text, inspeccionar historial reciente
+            if not prods_to_send and history:
                 for prev_msg in reversed(history[-6:]):
                     content = prev_msg.get("content", "")
-                    prod_foto = await catalog.get_producto_con_imagen(content)
-                    if prod_foto:
-                        break
+                    if is_multi:
+                        found_list = await catalog.get_productos_en_texto(content, limit=3)
+                        if found_list:
+                            prods_to_send.extend(found_list)
+                            break
+                    else:
+                        p_hist = await catalog.get_producto_con_imagen(content)
+                        if p_hist:
+                            prods_to_send.append(p_hist)
+                            break
 
-            if prod_foto and prod_foto.get("imagen_url"):
-                caption = f"📸 *{prod_foto['nombre']}*\n💰 ${prod_foto['precio']:,}"
-                await whatsapp_client.send_image(wa_id, prod_foto["imagen_url"], caption)
-                log.info("Foto de producto '%s' enviada a %s", prod_foto["nombre"], wa_id)
+            # 3. Si aún no hay producto, verificar si la respuesta recién generada menciona explícitamente un producto
+            if not prods_to_send:
+                p_reply_list = await catalog.get_productos_en_texto(reply, limit=1)
+                if p_reply_list:
+                    prods_to_send.extend(p_reply_list)
+
+            # Enviar la(s) foto(s) encontradas
+            seen_ids = set()
+            for p in prods_to_send[:3]:
+                if p["id"] not in seen_ids and p.get("imagen_url"):
+                    seen_ids.add(p["id"])
+                    caption = f"📸 *{p['nombre']}*\n💰 ${p['precio']:,}"
+                    await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
+                    log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
         except Exception:
             log.exception("Error enviando foto de producto a %s", wa_id)
 

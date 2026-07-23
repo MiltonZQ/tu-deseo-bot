@@ -149,70 +149,119 @@ def _extract_search_tokens(text: str) -> list[str]:
     return tokens
 
 
+def _score_product_match(product_name: str, tokens: list[str]) -> float:
+    if not tokens or not product_name:
+        return 0.0
+    import unicodedata, re
+    clean_name = unicodedata.normalize("NFKD", product_name.lower()).encode("ascii", "ignore").decode()
+    name_words = set(re.findall(r"\b[a-z]{2,}\b", clean_name))
+    if not name_words:
+        return 0.0
+    matches = sum(1 for t in tokens if t in name_words or any(t in w for w in name_words))
+    return matches / len(tokens)
+
+
 async def get_producto_con_imagen(query: str) -> dict | None:
-    """Busca el producto más relevante que contenga una URL de imagen válida."""
+    """Busca el producto con imagen que MEJOR coincida con la consulta por puntuación de tokens."""
     if not query:
         return None
 
     tokens = _extract_search_tokens(query)
-    search_pattern = " ".join(tokens) if tokens else query.strip()
+    if not tokens:
+        return None
 
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
-        # Intento 1: Coincidencia con el patrón limpio
+        # Intento 1: Coincidencia exacta de frase limpia en el nombre
+        clean_phrase = " ".join(tokens)
         row = await conn.fetchrow(
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
             FROM productos
             WHERE activo = TRUE
               AND imagen_url IS NOT NULL AND imagen_url != ''
-              AND (nombre ILIKE '%' || $1 || '%' OR categoria ILIKE '%' || $1 || '%'
-                   OR descripcion ILIKE '%' || $1 || '%')
-            ORDER BY
-                CASE WHEN nombre ILIKE $1 THEN 1
-                     WHEN nombre ILIKE '%' || $1 || '%' THEN 2
-                     ELSE 3 END,
-                nombre
+              AND nombre ILIKE '%' || $1 || '%'
+            ORDER BY LENGTH(nombre) ASC
             LIMIT 1
             """,
-            search_pattern,
+            clean_phrase,
         )
         if row:
             return dict(row)
 
-        # Intento 2: Buscar que coincida con todos los tokens (AND)
-        if tokens:
-            where_clause = " AND ".join([f"nombre ILIKE ${i+1}" for i in range(len(tokens))])
-            params = [f"%{t}%" for t in tokens]
-            query_sql = f"""
-                SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
-                FROM productos
-                WHERE activo = TRUE
-                  AND imagen_url IS NOT NULL AND imagen_url != ''
-                  AND {where_clause}
-                ORDER BY nombre
-                LIMIT 1
-            """
-            row = await conn.fetchrow(query_sql, *params)
-            if row:
-                return dict(row)
+        # Intento 2: Coincidencia de TODOS los tokens (AND)
+        where_clause = " AND ".join([f"nombre ILIKE ${i+1}" for i in range(len(tokens))])
+        params = [f"%{t}%" for t in tokens]
+        row = await conn.fetchrow(
+            f"""
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+              AND {where_clause}
+            ORDER BY LENGTH(nombre) ASC
+            LIMIT 1
+            """,
+            *params,
+        )
+        if row:
+            return dict(row)
 
-            # Intento 3: Coincidencia parcial con al menos 2 tokens
-            if len(tokens) >= 2:
-                where_clause_or = " OR ".join([f"nombre ILIKE ${i+1}" for i in range(len(tokens))])
-                query_sql_or = f"""
-                    SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
-                    FROM productos
-                    WHERE activo = TRUE
-                      AND imagen_url IS NOT NULL AND imagen_url != ''
-                      AND ({where_clause_or})
-                    ORDER BY nombre
-                    LIMIT 1
-                """
-                row = await conn.fetchrow(query_sql_or, *params)
-                if row:
-                    return dict(row)
+        # Intento 3: Puntuación de tokens (Term Overlap Score) sin OR ciego por orden alfabético
+        where_clause_or = " OR ".join([f"nombre ILIKE ${i+1}" for i in range(len(tokens))])
+        rows = await conn.fetch(
+            f"""
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+              AND ({where_clause_or})
+            """,
+            *params,
+        )
+        if rows:
+            scored = []
+            for r in rows:
+                score = _score_product_match(r["nombre"], tokens)
+                if score >= 0.5:  # Exigir al menos el 50% de coincidencia de tokens
+                    scored.append((score, -len(r["nombre"]), dict(r)))
+            if scored:
+                scored.sort(key=lambda x: x[:2], reverse=True)
+                return scored[0][2]
 
     return None
+
+
+async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
+    """Extrae productos únicos del catálogo que son mencionados explícitamente en el texto."""
+    if not text:
+        return []
+
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+            ORDER BY LENGTH(nombre) DESC
+            """
+        )
+
+    matched = []
+    seen_ids = set()
+    import unicodedata
+    text_clean = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
+
+    for r in rows:
+        name_clean = unicodedata.normalize("NFKD", r["nombre"].lower()).encode("ascii", "ignore").decode()
+        if name_clean in text_clean:
+            if r["id"] not in seen_ids:
+                seen_ids.add(r["id"])
+                matched.append(dict(r))
+                if len(matched) >= limit:
+                    break
+
+    return matched
 
 
 async def sync_from_sidde() -> dict:
