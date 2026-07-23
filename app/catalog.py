@@ -125,11 +125,35 @@ async def search(query: str, limit: int = 5) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+STOP_WORDS = {
+    "puedo", "ver", "una", "un", "el", "la", "los", "las", "de", "del",
+    "foto", "fotos", "imagen", "imagenes", "fotografia", "muestra",
+    "muestramelo", "muestrame", "por", "favor", "tienen", "quiero", "dame",
+    "enviar", "mandar", "manda", "envia", "como", "es", "tienes", "verla",
+    "verlo", "verlos", "verlas", "con", "para", "este", "chat", "puedes"
+}
+
+
+def _extract_search_tokens(text: str) -> list[str]:
+    if not text:
+        return []
+    import unicodedata, re
+    clean = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
+    words = re.findall(r"\b\w+\b", clean)
+    tokens = [w for w in words if w not in STOP_WORDS and len(w) > 1]
+    return tokens
+
+
 async def get_producto_con_imagen(query: str) -> dict | None:
     """Busca el producto más relevante que contenga una URL de imagen válida."""
     if not query:
         return None
+
+    tokens = _extract_search_tokens(query)
+    search_pattern = " ".join(tokens) if tokens else query.strip()
+
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        # Intento 1: Coincidencia con el patrón limpio
         row = await conn.fetchrow(
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
@@ -140,14 +164,50 @@ async def get_producto_con_imagen(query: str) -> dict | None:
                    OR descripcion ILIKE '%' || $1 || '%')
             ORDER BY
                 CASE WHEN nombre ILIKE $1 THEN 1
-                     WHEN nombre ILIKE $1 || '%' THEN 2
+                     WHEN nombre ILIKE '%' || $1 || '%' THEN 2
                      ELSE 3 END,
                 nombre
             LIMIT 1
             """,
-            query,
+            search_pattern,
         )
-    return dict(row) if row else None
+        if row:
+            return dict(row)
+
+        # Intento 2: Buscar que coincida con todos los tokens (AND)
+        if tokens:
+            where_clause = " AND ".join([f"nombre ILIKE ${i+1}" for i in range(len(tokens))])
+            params = [f"%{t}%" for t in tokens]
+            query_sql = f"""
+                SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+                FROM productos
+                WHERE activo = TRUE
+                  AND imagen_url IS NOT NULL AND imagen_url != ''
+                  AND {where_clause}
+                ORDER BY nombre
+                LIMIT 1
+            """
+            row = await conn.fetchrow(query_sql, *params)
+            if row:
+                return dict(row)
+
+            # Intento 3: Coincidencia parcial con al menos 2 tokens
+            if len(tokens) >= 2:
+                where_clause_or = " OR ".join([f"nombre ILIKE ${i+1}" for i in range(len(tokens))])
+                query_sql_or = f"""
+                    SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+                    FROM productos
+                    WHERE activo = TRUE
+                      AND imagen_url IS NOT NULL AND imagen_url != ''
+                      AND ({where_clause_or})
+                    ORDER BY nombre
+                    LIMIT 1
+                """
+                row = await conn.fetchrow(query_sql_or, *params)
+                if row:
+                    return dict(row)
+
+    return None
 
 
 async def sync_from_sidde() -> dict:
