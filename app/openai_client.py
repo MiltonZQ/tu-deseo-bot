@@ -62,6 +62,15 @@ def fit_history(system: str, history: list[dict], user_msg: str,
         kept.pop(0)
 
 
+def _model_kwargs(messages: list[dict]) -> dict:
+    """Construye los kwargs para chat.completions.create, incluyendo reasoning effort
+    cuando el modelo lo soporta (GLM-5.x vía OpenRouter)."""
+    kwargs: dict = {"model": config.OPENAI_MODEL, "messages": messages}
+    if config.MODEL_REASONING_EFFORT:
+        kwargs["extra_body"] = {"reasoning": {"effort": config.MODEL_REASONING_EFFORT}}
+    return kwargs
+
+
 async def complete(user_message: str, history: list[dict],
                    lead: dict | None = None,
                    summary: str | None = None) -> str:
@@ -104,10 +113,7 @@ async def complete(user_message: str, history: list[dict],
             "Historial recortado por tokens: %d -> %d mensajes",
             len(history), len(fitted),
         )
-    resp = await _get_client().chat.completions.create(
-        model=config.OPENAI_MODEL,
-        messages=messages,
-    )
+    resp = await _get_client().chat.completions.create(**_model_kwargs(messages))
     return resp.choices[0].message.content or ""
 
 
@@ -171,8 +177,5 @@ async def summarize_conversation(history: list[dict], lead: dict | None = None) 
             ),
         },
     ]
-    resp = await _get_client().chat.completions.create(
-        model=config.OPENAI_MODEL,
-        messages=messages,
-    )
+    resp = await _get_client().chat.completions.create(**_model_kwargs(messages))
     return resp.choices[0].message.content or "Sin resumen disponible."

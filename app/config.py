@@ -27,6 +27,9 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-3.5-flash")  # chat conv
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
+# Effort del razonamiento para modelos que lo soportan (GLM-5.x, etc.).
+# "low" = control de costo y latencia; valores: low/medium/high o vacío para omitir.
+MODEL_REASONING_EFFORT = os.getenv("MODEL_REASONING_EFFORT", "low").strip().lower() or None
 
 # ── Base de datos ──
 DATABASE_URL = os.getenv("DATABASE_URL", "")
