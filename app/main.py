@@ -23,7 +23,19 @@ log = logging.getLogger("tu-deseo-bot")
 
 _message_buffer: dict[str, list[str]] = {}
 _message_buffer_lock = asyncio.Lock()
-MESSAGE_GROUP_WAIT = 4.0  # segundos de espera para agrupar mensajes del mismo número
+MESSAGE_GROUP_WAIT = 6.0  # segundos de espera para agrupar mensajes del mismo número
+
+# Lock por usuario: serializa el procesamiento de un mismo wa_id para que sus
+# mensajes se atiendan en secuencia (evita respuestas duplicadas y race conditions
+# en el buffer y el historial). Patrón tomado del agente-reservas-lobby.
+_user_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_user_lock(wa_id: str) -> asyncio.Lock:
+    """Devuelve (o crea) el lock de procesamiento para un usuario."""
+    if wa_id not in _user_locks:
+        _user_locks[wa_id] = asyncio.Lock()
+    return _user_locks[wa_id]
 
 
 @asynccontextmanager
@@ -312,17 +324,31 @@ async def _enviar_fotos_productos(
         # Enviar (máx 3, dedup por id, solo con imagen)
         seen_ids: set[int] = set()
         enviadas = 0
+        sin_imagen = 0
         for p in prods_to_send:
             if enviadas >= 3:
                 break
             pid = p["id"]
-            if pid in seen_ids or not p.get("imagen_url"):
+            if pid in seen_ids:
+                continue
+            if not p.get("imagen_url"):
+                sin_imagen += 1
+                log.warning(
+                    "Producto sin imagen_url, foto omitida: '%s' (id=%s)", p.get("nombre"), pid,
+                )
                 continue
             seen_ids.add(pid)
             caption = f"📸 *{p['nombre']}*\n💰 ${p['precio']:,}"
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
             log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
             enviadas += 1
+            # Espaciar envíos para no saturar yCloud/WhatsApp (rate limit)
+            if enviadas < 3 and prods_to_send:
+                await asyncio.sleep(1.0)
+        log.info(
+            "Fotos a %s: refs=%d resueltos=%d enviadas=%d sin_imagen=%d",
+            wa_id, len(foto_refs), len(prods_to_send), enviadas, sin_imagen,
+        )
     except Exception:
         log.exception("Error enviando foto de producto a %s", wa_id)
 
@@ -347,6 +373,15 @@ async def _process_message(payload: dict) -> None:
         return
     await db.mark_processed(msg["message_id"])
 
+    # Serializar el procesamiento por usuario: los mensajes de un mismo wa_id se
+    # atienden en secuencia (nunca en paralelo). Evita respuestas duplicadas y
+    # que el buffer de agrupación se des sincronice.
+    async with _get_user_lock(wa_id):
+        await _handle_message(msg, wa_id)
+
+
+async def _handle_message(msg: dict, wa_id: str) -> None:
+    """Procesa un mensaje ya desduplicado, bajo el lock del usuario."""
     # Si el bot está pausado para este contacto, ignorar silenciosamente
     if await db.is_bot_paused(wa_id):
         log.info("Bot pausado para %s — mensaje ignorado", wa_id)
