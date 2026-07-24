@@ -226,6 +226,107 @@ async def _maybe_handle_payment_image(wa_id: str, msg: dict, history: list[dict]
     )
 
 
+# Marcador de foto: [FOTO:123] (ID numérico) o [FOTO:Nombre del Producto].
+# El LLM lo emite cuando quiere que se envíe la foto de un producto.
+_FOTO_MARKER_RE = re.compile(r"\[FOTO:\s*([^\]]+)\]", re.IGNORECASE)
+
+# Petición explícita de fotos por parte del cliente (acotada para evitar falsos
+# positivos como "sí", "claro", "ver": requiere verbo de envío o sustantivo de imagen).
+_FOTO_REQUEST_RE = re.compile(
+    r"\b(foto[s]?|imagen(es)?|fotografia[s]?|muestr(a|ame|amelo|amelas)|"
+    r"mand(a|ame|ala|amelas)|envi(a|ame|ala|amelas)|ver la[s]? (foto|imagen)|"
+    r"ver el producto|cada uno|todas las (foto|imagen))\b",
+    re.IGNORECASE,
+)
+
+
+def _extraer_marcadores_foto(reply: str) -> tuple[list[str], str]:
+    """Extrae marcadores [FOTO:...] de la respuesta y devuelve (ids/nombres, reply_limpio).
+
+    El reply limpio (sin marcadores) es el que se envía al usuario y se persiste.
+    """
+    ids: list[str] = []
+    for match in _FOTO_MARKER_RE.finditer(reply):
+        ref = match.group(1).strip()
+        if ref:
+            ids.append(ref)
+    clean = _FOTO_MARKER_RE.sub("", reply).strip()
+    # Colapsar espacios múltiples dejados por el strip
+    clean = re.sub(r"[ \t]{2,}", " ", clean)
+    return ids, clean
+
+
+async def _enviar_fotos_productos(
+    wa_id: str,
+    foto_refs: list[str],
+    reply: str,
+    user_text: str,
+    history: list[dict],
+) -> None:
+    """Envía fotos de productos por WhatsApp.
+
+    Resolución por orden de fiabilidad:
+      1. Marcadores [FOTO:ID] del LLM → get_producto_by_id (fiable).
+      2. Marcadores [FOTO:NOMBRE] → get_productos_en_texto sobre el nombre.
+      3. Fallback: si el cliente pidió fotos explícitamente y el LLM no emitió
+         marcador, se busca por nombre en el mensaje del usuario y la respuesta.
+    Máximo 3 fotos por turno.
+    """
+    try:
+        prods_to_send: list[dict] = []
+
+        # 1+2. Resolver marcadores emitidos por el LLM
+        for ref in foto_refs[:5]:
+            if ref.isdigit():
+                p = await catalog.get_producto_by_id(int(ref))
+                if p:
+                    prods_to_send.append(p)
+                    continue
+            # Referencia por nombre: buscar en el texto del propio ref
+            found = await catalog.get_productos_en_texto(ref, limit=1)
+            if found:
+                prods_to_send.extend(found)
+
+        # 3. Fallback: cliente pidió fotos explícitamente y no hubo marcador
+        if not prods_to_send and _FOTO_REQUEST_RE.search(user_text):
+            is_multi = bool(re.search(
+                r"\b(cada\s+uno|todas|todos|cada\s+una|los\s+\w+|las\s+\w+)\b",
+                user_text.lower(),
+            ))
+            if is_multi and history:
+                for prev_msg in reversed(history[-6:]):
+                    found_list = await catalog.get_productos_en_texto(
+                        prev_msg.get("content", ""), limit=3,
+                    )
+                    if found_list:
+                        prods_to_send.extend(found_list)
+                        break
+            if not prods_to_send:
+                p_user = await catalog.get_producto_con_imagen(user_text)
+                if p_user:
+                    prods_to_send.append(p_user)
+            if not prods_to_send:
+                found_reply = await catalog.get_productos_en_texto(reply, limit=2)
+                prods_to_send.extend(found_reply)
+
+        # Enviar (máx 3, dedup por id, solo con imagen)
+        seen_ids: set[int] = set()
+        enviadas = 0
+        for p in prods_to_send:
+            if enviadas >= 3:
+                break
+            pid = p["id"]
+            if pid in seen_ids or not p.get("imagen_url"):
+                continue
+            seen_ids.add(pid)
+            caption = f"📸 *{p['nombre']}*\n💰 ${p['precio']:,}"
+            await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
+            log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
+            enviadas += 1
+    except Exception:
+        log.exception("Error enviando foto de producto a %s", wa_id)
+
+
 async def _process_message(payload: dict) -> None:
     # Bloquear wabaIds no autorizados (yCloud)
     if config.WHATSAPP_PROVIDER == "ycloud":
@@ -370,9 +471,16 @@ async def _process_message(payload: dict) -> None:
         history + [{"role": "user", "content": user_text}],
     )
 
+    # Extraer marcadores de foto [FOTO:ID] emitidos por el LLM y limpiarlos del
+    # texto visible. Las fotos se envían tras el mensaje de texto.
+    foto_ids, reply = _extraer_marcadores_foto(reply)
+
     await db.save_message(wa_id, "user", user_text)
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
+
+    # Enviar fotos resueltas por marcador (fiable) o por fallback de nombre.
+    await _enviar_fotos_productos(wa_id, foto_ids, reply, user_text, history)
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen
     # que se reinyecta en futuros turnos para no perder contexto de largo plazo.
@@ -429,57 +537,6 @@ async def _process_message(payload: dict) -> None:
         await whatsapp_client.send_text(wa_id, insistence_msg)
         log.info("Insistencia detectada para %s — bot pausado", wa_id)
         return
-
-    # Detectar si el usuario pide, confirma o reclama la foto de un producto
-    is_photo_request = bool(re.search(
-        r"\b(foto|fotos|imagen|imagenes|ver|muestra|muestramelo|fotografia|mandamela|mandala|enviamela|enviala|envia|enviame|si|claro|no\s+me|donde\s+esta|enciaste|enviaste)\b",
-        user_text.lower()
-    ))
-
-    if is_photo_request:
-        try:
-            prods_to_send = []
-
-            # A. Verificar si el usuario solicita "fotos de cada uno" o múltiples fotos
-            is_multi = bool(re.search(r"\b(cada\s+uno|todas|todos|cada\s+una|los\s+masturbadores|los\s+vibradores|los\s+dildos)\b", user_text.lower()))
-
-            # 1. Buscar productos directamente en el mensaje del usuario
-            if not is_multi:
-                p_user = await catalog.get_producto_con_imagen(user_text)
-                if p_user:
-                    prods_to_send.append(p_user)
-
-            # 2. Si es solicitud múltiple o no se encontró producto específico en user_text, inspeccionar historial reciente
-            if not prods_to_send and history:
-                for prev_msg in reversed(history[-6:]):
-                    content = prev_msg.get("content", "")
-                    if is_multi:
-                        found_list = await catalog.get_productos_en_texto(content, limit=3)
-                        if found_list:
-                            prods_to_send.extend(found_list)
-                            break
-                    else:
-                        p_hist = await catalog.get_producto_con_imagen(content)
-                        if p_hist:
-                            prods_to_send.append(p_hist)
-                            break
-
-            # 3. Si aún no hay producto, verificar si la respuesta recién generada menciona explícitamente un producto
-            if not prods_to_send:
-                p_reply_list = await catalog.get_productos_en_texto(reply, limit=1)
-                if p_reply_list:
-                    prods_to_send.extend(p_reply_list)
-
-            # Enviar la(s) foto(s) encontradas
-            seen_ids = set()
-            for p in prods_to_send[:3]:
-                if p["id"] not in seen_ids and p.get("imagen_url"):
-                    seen_ids.add(p["id"])
-                    caption = f"📸 *{p['nombre']}*\n💰 ${p['precio']:,}"
-                    await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
-                    log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
-        except Exception:
-            log.exception("Error enviando foto de producto a %s", wa_id)
 
     # Programar follow-up solo si la conversación aún está en progreso
     # (lead ya cargado arriba para enriquecer el contexto).

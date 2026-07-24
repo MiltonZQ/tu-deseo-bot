@@ -264,6 +264,151 @@ async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
     return matched
 
 
+# ── Capa de categorías funcional (normalización durable) ──
+#
+# Las categorías de origen (WooCommerce) están mal normalizadas: hay 25 categorías
+# superpuestas, marcas como categorías (Calexotics, Sex Shop Bogota) y un cajón de
+# sastre "Juguetes" con 42 productos de tipos muy distintos.
+#
+# Esta capa clasifica cada producto en una de ~10 categorías funcionales mediante
+# reglas sobre nombre + categoría origen. Al vivir en runtime, sobrevive a las
+# re-sincronizaciones de WooCommerce sin degradarse.
+
+CATEGORIAS_FUNCIONALES = [
+    "vibradores",
+    "succionadores",
+    "dildos",
+    "anal",
+    "masturbadores",
+    "anillos-y-fundas",
+    "pareja-y-bondage",
+    "lubricantes-y-cuidado",
+    "lenceria",
+    "juegos-y-accesorios",
+]
+
+# (palabras clave en nombre/descripción, categoría funcional) — orden importa:
+# se evalúa de arriba a abajo y la primera coincidencia gana.
+_REGLAS_CATEGORIA = [
+    # Higiene/cuidado (sin ambigüedad con juguetes)
+    (("limpiador", "limpia juguete", "toallitas"), "lubricantes-y-cuidado"),
+    # Lubricantes y cosmética íntima
+    (("lubricant", "lubric", "estimulant", "retardant", "spray", "vela ", "aceite ",
+      "friction", "estrechant", "booster", "serum", "crema "), "lubricantes-y-cuidado"),
+    # Succionadores de clítoris (antes que vibradores genéricos)
+    (("succionador", "suction", "air pulse", "succión de clítoris", "succio"), "succionadores"),
+    # Anal: plugs, bolas anales, estimuladores de próstata, dilatadores, arneses
+    (("plug", "anal", "prostat", "próstata", "bolas anal", "dilatador", "arnes",
+      "arnés", "strap on", "strap-on", "cola ", "entrenamiento anal"), "anal"),
+    # Masturbadores masculinos
+    (("masturbador", "huevo masturb", "vagina "), "masturbadores"),
+    # Dildos / consoladores (realistas, con ventosa, dobles)
+    (("dildo", "consolador", "realista", "ventosa"), "dildos"),
+    # Anillos y fundas para pene (incluye bombas de vacío)
+    (("anillo", "funda", "bomba para", "bomba pene", "bomba automatic",
+      "bomba automática", "potenciador"), "anillos-y-fundas"),
+    # Vibradores (rabbit, bala, huevo vibr, tipo hitachi, panty vibr, app)
+    (("vibrador", "vibr ", "rabbit", "bala vibr", "huevo vibr", "hitachi", "panty vibr",
+      "con app", "control remoto", "con vibrac"), "vibradores"),
+    # Lencería y disfraces
+    (("body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
+      "disfra", "pantuflas", "pezonera", "ligero", "encaje"), "lenceria"),
+    # Bondage / BDSM / pareja
+    (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
+      "kit ", "vendas", "mordaza"), "pareja-y-bondage"),
+    # Juegos de mesa y accesorios varios
+    (("juego", "jenga", "cartas", "dado", "dados"), "juegos-y-accesorios"),
+]
+
+
+def _normalizar_texto(texto: str | None) -> str:
+    """ASCII sin acentos ni mayúsculas, para matching robusto."""
+    if not texto:
+        return ""
+    import unicodedata
+    norm = unicodedata.normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode()
+    return norm
+
+
+def _categoria_normalizada(nombre: str, descripcion: str | None = "",
+                           cat_origen: str | None = "") -> str:
+    """Clasifica un producto en una categoría funcional mediante reglas de matching.
+
+    Evalúa nombre + descripción + categoría origen contra _REGLAS_CATEGORIA.
+    Devuelve la primera categoría funcional que coincida, o 'juegos-y-accesorios'
+    como fallback (cajón de sastre explícito para lo no clasificable).
+    """
+    haystack = _normalizar_texto(f"{nombre or ''} {descripcion or ''} {cat_origen or ''}")
+    if not haystack.strip():
+        return "juegos-y-accesorios"
+    for claves, cat_funcional in _REGLAS_CATEGORIA:
+        for clave in claves:
+            if clave in haystack:
+                return cat_funcional
+    # Mapeo por categoría origen para casos sin palabra clave en el nombre
+    cat_o = _normalizar_texto(cat_origen)
+    if "bondage" in cat_o:
+        return "pareja-y-bondage"
+    if "lencer" in cat_o:
+        return "lenceria"
+    if "cosmetica" in cat_o or "cosmética" in (cat_origen or "").lower():
+        return "lubricantes-y-cuidado"
+    return "juegos-y-accesorios"
+
+
+async def get_producto_by_id(producto_id: int) -> dict | None:
+    """Devuelve un producto por su ID (para resolver marcadores [FOTO:ID] del LLM)."""
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        row = await conn.fetchrow(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE id = $1 AND activo = TRUE
+            """,
+            producto_id,
+        )
+    return dict(row) if row else None
+
+
+async def list_categorias() -> dict[str, int]:
+    """Devuelve {categoria_funcional: cantidad} de productos activos con imagen."""
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            "SELECT nombre, descripcion, categoria FROM productos WHERE activo = TRUE"
+        )
+    conteo: dict[str, int] = {c: 0 for c in CATEGORIAS_FUNCIONALES}
+    for r in rows:
+        cat = _categoria_normalizada(r["nombre"], r["descripcion"], r["categoria"])
+        conteo[cat] = conteo.get(cat, 0) + 1
+    # Excluir categorías vacías
+    return {c: n for c, n in conteo.items() if n > 0}
+
+
+async def get_productos_por_categoria(cat_funcional: str, limit: int = 6) -> list[dict]:
+    """Productos representativos de una categoría funcional (con imagen si la hay).
+
+    Prefiere productos CON imagen_url para que el bot pueda enviar fotos.
+    """
+    cat_norm = _normalizar_texto(cat_funcional).replace(" ", "-")
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+            ORDER BY LENGTH(nombre) DESC
+            """
+        )
+    matches = []
+    for r in rows:
+        if _categoria_normalizada(r["nombre"], r["descripcion"], r["categoria"]) == cat_norm:
+            matches.append(dict(r))
+            if len(matches) >= limit:
+                break
+    return matches
+
+
 async def sync_from_sidde() -> dict:
     """Sincroniza el catálogo desde SIDDE POS (si está configurado).
 
