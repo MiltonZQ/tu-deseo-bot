@@ -37,9 +37,12 @@ BUSINESS_TAGLINE = os.getenv("BUSINESS_TAGLINE", "Sex Shop & Bienestar Sexual")
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "America/Bogota")
 
 HISTORY_WINDOW = int(os.getenv("HISTORY_WINDOW", "30"))
-MAX_PROMPT_TOKENS = int(os.getenv("MAX_PROMPT_TOKENS", "12000"))
+MAX_PROMPT_TOKENS = int(os.getenv("MAX_PROMPT_TOKENS", "20000"))
 MAX_USER_MESSAGE_CHARS = int(os.getenv("MAX_USER_MESSAGE_CHARS", "4000"))
 HISTORY_TTL_DAYS = int(os.getenv("HISTORY_TTL_DAYS", "30"))
+# Cuándo consolidar el historial en un resumen persistido (memoria comprimida).
+# Se regenera al superar este nº de mensajes, reinyectándose luego en el prompt.
+SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "30"))
 
 # ── Operaciones ──
 RELOAD_TOKEN = os.getenv("RELOAD_TOKEN", "")

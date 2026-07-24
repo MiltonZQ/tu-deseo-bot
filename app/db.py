@@ -158,6 +158,17 @@ CREATE TABLE IF NOT EXISTS bot_pausado (
     fecha_reanudado TIMESTAMPTZ,
     motivo TEXT
 );
+
+-- ── Memoria comprimida de conversaciones largas (resumen consolidado) ──
+-- Un registro por wa_id. Se regenera cuando el historial supera SUMMARY_THRESHOLD
+-- mensajes, condensando las interacciones previas en ~5 líneas que se reinyectan
+-- en el prompt para que el bot "recuerde" más allá de HISTORY_WINDOW.
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    wa_id TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    message_count INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 """
 
 
@@ -366,6 +377,34 @@ async def save_message(wa_id: str, role: str, content: str) -> None:
                 total_mensajes = conversaciones.total_mensajes + 1
             """,
             wa_id, content[:500],
+        )
+
+
+# ── Memoria comprimida (resumen consolidado de conversaciones largas) ──
+
+async def get_summary(wa_id: str) -> dict | None:
+    """Devuelve {summary, message_count} del último resumen consolidado, o None."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT summary, message_count FROM conversation_summaries WHERE wa_id = $1",
+            wa_id,
+        )
+    return dict(row) if row else None
+
+
+async def save_summary(wa_id: str, summary: str, message_count: int) -> None:
+    """Persiste (o actualiza) el resumen consolidado de la conversación."""
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO conversation_summaries (wa_id, summary, message_count, updated_at)
+            VALUES ($1, $2, $3, now())
+            ON CONFLICT (wa_id) DO UPDATE SET
+                summary = EXCLUDED.summary,
+                message_count = EXCLUDED.message_count,
+                updated_at = now()
+            """,
+            wa_id, summary, message_count,
         )
 
 

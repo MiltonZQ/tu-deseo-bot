@@ -356,7 +356,14 @@ async def _process_message(payload: dict) -> None:
         log.info("Handoff solicitado por %s — bot pausado", wa_id)
         return
 
-    raw_reply = await openai_client.complete(user_text, history)
+    # Cargar perfil del cliente y memoria consolidada para enriquecer el contexto.
+    lead = await db.get_lead(wa_id)
+    summary_row = await db.get_summary(wa_id)
+    summary_text = summary_row["summary"] if summary_row else None
+
+    raw_reply = await openai_client.complete(
+        user_text, history, lead=lead, summary=summary_text,
+    )
     reply = await leads.process_reply(
         wa_id,
         raw_reply,
@@ -366,6 +373,18 @@ async def _process_message(payload: dict) -> None:
     await db.save_message(wa_id, "user", user_text)
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
+
+    # Memoria comprimida: si la conversación crece, consolidarla en un resumen
+    # que se reinyecta en futuros turnos para no perder contexto de largo plazo.
+    total_msgs = len(history) + 2  # +user +assistant recién guardados
+    if total_msgs >= config.SUMMARY_THRESHOLD:
+        try:
+            refreshed = await db.get_history(wa_id, config.HISTORY_WINDOW)
+            new_summary = await openai_client.summarize_conversation(refreshed, lead)
+            await db.save_summary(wa_id, new_summary, total_msgs)
+            log.info("Resumen consolidado actualizado para %s (%d msgs)", wa_id, total_msgs)
+        except Exception:
+            log.exception("Error generando resumen consolidado para %s", wa_id)
 
     # Si la conversación se refiere a UNA sede específica, enviar el pin de ubicación nativo de WhatsApp.
     sede_mencionada = sedes.detectar_sede_para_enviar(user_text, reply)
@@ -463,7 +482,7 @@ async def _process_message(payload: dict) -> None:
             log.exception("Error enviando foto de producto a %s", wa_id)
 
     # Programar follow-up solo si la conversación aún está en progreso
-    lead = await db.get_lead(wa_id)
+    # (lead ya cargado arriba para enriquecer el contexto).
     if not lead or lead.get("qualification_status") == "en_progreso":
         await follow_ups.schedule(wa_id)
 

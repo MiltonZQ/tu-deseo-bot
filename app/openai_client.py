@@ -41,34 +41,69 @@ def count_tokens(messages: list[dict]) -> int:
 
 
 def fit_history(system: str, history: list[dict], user_msg: str,
-                max_tokens: int) -> list[dict]:
-    """Dropea los mensajes más viejos hasta caber en max_tokens."""
+                max_tokens: int, summary: str | None = None) -> list[dict]:
+    """Dropea los mensajes más viejos hasta caber en max_tokens.
+
+    El presupuesto se mide sobre el paquete completo que se envía al modelo:
+    system prompt + (resumen) + historial + mensaje actual. El orden de prioridad
+    para descartar es siempre el mensaje MÁS VIEJO del historial, de modo que
+    system prompt, resumen consolidado y últimos turnos se preservan.
+    """
+    summary_block = f"\n\n## Memoria previa\n{summary}" if summary else ""
     kept = list(history)
     while True:
-        msgs = [{"role": "system", "content": system}] + kept + \
-               [{"role": "user", "content": user_msg}]
+        msgs = (
+            [{"role": "system", "content": system + summary_block}]
+            + kept
+            + [{"role": "user", "content": user_msg}]
+        )
         if count_tokens(msgs) <= max_tokens or not kept:
             return kept
         kept.pop(0)
 
 
-async def complete(user_message: str, history: list[dict]) -> str:
+async def complete(user_message: str, history: list[dict],
+                   lead: dict | None = None,
+                   summary: str | None = None) -> str:
     now = datetime.now(config.bot_zoneinfo())
+
+    # Contexto dinámico: operativo (fecha/negocio) + cliente (perfil conocido).
+    context_lines = [
+        f"- Fecha y hora actual: {now.strftime('%A %d/%m/%Y %H:%M')} ({config.BOT_TIMEZONE})",
+        f"- Negocio: {config.BUSINESS_NAME}",
+    ]
+    if lead:
+        cliente_bits = []
+        if lead.get("nombre"):
+            cliente_bits.append(f"Nombre: {lead['nombre']}")
+        if lead.get("negocio"):
+            cliente_bits.append(f"Negocio: {lead['negocio']}")
+        estado = lead.get("qualification_status")
+        if estado and estado != "en_progreso":
+            cliente_bits.append(f"Estado del lead: {estado}")
+        if cliente_bits:
+            context_lines.append("- Cliente: " + "; ".join(cliente_bits))
 
     system_prompt = (
         f"{config.SYSTEM_PROMPT}\n\n"
         "## Contexto operativo\n"
-        f"- Fecha y hora actual: {now.strftime('%A %d/%m/%Y %H:%M')} ({config.BOT_TIMEZONE})\n"
-        f"- Negocio: {config.BUSINESS_NAME}"
+        + "\n".join(context_lines)
     )
+
     fitted = fit_history(
-        system_prompt, history, user_message, config.MAX_PROMPT_TOKENS
+        system_prompt, history, user_message, config.MAX_PROMPT_TOKENS,
+        summary=summary,
     )
     messages = (
         [{"role": "system", "content": system_prompt}]
         + fitted
         + [{"role": "user", "content": user_message}]
     )
+    if len(fitted) < len(history):
+        log.info(
+            "Historial recortado por tokens: %d -> %d mensajes",
+            len(history), len(fitted),
+        )
     resp = await _get_client().chat.completions.create(
         model=config.OPENAI_MODEL,
         messages=messages,
