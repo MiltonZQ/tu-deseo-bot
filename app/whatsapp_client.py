@@ -1,6 +1,10 @@
 """Cliente de WhatsApp: Meta Cloud API o YCloud, solo texto en v1."""
+import logging
+
 import httpx
 from app import config
+
+log = logging.getLogger("whatsapp_client")
 
 GRAPH_VERSION = "v21.0"
 
@@ -32,17 +36,69 @@ async def send_image(to_wa_id: str, image_url: str, caption: str = "") -> dict:
     return await _send_meta_image(to_wa_id, image_url, caption)
 
 
+def _es_webp(image_url: str) -> bool:
+    """True si la URL apunta a una imagen webp (no soportada por WhatsApp Cloud API)."""
+    return image_url.lower().split("?")[0].endswith(".webp")
+
+
+async def _convert_webp_to_jpg_bytes(image_url: str) -> bytes | None:
+    """Descarga una imagen webp y la convierte a JPG en memoria.
+
+    Devuelve los bytes del JPG, o None si la descarga/conversión falla.
+    WhatsApp Cloud API NO soporta webp (errorCode 131053), por eso se convierte.
+    """
+    from io import BytesIO
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(image_url)
+        if resp.status_code != 200:
+            log.warning("Descarga webp fallida: HTTP %s para %s", resp.status_code, image_url)
+            return None
+        from PIL import Image
+
+        img = Image.open(BytesIO(resp.content))
+        # Asegurar modo RGB (JPG no soporta canal alfa/transparencia)
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=90, optimize=True)
+        return out.getvalue()
+    except Exception as exc:
+        log.warning("Conversión webp→jpg fallida para %s: %s", image_url, exc)
+        return None
+
+
 async def _send_ycloud_image(to_wa_id: str, image_url: str, caption: str) -> dict:
+    """Envía imagen por yCloud. Si es webp, la convierte a JPG y la sube como media."""
+    image_payload: dict
+    if _es_webp(image_url):
+        # WhatsApp no soporta webp: convertir a JPG y subir como binario
+        jpg_bytes = await _convert_webp_to_jpg_bytes(image_url)
+        if jpg_bytes:
+            media_id = await _upload_ycloud_media(jpg_bytes)
+            if media_id:
+                image_payload = {"id": media_id}
+            else:
+                # Subida falló: intentar URL original como último recurso
+                image_payload = {"link": image_url}
+        else:
+            image_payload = {"link": image_url}
+    else:
+        image_payload = {"link": image_url}
+
+    if caption:
+        image_payload["caption"] = caption[:1024]
+
     url = f"{config.YCLOUD_API_BASE_URL.rstrip('/')}/v2/whatsapp/messages/sendDirectly"
     headers = {"X-API-Key": config.YCLOUD_API_KEY, "Content-Type": "application/json"}
     payload = {
         "from": config.YCLOUD_WHATSAPP_FROM,
         "to": _ensure_e164(to_wa_id),
         "type": "image",
-        "image": {
-            "link": image_url,
-            "caption": caption[:1024] if caption else None,
-        },
+        "image": image_payload,
     }
     async with httpx.AsyncClient(timeout=20) as c:
         r = await c.post(url, headers=headers, json=payload)
@@ -50,7 +106,51 @@ async def _send_ycloud_image(to_wa_id: str, image_url: str, caption: str) -> dic
         return r.json()
 
 
+async def _upload_ycloud_media(file_bytes: bytes, mime_type: str = "image/jpeg") -> str | None:
+    """Sube un binario de imagen a yCloud y devuelve el mediaId, o None si falla.
+
+    Endpoint: POST /v2/whatsapp/media/{phoneNumber}/upload (multipart/form-data).
+    El número (from) va en la ruta en formato E.164.
+    """
+    phone = config.YCLOUD_WHATSAPP_FROM.lstrip("+")
+    url = (
+        f"{config.YCLOUD_API_BASE_URL.rstrip('/')}"
+        f"/v2/whatsapp/media/{phone}/upload"
+    )
+    headers = {"X-API-Key": config.YCLOUD_API_KEY}
+    files = {"file": ("image.jpg", file_bytes, mime_type)}
+    try:
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.post(url, headers=headers, files=files)
+        if r.status_code not in (200, 201):
+            log.warning("Upload media yCloud fallido: HTTP %s - %s", r.status_code, r.text[:200])
+            return None
+        resp = r.json()
+        return resp.get("id") or resp.get("mediaId")
+    except Exception as exc:
+        log.warning("Excepción subiendo media a yCloud: %s", exc)
+        return None
+
+
 async def _send_meta_image(to_wa_id: str, image_url: str, caption: str) -> dict:
+    """Envía imagen por Meta Cloud API. Si es webp, la convierte a JPG y la sube."""
+    image_payload: dict
+    if _es_webp(image_url):
+        jpg_bytes = await _convert_webp_to_jpg_bytes(image_url)
+        if jpg_bytes:
+            media_id = await _upload_meta_media(jpg_bytes)
+            if media_id:
+                image_payload = {"id": media_id}
+            else:
+                image_payload = {"link": image_url}
+        else:
+            image_payload = {"link": image_url}
+    else:
+        image_payload = {"link": image_url}
+
+    if caption:
+        image_payload["caption"] = caption[:1024]
+
     url = (
         f"https://graph.facebook.com/{GRAPH_VERSION}/"
         f"{config.WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -64,15 +164,30 @@ async def _send_meta_image(to_wa_id: str, image_url: str, caption: str) -> dict:
         "recipient_type": "individual",
         "to": to_wa_id,
         "type": "image",
-        "image": {
-            "link": image_url,
-            "caption": caption[:1024] if caption else None,
-        },
+        "image": image_payload,
     }
     async with httpx.AsyncClient(timeout=20) as c:
         r = await c.post(url, headers=headers, json=payload)
         r.raise_for_status()
         return r.json()
+
+
+async def _upload_meta_media(file_bytes: bytes, mime_type: str = "image/jpeg") -> str | None:
+    """Sube un binario de imagen a Meta Cloud API y devuelve el mediaId."""
+    url = f"https://graph.facebook.com/{GRAPH_VERSION}/{config.WHATSAPP_PHONE_NUMBER_ID}/media"
+    headers = {"Authorization": f"Bearer {config.WHATSAPP_API_TOKEN}"}
+    files = {"file": ("image.jpg", file_bytes, mime_type)}
+    data = {"messaging_product": "whatsapp"}
+    try:
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.post(url, headers=headers, files=files, data=data)
+        if r.status_code not in (200, 201):
+            log.warning("Upload media Meta fallido: HTTP %s - %s", r.status_code, r.text[:200])
+            return None
+        return r.json().get("id")
+    except Exception as exc:
+        log.warning("Excepción subiendo media a Meta: %s", exc)
+        return None
 
 
 async def _send_ycloud_location(
