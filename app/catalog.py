@@ -232,7 +232,15 @@ async def get_producto_con_imagen(query: str) -> dict | None:
 
 
 async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
-    """Extrae productos únicos del catálogo que son mencionados explícitamente en el texto."""
+    """Extrae productos únicos del catálogo mencionados en el texto.
+
+    Dos estrategias:
+      1. Match literal: el nombre completo del producto aparece como subcadena
+         (ej. el bot escribió el nombre exacto).
+      2. Match tolerante a tokens: si el texto contiene ≥60% de los tokens
+         significativos del nombre del producto (para parafraseos como
+         "BliX H2O Neutro 30 ml" → "BliX Lubricante H2O Neutro X 30 Ml").
+    """
     if not text:
         return []
 
@@ -247,17 +255,37 @@ async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
             """
         )
 
-    matched = []
-    seen_ids = set()
     import unicodedata
     text_clean = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
+    text_tokens = set(_extract_search_tokens(text))
 
+    matched: list[dict] = []
+    seen_ids: set[int] = set()
+
+    # 1. Match literal (prioritario: más preciso)
     for r in rows:
         name_clean = unicodedata.normalize("NFKD", r["nombre"].lower()).encode("ascii", "ignore").decode()
-        if name_clean in text_clean:
+        if name_clean in text_clean and r["id"] not in seen_ids:
+            seen_ids.add(r["id"])
+            matched.append(dict(r))
+            if len(matched) >= limit:
+                return matched
+
+    # 2. Match tolerante a tokens (para parafraseos del LLM)
+    if len(matched) < limit and text_tokens:
+        scored: list[tuple[float, dict]] = []
+        for r in rows:
+            if r["id"] in seen_ids:
+                continue
+            score = _score_product_match(r["nombre"], list(text_tokens))
+            if score >= 0.6:
+                scored.append((score, dict(r)))
+        # Ordenar por score descendente; a igual score, nombre más corto primero
+        scored.sort(key=lambda x: (x[0], -len(x[1]["nombre"])), reverse=True)
+        for score, r in scored:
             if r["id"] not in seen_ids:
                 seen_ids.add(r["id"])
-                matched.append(dict(r))
+                matched.append(r)
                 if len(matched) >= limit:
                     break
 
@@ -424,13 +452,14 @@ async def sync_from_sidde() -> dict:
 async def export_knowledge_md(path: str | Path | None = None) -> Path:
     """Genera prompts/knowledge/catalogo.md a partir de la tabla productos.
 
-    Útil para que el bot conozca el catálogo vía el system prompt.
+    Útil para que el bot conozca el catálogo vía el system prompt. Incluye el ID
+    de cada producto (#123) para que el bot pueda emitir marcadores [FOTO:123].
     """
     out = Path(path) if path else (config.PROMPTS_DIR / "knowledge" / "catalogo.md")
     out.parent.mkdir(parents=True, exist_ok=True)
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
         rows = await conn.fetch(
-            "SELECT nombre, descripcion, categoria, precio FROM productos WHERE activo = TRUE ORDER BY categoria, nombre"
+            "SELECT id, nombre, descripcion, categoria, precio FROM productos WHERE activo = TRUE ORDER BY categoria, nombre"
         )
     lines = ["# Catálogo de productos", ""]
     current_cat = None
@@ -440,7 +469,8 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
             lines.append(f"\n## {cat}\n")
             current_cat = cat
         desc = f" — {r['descripcion']}" if r["descripcion"] else ""
-        lines.append(f"- **{r['nombre']}**${r['precio']:,}{desc}")
+        # El #ID al final permite al bot emitir [FOTO:ID] para enviar fotos fiables.
+        lines.append(f"- **{r['nombre']}** — ${r['precio']:,}{desc}  #{r['id']}")
     out.write_text("\n".join(lines), encoding="utf-8")
     log.info("Catálogo exportado a %s (%d productos)", out, len(rows))
     return out
