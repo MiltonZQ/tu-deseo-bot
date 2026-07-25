@@ -56,10 +56,22 @@ def _extraer_nombre(history: list[dict]) -> str | None:
         match = m.search(joined)
         if match:
             candidato = match.group(1).strip()
-            # Filtrar palabras obviamente no-nombre
-            invalidas = {"compra", "pedido", "pago", "envio", "producto", "asesor", "humano"}
-            if candidato.lower() not in invalidas and 2 <= len(candidato) <= 60:
-                return candidato.title()
+            # Filtrar palabras obviamente no-nombre (frases del prompt del bot,
+            # sustantivos genéricos, palabras funcionales).
+            invalidas = {
+                "completo", "nombre", "compra", "pedido", "pago", "envio", "envío",
+                "producto", "asesor", "humano", "datos", "contacto", "telefono",
+                "teléfono", "direccion", "dirección", "ciudad", "cliente",
+            }
+            palabras = candidato.lower().split()
+            if any(p in invalidas for p in palabras):
+                continue
+            if len(candidato) < 2 or len(candidato) > 60:
+                continue
+            # Descartar si parece una frase (más de 4 palabras suele ser enunciado)
+            if len(palabras) > 4:
+                continue
+            return candidato.title()
     return None
 
 
@@ -105,39 +117,56 @@ def _limpiar_marker(reply: str) -> str:
 
 
 async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], int]:
-    """Resuelve productos mencionados en el historial contra el catálogo.
+    """Resuelve productos mencionados contra el catálogo.
 
-    Devuelve (items, total). Cada item es {producto_id, nombre, cantidad, precio_unitario}.
-    El total se calcula sumando precios oficiales del catálogo (no del LLM).
+    Devuelve (items, total). Prioriza los productos del ÚLTIMO mensaje del cliente
+    (su confirmación de compra real), no de todo el historial (que contiene
+    recomendaciones del bot que el cliente no necesariamente compró).
     """
     items: list[dict] = []
     seen_ids: set[int] = set()
     total = 0
 
-    # Buscar productos en los mensajes del asistente (donde el bot recomienda)
-    # y en los del usuario (donde elige).
-    for msg in history[-12:]:
+    def _agregar(p: dict) -> None:
+        pid = p["id"]
+        if pid in seen_ids:
+            return
+        seen_ids.add(pid)
+        precio = int(p.get("precio", 0) or 0)
+        items.append({
+            "producto_id": pid,
+            "nombre": p["nombre"],
+            "cantidad": 1,
+            "precio_unitario": precio,
+        })
+        total += precio
+
+    # 1) PRIORIDAD: productos en los últimos mensajes del CLIENTE (role=user).
+    #    Ahí está su confirmación real de qué quiere comprar.
+    user_msgs = [m for m in history if m.get("role") == "user"]
+    for msg in user_msgs[-3:]:  # últimos 3 mensajes del cliente
         contenido = msg.get("content", "")
         if not contenido:
             continue
-        encontrados = await catalog.get_productos_en_texto(contenido, limit=5)
-        for p in encontrados:
-            pid = p["id"]
-            if pid in seen_ids:
-                continue
-            seen_ids.add(pid)
-            precio = int(p.get("precio", 0) or 0)
-            items.append({
-                "producto_id": pid,
-                "nombre": p["nombre"],
-                "cantidad": 1,
-                "precio_unitario": precio,
-            })
-            total += precio
-            if len(items) >= 8:  # tope razonable de items
+        for p in await catalog.get_productos_en_texto(contenido, limit=5):
+            _agregar(p)
+            if len(items) >= 8:
                 break
         if len(items) >= 8:
             break
+
+    # 2) FALLBACK: si el cliente no mencionó productos claros en sus últimos mensajes,
+    #    tomar el ÚLTIMO mensaje del asistente (donde el bot usualmente reconfirma
+    #    la compra concreta), no todo el historial.
+    if not items:
+        asistente_msgs = [m for m in history if m.get("role") == "assistant"]
+        if asistente_msgs:
+            ultimo = asistente_msgs[-1].get("content", "")
+            if ultimo:
+                for p in await catalog.get_productos_en_texto(ultimo, limit=5):
+                    _agregar(p)
+                    if len(items) >= 8:
+                        break
 
     return items, total
 

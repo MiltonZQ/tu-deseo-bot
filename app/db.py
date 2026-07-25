@@ -970,6 +970,17 @@ async def update_abono_estado(abono_id: int, estado: str, verificado_por: str = 
 
 async def insert_abono(data: dict) -> int:
     """Crea un registro de abono (lo usa payments.py). Devuelve el id."""
+    # fecha_comprobante viene como string "YYYY-MM-DD" desde el vision model, pero la
+    # columna es DATE; asyncpg no convierte strings a date automáticamente.
+    from datetime import date
+    fecha_cruda = data.get("fecha_comprobante")
+    fecha_date: date | None = None
+    if fecha_cruda:
+        try:
+            fecha_date = date.fromisoformat(str(fecha_cruda).strip())
+        except (ValueError, TypeError):
+            fecha_date = None  # formato inválido → NULL (no rompe el insert)
+
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -983,7 +994,7 @@ async def insert_abono(data: dict) -> int:
             data.get("telefono"), data.get("pedido_id"), data.get("servicio"),
             data.get("monto"), data.get("monto_esperado"), data.get("monto_declarado"),
             data.get("estado", "pendiente"), data.get("metodo"), data.get("banco"),
-            data.get("referencia"), data.get("fecha_comprobante"),
+            data.get("referencia"), fecha_date,
             data.get("url_comprobante"), data.get("verificado_por", "bot"),
             int(data.get("intento_n", 1)),
         )
