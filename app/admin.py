@@ -407,16 +407,19 @@ async def pedidos_page(request: Request, estado: str = Query("")):
     rows = ""
     for p in pedidos:
         opts = "".join(f'<option value="{e}" {"selected" if e==p["estado"] else ""}>{e}</option>' for e in PEDIDO_ESTADOS)
+        creado_badge = ' <span class="badge badge-muted">🤖 bot</span>' if p.get("creado_por") == "bot" else ""
         rows += f"""
         <div class="item">
           <div class="item-row">
             <div>
-              <div class="item-title">#{p['id']} · {html.escape(p.get('nombre_cliente') or '—')}</div>
-              <div class="item-meta">{html.escape(p.get('ciudad') or '—')} · 📞 {html.escape(str(p.get('wa_id') or ''))} · ${p.get('total') or 0:,}</div>
+              <div class="item-title">#{p['id']} · {html.escape(p.get('nombre_cliente') or '—')}{creado_badge}</div>
+              <div class="item-meta">{html.escape(p.get('ciudad') or '—')} · {html.escape(p.get('direccion_envio') or '—')[:60]}</div>
+              <div class="item-meta">📞 {html.escape(str(p.get('telefono_contacto') or p.get('wa_id') or ''))} · 💰 ${p.get('total') or 0:,}</div>
               <div class="item-meta">📅 {p.get('fecha','—')} · {ESTADO_BADGE.get(p['estado'], '')}</div>
             </div>
           </div>
           <div class="item-actions">
+            <a class="btn-sm btn-gold" style="text-decoration:none" href="/admin/pedidos/{p['id']}">👁 Detalle</a>
             <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(str(p.get('wa_id') or ''))}" target="_blank">💬 WhatsApp</a>
             <select class="sel" style="width:auto;margin:0;padding:5px 10px;font-size:11px" onchange="cambiarEstado({p['id']}, this.value)">{opts}</select>
           </div>
@@ -450,6 +453,96 @@ async def pedido_estado_endpoint(request: Request, pedido_id: int):
         return {"ok": False, "error": "estado inválido"}
     await db.update_pedido_estado(pedido_id, estado)
     return {"ok": True}
+
+
+@router.get("/pedidos/{pedido_id}", response_class=HTMLResponse)
+async def pedido_detalle_page(request: Request, pedido_id: int):
+    _require_login(request)
+    try:
+        pedido = await db.get_pedido(pedido_id)
+    except Exception:
+        pedido = None
+    if not pedido:
+        return _layout('<div class="card"><div class="empty">Pedido no encontrado</div></div>', "pedidos")
+
+    try:
+        items = await db.list_pedido_items(pedido_id)
+    except Exception:
+        items = []
+    try:
+        abonos = await db.list_abonos_de_pedido(pedido_id)
+    except Exception:
+        abonos = []
+
+    # Bloque de datos del cliente
+    datos_html = f"""
+      <div class="item-meta"><strong>Cliente:</strong> {html.escape(pedido.get('nombre_cliente') or '—')}</div>
+      <div class="item-meta"><strong>Teléfono:</strong> {html.escape(str(pedido.get('telefono_contacto') or '—'))} · <strong>WhatsApp:</strong> {html.escape(str(pedido.get('wa_id') or '—'))}</div>
+      <div class="item-meta"><strong>Ciudad:</strong> {html.escape(pedido.get('ciudad') or '—')}</div>
+      <div class="item-meta"><strong>Dirección:</strong> {html.escape(pedido.get('direccion_envio') or '—')}</div>
+      <div class="item-meta"><strong>Creado por:</strong> {html.escape(pedido.get('creado_por') or '—')} · <strong>Estado:</strong> {ESTADO_BADGE.get(pedido.get('estado',''), html.escape(pedido.get('estado') or '—'))}</div>
+      {(f'<div class="item-meta"><strong>Notas:</strong> {html.escape(pedido.get("notas") or "")}</div>') if pedido.get('notas') else ''}
+    """
+
+    # Items del pedido
+    if items:
+        items_rows = "".join(
+            f"""<div class="item-meta">• {html.escape(it['nombre_snapshot'])} ×{it.get('cantidad',1)} — ${it.get('precio_unitario',0) or 0:,} c/u = <strong>${(it.get('cantidad',1))*(it.get('precio_unitario',0) or 0):,}</strong></div>"""
+            for it in items
+        )
+        items_html = f'<div class="card-title">🛒 Productos ({len(items)})</div>{items_rows}'
+    else:
+        items_html = '<div class="card-title">🛒 Productos</div><div class="empty">Sin items (el bot no detectó productos claros en el chat). Añádelos manualmente desde el panel si hace falta.</div>'
+
+    # Comprobantes de pago asociados
+    if abonos:
+        abonos_rows = ""
+        for a in abonos:
+            comp_link = (f'<a href="{a["url_comprobante"]}" target="_blank">📎 Ver comprobante</a>') if a.get("url_comprobante") else "—"
+            abonos_rows += f"""
+              <div class="item">
+                <div class="item-meta"><strong>Abono #{a['id']}</strong> · {ESTADO_BADGE.get('abono_'+str(a.get('estado','')), '')} {html.escape(a.get('estado') or '—')} · {a.get('fecha','—')}</div>
+                <div class="item-meta">Monto declarado: ${a.get('monto_declarado') or 0:,} · Esperado: ${a.get('monto_esperado') or 0:,} · {html.escape(a.get('banco') or '—')} ref {html.escape(str(a.get('referencia') or '—'))}</div>
+                <div class="item-meta">Verificado por: {html.escape(a.get('verificado_por') or '—')} · Intento {a.get('intento_n',1)} · {comp_link}</div>
+              </div>"""
+        abonos_html = f'<div class="card-title">💳 Comprobantes de pago ({len(abonos)})</div>{abonos_rows}'
+    else:
+        abonos_html = '<div class="card-title">💳 Comprobantes de pago</div><div class="empty">Sin comprobantes asociados aún.</div>'
+
+    opts = "".join(f'<option value="{e}" {"selected" if e==pedido.get("estado") else ""}>{e}</option>' for e in PEDIDO_ESTADOS)
+
+    return _layout(f"""
+    <div class="topbar">
+      <h1>🛍 Pedido #{pedido_id}</h1>
+      <span class="sub">{ESTADO_BADGE.get(pedido.get('estado',''), '')}</span>
+    </div>
+    <div class="card">
+      <div class="card-title">👤 Datos del cliente</div>
+      {datos_html}
+      <div class="item-actions" style="margin-top:12px">
+        <select class="sel" style="width:auto;padding:8px 12px" onchange="cambiarEstado({pedido_id}, this.value)">{opts}</select>
+        <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(str(pedido.get('wa_id') or ''))}" target="_blank">💬 WhatsApp</a>
+        <a class="btn-sm" style="text-decoration:none;background:#25131c;color:#9a8a93" href="/admin/pedidos">← Volver</a>
+      </div>
+    </div>
+    <div class="card">
+      {items_html}
+      <div class="item-meta" style="margin-top:10px;font-size:14px"><strong>TOTAL: ${pedido.get('total') or 0:,}</strong></div>
+    </div>
+    <div class="card">
+      {abonos_html}
+    </div>
+    <script>
+    async function cambiarEstado(id, estado) {{
+      try {{
+        var r = await fetch('/admin/pedidos/' + id + '/estado', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{estado:estado}})}});
+        var d = await r.json();
+        if(d.ok) {{ toast('Estado actualizado a ' + estado, true); setTimeout(function(){{location.reload();}}, 600); }}
+        else toast(d.error || 'Error', false);
+      }} catch(e) {{ toast('Error de conexión', false); }}
+    }}
+    </script>
+    """, "pedidos")
 
 
 # ── Conversaciones (chat-view porteado de Demo Agentico) ──

@@ -872,6 +872,73 @@ async def create_pedido(data: dict) -> int:
     return row["id"] if row else 0
 
 
+async def add_pedido_item(
+    pedido_id: int,
+    producto_id: int | None,
+    nombre_snapshot: str,
+    cantidad: int = 1,
+    precio_unitario: int = 0,
+) -> None:
+    """Inserta una línea de producto en un pedido."""
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO pedidos_items (pedido_id, producto_id, nombre_snapshot, cantidad, precio_unitario)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            pedido_id, producto_id, nombre_snapshot, int(cantidad), int(precio_unitario),
+        )
+
+
+async def list_pedido_items(pedido_id: int) -> list[dict]:
+    """Devuelve las líneas de producto de un pedido."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, producto_id, nombre_snapshot, cantidad, precio_unitario
+            FROM pedidos_items
+            WHERE pedido_id = $1
+            ORDER BY id
+            """,
+            pedido_id,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_pedido_pendiente(wa_id: str) -> dict | None:
+    """Devuelve el pedido pendiente/pagado más reciente de un contacto (o None)."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, wa_id, nombre_cliente, direccion_envio, ciudad,
+                   telefono_contacto, estado, total, creado_por, notas,
+                   to_char(created_at AT TIME ZONE $2, 'DD/MM/YYYY HH24:MI') AS fecha
+            FROM pedidos
+            WHERE wa_id = $1 AND estado IN ('pendiente','pagado')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            wa_id, config.BOT_TIMEZONE,
+        )
+    return dict(row) if row else None
+
+
+async def list_abonos_de_pedido(pedido_id: int) -> list[dict]:
+    """Devuelve los abonos (comprobantes) asociados a un pedido."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, monto, monto_esperado, estado, metodo, banco, referencia,
+                   url_comprobante, verificado_por, intento_n,
+                   to_char(fecha AT TIME ZONE $2, 'DD/MM/YYYY HH24:MI') AS fecha
+            FROM abonos
+            WHERE pedido_id = $1
+            ORDER BY fecha DESC
+            """,
+            pedido_id, config.BOT_TIMEZONE,
+        )
+    return [dict(r) for r in rows]
+
+
 # ── Abonos (panel + lógica de comprobantes) ──
 
 async def list_abonos(estado: str | None = None, limit: int = 50) -> list[dict]:

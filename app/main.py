@@ -13,7 +13,7 @@ from fastapi.responses import PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature, catalog
-from app import escalations, admin, leads, follow_ups, sedes
+from app import escalations, admin, leads, follow_ups, sedes, pedidos
 
 logging.basicConfig(
     level=logging.INFO,
@@ -509,6 +509,14 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # Extraer marcadores de foto [FOTO:ID] emitidos por el LLM y limpiarlos del
     # texto visible. Las fotos se envían tras el mensaje de texto.
     foto_ids, reply = _extraer_marcadores_foto(reply)
+
+    # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
+    # (con datos de envío del historial y total calculado del catálogo).
+    reply, pedido_creado_id = await pedidos.maybe_create_pedido(
+        wa_id, reply, history + [{"role": "user", "content": user_text}],
+    )
+    if pedido_creado_id:
+        log.info("Pedido #%d creado automáticamente para %s", pedido_creado_id, wa_id)
 
     await db.save_message(wa_id, "user", user_text)
     await db.save_message(wa_id, "assistant", reply)
