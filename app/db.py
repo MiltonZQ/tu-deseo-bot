@@ -906,7 +906,7 @@ async def list_pedido_items(pedido_id: int) -> list[dict]:
 
 
 async def get_pedido_pendiente(wa_id: str) -> dict | None:
-    """Devuelve el pedido pendiente/pagado más reciente de un contacto (o None)."""
+    """Devuelve el pedido pendiente reciente de un contacto (o None), acotado a las últimas 24 horas."""
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -914,7 +914,7 @@ async def get_pedido_pendiente(wa_id: str) -> dict | None:
                    telefono_contacto, estado, total, creado_por, notas,
                    to_char(created_at AT TIME ZONE $2, 'DD/MM/YYYY HH24:MI') AS fecha
             FROM pedidos
-            WHERE wa_id = $1 AND estado IN ('pendiente','pagado')
+            WHERE wa_id = $1 AND estado = 'pendiente' AND created_at >= NOW() - INTERVAL '24 hours'
             ORDER BY created_at DESC LIMIT 1
             """,
             wa_id, config.BOT_TIMEZONE,

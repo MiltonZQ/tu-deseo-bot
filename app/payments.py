@@ -142,7 +142,7 @@ async def _download_image_as_b64(image_url: str) -> str | None:
 
 
 async def _get_monto_esperado(wa_id: str) -> tuple[int | None, int | None]:
-    """Obtiene (monto_esperado, pedido_id) del pedido pendiente/pagado más reciente.
+    """Obtiene (monto_esperado, pedido_id) del pedido pendiente activo de las últimas 24 horas.
 
     Devuelve (None, None) si no hay pedido asociado (el bot pedirá contexto).
     """
@@ -150,7 +150,7 @@ async def _get_monto_esperado(wa_id: str) -> tuple[int | None, int | None]:
         row = await conn.fetchrow(
             """
             SELECT id, total FROM pedidos
-            WHERE wa_id = $1 AND estado IN ('pendiente','pagado')
+            WHERE wa_id = $1 AND estado = 'pendiente' AND created_at >= NOW() - INTERVAL '24 hours'
             ORDER BY created_at DESC LIMIT 1
             """,
             wa_id,
