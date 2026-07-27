@@ -1001,6 +1001,15 @@ async def insert_abono(data: dict) -> int:
     return row["id"] if row else 0
 
 
+async def update_abono_pedido_id(abono_id: int, pedido_id: int) -> None:
+    """Asocia un abono existente a un id de pedido."""
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE abonos SET pedido_id = $1 WHERE id = $2",
+            pedido_id, abono_id,
+        )
+
+
 async def count_abonos_fallidos(telefono: str, hours: int) -> int:
     """Cuenta comprobantes inválidos recientes (para lógica de escalamiento)."""
     async with _pool.acquire() as conn:

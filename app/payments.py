@@ -237,11 +237,12 @@ async def handle_inbound_image(
     intento_n = await db.count_abonos_fallidos(wa_id, config.PAYMENT_ATTEMPTS_WINDOW_HOURS) + 1
 
     # 3) Registrar abono
-    await db.insert_abono({
+    abono_id = await db.insert_abono({
         "telefono": wa_id,
         "pedido_id": pedido_id,
         "monto_esperado": monto_esperado,
         "monto_declarado": result.get("monto"),
+        "monto": result.get("monto"),
         "estado": "verificado_bot" if valido else "no_valido",
         "banco": result.get("banco"),
         "referencia": result.get("referencia"),
@@ -255,6 +256,44 @@ async def handle_inbound_image(
     if valido:
         if pedido_id:
             await db.update_pedido_estado(pedido_id, "pagado")
+        else:
+            # Si no había un pedido pendiente previo, crear el pedido automáticamente en estado 'pagado'
+            try:
+                from app import pedidos
+                nombre = pedidos._extraer_nombre(history)
+                ciudad = pedidos._extraer_ciudad(history)
+                direccion = pedidos._extraer_direccion(history)
+                telefono = pedidos._extraer_telefono(history, wa_id)
+                items, _ = await pedidos._resolver_productos_y_total(history)
+                monto_pagado = result.get("monto") or 0
+
+                pedido_id = await db.create_pedido({
+                    "wa_id": wa_id,
+                    "nombre_cliente": nombre,
+                    "direccion_envio": direccion,
+                    "ciudad": ciudad,
+                    "telefono_contacto": telefono,
+                    "estado": "pagado",
+                    "total": monto_pagado,
+                    "creado_por": "bot",
+                    "notas": f"Pago verificado automáticamente por bot (Banco: {result.get('banco') or 'S/N'}, Ref: {result.get('referencia') or 'S/N'})",
+                })
+                if abono_id:
+                    await db.update_abono_pedido_id(abono_id, pedido_id)
+                for item in items:
+                    try:
+                        await db.add_pedido_item(
+                            pedido_id=pedido_id,
+                            producto_id=item["producto_id"],
+                            nombre_snapshot=item["nombre"],
+                            cantidad=item["cantidad"],
+                            precio_unitario=item["precio_unitario"],
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                log.exception("Error creando pedido automático tras pago verificado de %s", wa_id)
+
         await whatsapp_client.send_text(
             wa_id,
             "✅ ¡Pago verificado! Gracias. Nuestro equipo confirmará el despacho en breve. 🎉",
