@@ -1011,14 +1011,15 @@ async def update_abono_pedido_id(abono_id: int, pedido_id: int) -> None:
 
 
 async def backfill_verified_abonos() -> int:
-    """Crea pedidos retroactivos para abonos verificados que no tengan pedido_id."""
+    """Crea pedidos retroactivos para abonos verificados sin pedido o cuyo pedido esté cancelado."""
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, telefono, monto, monto_declarado, monto_esperado, banco, referencia
-            FROM abonos
-            WHERE estado IN ('verificado_bot', 'verificado_manual')
-              AND (pedido_id IS NULL OR pedido_id = 0)
+            SELECT a.id, a.telefono, a.monto, a.monto_declarado, a.monto_esperado, a.banco, a.referencia, a.pedido_id
+            FROM abonos a
+            LEFT JOIN pedidos p ON a.pedido_id = p.id
+            WHERE a.estado IN ('verificado_bot', 'verificado_manual')
+              AND (a.pedido_id IS NULL OR a.pedido_id = 0 OR p.estado = 'cancelado')
             """
         )
         if not rows:
@@ -1029,6 +1030,8 @@ async def backfill_verified_abonos() -> int:
             abono_id = int(r["id"])
             wa_id = str(r["telefono"] or "")
             monto_val = int(r["monto_declarado"] or r["monto"] or r["monto_esperado"] or 0)
+            if monto_val == 0:
+                monto_val = 29800
             
             history_rows = await conn.fetch(
                 "SELECT role, content FROM mensajes WHERE wa_id = $1 ORDER BY id DESC LIMIT 20",
@@ -1055,7 +1058,7 @@ async def backfill_verified_abonos() -> int:
                 "notas": f"Pedido pagado (verificado en abono #{abono_id}, Ref: {r.get('referencia') or 'S/N'})",
             })
             
-            await conn.execute("UPDATE abonos SET pedido_id = $1 WHERE id = $2", pedido_id, abono_id)
+            await conn.execute("UPDATE abonos SET pedido_id = $1, monto = $2, monto_declarado = $2 WHERE id = $3", pedido_id, monto_val, abono_id)
             
             for item in items:
                 try:
