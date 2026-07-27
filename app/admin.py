@@ -707,6 +707,11 @@ async def abono_estado_endpoint(request: Request, abono_id: int):
     if estado not in ("pendiente", "verificado_bot", "verificado_manual", "no_valido"):
         return {"ok": False, "error": "estado inválido"}
     await db.update_abono_estado(abono_id, estado)
+    if estado in ("verificado_manual", "verificado_bot"):
+        try:
+            await db.backfill_verified_abonos()
+        except Exception:
+            pass
     return {"ok": True}
 
 

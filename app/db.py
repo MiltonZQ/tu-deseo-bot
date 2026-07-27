@@ -1010,6 +1010,70 @@ async def update_abono_pedido_id(abono_id: int, pedido_id: int) -> None:
         )
 
 
+async def backfill_verified_abonos() -> int:
+    """Crea pedidos retroactivos para abonos verificados que no tengan pedido_id."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, telefono, monto, monto_declarado, monto_esperado, banco, referencia
+            FROM abonos
+            WHERE estado IN ('verificado_bot', 'verificado_manual')
+              AND (pedido_id IS NULL OR pedido_id = 0)
+            """
+        )
+        if not rows:
+            return 0
+        
+        count = 0
+        for r in rows:
+            abono_id = int(r["id"])
+            wa_id = str(r["telefono"] or "")
+            monto_val = int(r["monto_declarado"] or r["monto"] or r["monto_esperado"] or 0)
+            
+            history_rows = await conn.fetch(
+                "SELECT role, content FROM mensajes WHERE wa_id = $1 ORDER BY id DESC LIMIT 20",
+                wa_id,
+            )
+            history = [{"role": h["role"], "content": h["content"]} for h in reversed(history_rows)] if history_rows else []
+            
+            from app import pedidos
+            nombre = pedidos._extraer_nombre(history) if history else None
+            ciudad = pedidos._extraer_ciudad(history) if history else None
+            direccion = pedidos._extraer_direccion(history) if history else None
+            telefono = pedidos._extraer_telefono(history, wa_id) if history else wa_id
+            items, _ = await pedidos._resolver_productos_y_total(history) if history else ([], 0)
+
+            pedido_id = await create_pedido({
+                "wa_id": wa_id,
+                "nombre_cliente": nombre,
+                "direccion_envio": direccion,
+                "ciudad": ciudad,
+                "telefono_contacto": telefono,
+                "estado": "pagado",
+                "total": monto_val,
+                "creado_por": "bot",
+                "notas": f"Pedido pagado (verificado en abono #{abono_id}, Ref: {r.get('referencia') or 'S/N'})",
+            })
+            
+            await conn.execute("UPDATE abonos SET pedido_id = $1 WHERE id = $2", pedido_id, abono_id)
+            
+            for item in items:
+                try:
+                    await add_pedido_item(
+                        pedido_id=pedido_id,
+                        producto_id=item["producto_id"],
+                        nombre_snapshot=item["nombre"],
+                        cantidad=item["cantidad"],
+                        precio_unitario=item["precio_unitario"],
+                    )
+                except Exception:
+                    pass
+            count += 1
+            
+        log.info("Backfill: %d abonos verificados retroactivos asociados a nuevos pedidos 'pagado'", count)
+        return count
+
+
 async def count_abonos_fallidos(telefono: str, hours: int) -> int:
     """Cuenta comprobantes inválidos recientes (para lógica de escalamiento)."""
     async with _pool.acquire() as conn:

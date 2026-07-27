@@ -68,6 +68,12 @@ async def lifespan(_app: FastAPI):
         log.info("Purgados %d mensajes viejos (>%dd)", deleted, config.HISTORY_TTL_DAYS)
     config.load_prompts()
     log.info("Prompts cargados: %d chars", len(config.SYSTEM_PROMPT))
+    try:
+        backfilled = await db.backfill_verified_abonos()
+        if backfilled:
+            log.info("Backfill retroactivo: %d pedidos pagados creados", backfilled)
+    except Exception:
+        log.exception("Error ejecutando backfill retroactivo de abonos")
     task = None
     if config.ENABLE_FOLLOW_UPS:
         task = asyncio.create_task(follow_ups.run_loop())
