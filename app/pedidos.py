@@ -128,6 +128,7 @@ async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], 
     total = 0
 
     def _agregar(p: dict) -> None:
+        nonlocal total
         pid = p["id"]
         if pid in seen_ids:
             return

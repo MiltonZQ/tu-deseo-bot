@@ -60,17 +60,17 @@ def _build_vision_prompt(monto_esperado: int | None) -> str:
     """Prompt para GPT-4o vision. Porteado del JSON de Lavadero, ampliado con extracción."""
     tz = config.bot_zoneinfo()
     hoy = datetime.now(tz).strftime("%-d de %B de %Y")
-    monto_txt = f"${monto_esperado:,}" if monto_esperado else "el monto del pedido"
+    monto_txt = f"${monto_esperado:,} COP" if monto_esperado else "el monto del pedido"
 
     return f"""Analiza este comprobante de pago colombiano. Responde SOLO con JSON sin texto
 adicional ni backticks, con esta estructura exacta:
-{{"valido": true|false, "razon": "motivo corto", "monto": <numero sin signos>,
+{{"valido": true|false, "razon": "motivo corto", "monto": <numero entero en COP sin puntos ni comas, ej: 29800>,
   "referencia": "<id de operación>", "banco": "<Nequi|Bancolombia|Daviplata|Bre-B|PSE|otro>",
   "fecha": "<YYYY-MM-DD o null>"}}
 
 Criterios para valido=true (todos deben cumplirse):
 1) Es un comprobante de pago real ({config.ACCEPTED_BANKS} u otro banco colombiano).
-2) El monto coincide con {monto_txt}.
+2) El monto consignado/transferido en la imagen coincide con {monto_txt} (ten en cuenta que en comprobantes colombianos 29.800 ó 29,800 pesos representa 29800 COP en total; no confundas separadores de miles con decimales).
 3) La fecha del comprobante es exactamente de hoy ({hoy}).
 4) El destinatario contiene {_destinatario_clause()}.
 
@@ -98,9 +98,19 @@ def _parse_vision_response(content: str) -> dict[str, Any]:
         return {"valido": False, "razon": "No se pudo leer el comprobante"}
 
     def _int(v):
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            if isinstance(v, float) and 0 < v < 1000:
+                return int(round(v * 1000))
+            return int(v)
+        s = str(v).strip().replace("$", "").replace(" ", "")
+        if s.endswith(".00") or s.endswith(",00"):
+            s = s[:-3]
+        s = s.replace(".", "").replace(",", "")
         try:
-            return int(str(v).replace(".", "").replace(",", "").replace("$", "").strip())
-        except (ValueError, AttributeError):
+            return int(s)
+        except (ValueError, TypeError):
             return None
 
     monto = _int(data.get("monto"))
