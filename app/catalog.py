@@ -398,6 +398,30 @@ async def get_producto_by_id(producto_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+async def get_productos_por_categoria_origen(categoria: str, limit: int = 5) -> list[dict]:
+    """Productos por la categoría de origen de WooCommerce (la columna 'categoria').
+
+    A diferencia de get_productos_por_categoria (que usa la clasificación funcional
+    normalizada), esta usa la categoría tal como viene de la web. Permite "dame los
+    de Punto G" y obtener exactamente esos productos. Prioriza los que tienen imagen.
+    """
+    if not categoria:
+        return []
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND categoria ILIKE '%' || $1 || '%'
+            ORDER BY (imagen_url IS NULL) ASC, LENGTH(nombre) DESC
+            LIMIT $2
+            """,
+            categoria.strip(), limit,
+        )
+    return [dict(r) for r in rows]
+
+
 async def list_categorias() -> dict[str, int]:
     """Devuelve {categoria_funcional: cantidad} de productos activos con imagen."""
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]

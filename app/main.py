@@ -248,6 +248,9 @@ async def _maybe_handle_payment_image(wa_id: str, msg: dict, history: list[dict]
 # El LLM lo emite cuando quiere que se envíe la foto de un producto.
 _FOTO_MARKER_RE = re.compile(r"\[FOTO:\s*([^\]]+)\]", re.IGNORECASE)
 
+# Marcador de categoría: [CATEGORIA:Punto G] → envía fotos de esa subcategoría.
+_CATEGORIA_MARKER_RE = re.compile(r"\[CATEGORIA:\s*([^\]]+)\]", re.IGNORECASE)
+
 # Petición explícita de fotos por parte del cliente (acotada para evitar falsos
 # positivos como "sí", "claro", "ver": requiere verbo de envío o sustantivo de imagen).
 _FOTO_REQUEST_RE = re.compile(
@@ -274,21 +277,36 @@ def _extraer_marcadores_foto(reply: str) -> tuple[list[str], str]:
     return ids, clean
 
 
+def _extraer_marcadores_categoria(reply: str) -> tuple[list[str], str]:
+    """Extrae marcadores [CATEGORIA:...] y devuelve (categorias, reply_limpio)."""
+    cats: list[str] = []
+    for match in _CATEGORIA_MARKER_RE.finditer(reply):
+        cat = match.group(1).strip()
+        if cat:
+            cats.append(cat)
+    clean = _CATEGORIA_MARKER_RE.sub("", reply).strip()
+    clean = re.sub(r"[ \t]{2,}", " ", clean)
+    return cats, clean
+
+
 async def _enviar_fotos_productos(
     wa_id: str,
     foto_refs: list[str],
     reply: str,
     user_text: str,
     history: list[dict],
+    categoria_refs: list[str] | None = None,
 ) -> None:
     """Envía fotos de productos por WhatsApp.
 
     Resolución por orden de fiabilidad:
       1. Marcadores [FOTO:ID] del LLM → get_producto_by_id (fiable).
       2. Marcadores [FOTO:NOMBRE] → get_productos_en_texto sobre el nombre.
-      3. Fallback: si el cliente pidió fotos explícitamente y el LLM no emitió
+      3. Marcadores [CATEGORIA:Punto G] → get_productos_por_categoria_origen
+         (envía las fotos de esa subcategoría de la web).
+      4. Fallback: si el cliente pidió fotos explícitamente y el LLM no emitió
          marcador, se busca por nombre en el mensaje del usuario y la respuesta.
-    Máximo 3 fotos por turno.
+    Máximo 5 fotos por turno.
     """
     try:
         prods_to_send: list[dict] = []
@@ -304,6 +322,14 @@ async def _enviar_fotos_productos(
             found = await catalog.get_productos_en_texto(ref, limit=1)
             if found:
                 prods_to_send.extend(found)
+
+        # 3. Resolver marcadores de categoría [CATEGORIA:...] → fotos de esa subcategoría
+        if categoria_refs:
+            for cat in categoria_refs[:2]:
+                prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=5)
+                prods_to_send.extend(prods_cat)
+                if cat:
+                    log.info("Fotos por categoría '%s': %d productos", cat, len(prods_cat))
 
         # 3. Fallback: cliente pidió fotos explícitamente y no hubo marcador
         if not prods_to_send and _FOTO_REQUEST_RE.search(user_text):
@@ -512,9 +538,10 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         history + [{"role": "user", "content": user_text}],
     )
 
-    # Extraer marcadores de foto [FOTO:ID] emitidos por el LLM y limpiarlos del
-    # texto visible. Las fotos se envían tras el mensaje de texto.
+    # Extraer marcadores de foto [FOTO:ID] y de categoría [CATEGORIA:...] y limpiarlos
+    # del texto visible. Las fotos se envían tras el mensaje de texto.
     foto_ids, reply = _extraer_marcadores_foto(reply)
+    categoria_refs, reply = _extraer_marcadores_categoria(reply)
 
     # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
     # (con datos de envío del historial y total calculado del catálogo).
@@ -529,7 +556,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     await whatsapp_client.send_text(wa_id, reply)
 
     # Enviar fotos resueltas por marcador (fiable) o por fallback de nombre.
-    await _enviar_fotos_productos(wa_id, foto_ids, reply, user_text, history)
+    await _enviar_fotos_productos(wa_id, foto_ids, reply, user_text, history, categoria_refs)
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen
     # que se reinyecta en futuros turnos para no perder contexto de largo plazo.
