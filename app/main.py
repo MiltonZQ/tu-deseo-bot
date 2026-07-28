@@ -327,12 +327,12 @@ async def _enviar_fotos_productos(
                 found_reply = await catalog.get_productos_en_texto(reply, limit=2)
                 prods_to_send.extend(found_reply)
 
-        # Enviar (máx 3, dedup por id, solo con imagen)
+        # Enviar (máx 5, dedup por id, solo con imagen)
         seen_ids: set[int] = set()
         enviadas = 0
         sin_imagen = 0
         for p in prods_to_send:
-            if enviadas >= 3:
+            if enviadas >= 5:
                 break
             pid = p["id"]
             if pid in seen_ids:
