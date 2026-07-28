@@ -324,10 +324,14 @@ async def _enviar_fotos_productos(
                 prods_to_send.extend(found)
 
         # 3. Resolver marcadores de categoría [CATEGORIA:...] → fotos de esa subcategoría
+        # (marcados con _por_categoria para excluirlos del filtro de coherencia de categoría,
+        #  pues ya están correctamente filtrados por su categoría de origen).
         if categoria_refs:
             for cat in categoria_refs[:2]:
                 prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=5)
-                prods_to_send.extend(prods_cat)
+                for pc in prods_cat:
+                    pc["_por_categoria"] = True
+                    prods_to_send.append(pc)
                 if cat:
                     log.info("Fotos por categoría '%s': %d productos", cat, len(prods_cat))
 
@@ -353,16 +357,37 @@ async def _enviar_fotos_productos(
                 found_reply = await catalog.get_productos_en_texto(reply, limit=2)
                 prods_to_send.extend(found_reply)
 
-        # Enviar (máx 5, dedup por id, solo con imagen)
+        # Determinar la categoría funcional que pidió el cliente (intención).
+        # Sirve para filtrar productos resueltos que no correspondan (ej: el bot
+        # emitió [FOTO:ID] de un dildo cuando piden arnés → se descarta).
+        cat_cliente = catalog._categoria_normalizada(user_text) if user_text else ""
+
+        # Enviar (máx 5, dedup por id, solo con imagen, y que coincidan con la
+        # categoría pedida cuando esta sea identificable).
         seen_ids: set[int] = set()
         enviadas = 0
         sin_imagen = 0
+        fuera_categoria = 0
         for p in prods_to_send:
             if enviadas >= 5:
                 break
             pid = p["id"]
             if pid in seen_ids:
                 continue
+            # Validar coherencia de categoría: si el cliente pidió una categoría
+            # específica (no el cajón de sastre), el producto debe ser de esa categoría.
+            # Se excluyen los productos resueltos vía [CATEGORIA:...] (ya correctos).
+            if cat_cliente and cat_cliente != "juegos-y-accesorios" and not p.get("_por_categoria"):
+                cat_prod = catalog._categoria_normalizada(
+                    p.get("nombre", ""), p.get("descripcion", ""), p.get("categoria", ""),
+                )
+                if cat_prod != cat_cliente:
+                    fuera_categoria += 1
+                    log.warning(
+                        "Foto omitida (otra categoría): '%s' es %s, cliente pidió %s",
+                        p.get("nombre"), cat_prod, cat_cliente,
+                    )
+                    continue
             if not p.get("imagen_url"):
                 sin_imagen += 1
                 log.warning(
@@ -378,8 +403,8 @@ async def _enviar_fotos_productos(
             if enviadas < 3 and prods_to_send:
                 await asyncio.sleep(1.0)
         log.info(
-            "Fotos a %s: refs=%d resueltos=%d enviadas=%d sin_imagen=%d",
-            wa_id, len(foto_refs), len(prods_to_send), enviadas, sin_imagen,
+            "Fotos a %s: refs=%d resueltos=%d enviadas=%d sin_imagen=%d fuera_categoria=%d",
+            wa_id, len(foto_refs), len(prods_to_send), enviadas, sin_imagen, fuera_categoria,
         )
     except Exception:
         log.exception("Error enviando foto de producto a %s", wa_id)
