@@ -141,8 +141,7 @@ async def search_with_stock(query: str, limit: int = 6) -> list[dict]:
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, stock_status
             FROM productos
-            WHERE activo = TRUE
-              AND (stock_status IS NULL OR stock_status <> 'outofstock')
+            WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
               AND (nombre ILIKE '%' || $1 || '%' OR categoria ILIKE '%' || $1 || '%'
                    OR descripcion ILIKE '%' || $1 || '%')
             ORDER BY (imagen_url IS NULL) ASC, LENGTH(nombre) ASC
@@ -277,7 +276,7 @@ async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
             FROM productos
-            WHERE activo = TRUE
+            WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
               AND imagen_url IS NOT NULL AND imagen_url != ''
             ORDER BY LENGTH(nombre) DESC
             """
@@ -419,7 +418,7 @@ async def get_producto_by_id(producto_id: int) -> dict | None:
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
             FROM productos
-            WHERE id = $1 AND activo = TRUE
+            WHERE id = $1 AND (stock_status IS NULL OR stock_status <> 'outofstock')
             """,
             producto_id,
         )
@@ -440,7 +439,7 @@ async def get_productos_por_categoria_origen(categoria: str, limit: int = 5) -> 
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
             FROM productos
-            WHERE activo = TRUE
+            WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
               AND categoria ILIKE '%' || $1 || '%'
             ORDER BY (imagen_url IS NULL) ASC, LENGTH(nombre) DESC
             LIMIT $2
@@ -475,7 +474,7 @@ async def get_productos_por_categoria(cat_funcional: str, limit: int = 6) -> lis
             """
             SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
             FROM productos
-            WHERE activo = TRUE
+            WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
               AND imagen_url IS NOT NULL AND imagen_url != ''
             ORDER BY LENGTH(nombre) DESC
             """
@@ -511,7 +510,7 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
         rows = await conn.fetch(
-            "SELECT id, nombre, descripcion, categoria, precio FROM productos WHERE activo = TRUE ORDER BY categoria, nombre"
+            "SELECT id, nombre, descripcion, categoria, precio FROM productos WHERE (stock_status IS NULL OR stock_status <> 'outofstock') ORDER BY categoria, nombre"
         )
     lines = ["# Catálogo de productos", ""]
     current_cat = None
