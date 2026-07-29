@@ -63,11 +63,27 @@ def fit_history(system: str, history: list[dict], user_msg: str,
 
 
 def _model_kwargs(messages: list[dict]) -> dict:
-    """Construye los kwargs para chat.completions.create, incluyendo reasoning effort
-    cuando el modelo lo soporta (GLM-5.x vía OpenRouter)."""
+    """Construye los kwargs para chat.completions.create.
+
+    Gestiona modelos de razonamiento (thinking) vía OpenRouter:
+    - Gemini 3.x Flash y modelos thinking generan razonamiento interno por defecto,
+      lo que hace lenta la respuesta y puede devolver content vacío si max_tokens
+      es bajo. El pipeline determinístico YA hace el "razonamiento" en Python
+      (clasificar, recuperar, validar), así que aquí solo necesitamos la redacción
+      final → excluimos el razonamiento con `reasoning: {exclude: true}`.
+    - MODEL_REASONING_EFFORT (legacy GLM-5.x) sigue soportándose.
+    """
     kwargs: dict = {"model": config.OPENAI_MODEL, "messages": messages}
+    extra_body: dict = {}
+    if config.MODEL_REASONING_EXCLUDE:
+        # No devolver el chain-of-thought; solo la respuesta final.
+        extra_body["reasoning"] = {"exclude": True}
     if config.MODEL_REASONING_EFFORT:
-        kwargs["extra_body"] = {"reasoning": {"effort": config.MODEL_REASONING_EFFORT}}
+        extra_body.setdefault("reasoning", {})["effort"] = config.MODEL_REASONING_EFFORT
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    if config.MAX_REPLY_TOKENS:
+        kwargs["max_tokens"] = config.MAX_REPLY_TOKENS
     return kwargs
 
 

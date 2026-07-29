@@ -23,13 +23,22 @@ YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
 
 # ── IA / Modelos ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "meta/muse-spark-1.1")  # chat conversacional Muse Spark 1.1 (vía OpenRouter)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-3.6-flash")  # chat conversacional Gemini 3.6 Flash (vía OpenRouter)
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
 # Effort del razonamiento para modelos que lo soportan (GLM-5.x, etc.).
 # "low" = control de costo y latencia; valores: low/medium/high o vacío para omitir.
 MODEL_REASONING_EFFORT = os.getenv("MODEL_REASONING_EFFORT", "low").strip().lower() or None
+# Excluir el razonamiento (chain-of-thought) de la respuesta para modelos "thinking"
+# como Gemini 3.x Flash. El pipeline determinístico ya hace el razonamiento en Python,
+# así que aquí solo se necesita la redacción final. Setear en true para Gemini 3.x.
+MODEL_REASONING_EXCLUDE = os.getenv("MODEL_REASONING_EXCLUDE", "false").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+# Máximo de tokens para la respuesta del LLM. Generoso para que el bot pueda redactar
+# saludo + 5 marcadores [FOTO:ID] + CTA sin cortarse, pero acotado para control de costo.
+MAX_REPLY_TOKENS = int(os.getenv("MAX_REPLY_TOKENS", "800"))
 
 # ── Base de datos ──
 DATABASE_URL = os.getenv("DATABASE_URL", "")
