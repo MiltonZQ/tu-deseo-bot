@@ -589,6 +589,7 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "dildo": "dildos",
     "dildos": "dildos",
     "consolador": "dildos",
+    "consoladores": "dildos",
     "plug": "anal",
     "anal": "anal",
     "masturbador": "masturbadores",
@@ -600,15 +601,24 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "bomba": "anillos-y-fundas",
     "suspensorio": "lenceria",
     "suspensorios": "lenceria",
+    "suspensor": "lenceria",
+    "suspensores": "lenceria",
     "lenceria": "lenceria",
     "lencería": "lenceria",
     "body": "lenceria",
+    "bodys": "lenceria",
     "baby doll": "lenceria",
+    "babydoll": "lenceria",
     "arnes": "anal",
     "arnés": "anal",
+    "arneses": "anal",
+    "conjunto": "lenceria",
+    "conjuntos": "lenceria",
+    "pechera": "lenceria",
     "bondage": "pareja-y-bondage",
     "lubricante": "lubricantes-y-cuidado",
     "lubricantes": "lubricantes-y-cuidado",
+    "aceite": "lubricantes-y-cuidado",
 }
 
 # Sustantivos de producto que el cliente puede mencionar (para RAG/fallback).
@@ -670,17 +680,34 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
 
     intencion = clave de _INTENCION_A_CATEGORIA_FUNCIONAL o None.
     sustantivo = el primer _NOUN_KEYWORDS hallado (para fallback).
+
+    Matching robusto: además del substring exacto, usa matching por RAÍZ para
+    cubrir plurales/variantes que no estén en el mapping (ej: 'suspensores'
+    contiene la raíz 'suspensor'; 'consoladores' contiene 'consolador'). Esto
+    evita regresiones cuando el cliente usa una forma no listada.
     """
     haystack = _normalizar_texto(texto)
     if not haystack.strip():
         return None, None
+    # Tokenizar el mensaje en palabras (para matching por raíz contra palabras completas)
+    palabras = set(_re_mod.findall(r"\b[a-z]{4,}\b", haystack))
     # Buscar la intención por sustantivo (longitud desc para preferir compuestos)
     intencion = None
     for clave, cat_func in sorted(_INTENCION_A_CATEGORIA_FUNCIONAL.items(),
                                   key=lambda kv: -len(kv[0])):
+        # 1) Coincidencia directa de substring (caso general)
         if clave in haystack:
             intencion = clave
             break
+        # 2) Matching por raíz: la clave (≥5 chars) es prefijo de una palabra del
+        #    texto, o una palabra del texto es prefijo de la clave. Cubre plurales.
+        if len(clave) >= 5:
+            for pal in palabras:
+                if pal.startswith(clave) or clave.startswith(pal):
+                    intencion = clave
+                    break
+            if intencion:
+                break
     # Sustantivo para fallback
     sustantivo = None
     for n in _NOUN_KEYWORDS:
