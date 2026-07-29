@@ -545,9 +545,9 @@ async def _recuperar_candidatos(
 
     # Si no hay candidatos por categoría, intentar búsqueda por nombre:
     # 1) por el texto del cliente (producto específico tipo "Lovense Diamo"), y
-    # 2) si debe mostrar y hay un sustantivo/categoría, buscar por ese sustantivo
-    #    ("suspensorio") para capturar productos aunque el filtro de categoría falle.
-    if not candidatos:
+    # 2) si debe mostrar y hay un sustantivo/categoría, buscar por ese sustantivo.
+    # NOTA: solo se ejecuta si debe_mostrar es True o la consulta es explícitamente un producto específico.
+    if not candidatos and (debe_mostrar or clasif.get("es_especifico")):
         especificos = await catalog.buscar_producto_especifico(user_text, limit=5)
         if especificos:
             candidatos = especificos
@@ -565,12 +565,11 @@ async def _recuperar_candidatos(
         "intencion": intencion,
         "categoria_funcional": cat_func,
         "genero": genero,
-        "calificado": clasif["calificado"] or bool(candidatos),
+        "calificado": clasif["calificado"] or (debe_mostrar and bool(candidatos)),
         "pide_fotos": clasif["pide_fotos"],
         "reset_state": reset_state,
-        # NUNCA prometer fotos sin candidatos reales. Si no hay productos, el
-        # LLM debe calificar o explicar, no inventar IDs.
-        "debe_mostrar": bool(candidatos) and (debe_mostrar or bool(candidatos)),
+        # NUNCA mostrar fotos en el primer turno de una categoría general sin calificar.
+        "debe_mostrar": debe_mostrar and bool(candidatos),
     }
     return candidatos, info
 
