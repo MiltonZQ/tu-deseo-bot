@@ -352,6 +352,9 @@ _REGLAS_CATEGORIA = [
       "friction", "estrechant", "booster", "serum", "crema "), "lubricantes-y-cuidado"),
     # Succionadores de clítoris (antes que vibradores genéricos)
     (("succionador", "suction", "air pulse", "succión de clítoris", "succio"), "succionadores"),
+    # Lencería y disfraces (incluye suspensorios masculinos, pecheras y lencería erótica de hombre)
+    (("suspensorio", "suspensor", "pechera", "body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
+      "disfra", "pantuflas", "pezonera", "ligero", "encaje"), "lenceria"),
     # Anal: plugs, bolas anales, estimuladores de próstata, dilatadores, arneses
     (("plug", "anal", "prostat", "próstata", "bolas anal", "dilatador", "arnes",
       "arnés", "strap on", "strap-on", "cola ", "entrenamiento anal"), "anal"),
@@ -365,9 +368,6 @@ _REGLAS_CATEGORIA = [
     # Vibradores (rabbit, bala, huevo vibr, tipo hitachi, panty vibr, app)
     (("vibrador", "vibr ", "rabbit", "bala vibr", "huevo vibr", "hitachi", "panty vibr",
       "con app", "control remoto", "con vibrac"), "vibradores"),
-    # Lencería y disfraces
-    (("body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
-      "disfra", "pantuflas", "pezonera", "ligero", "encaje", "suspensorio"), "lenceria"),
     # Bondage / BDSM / pareja
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
       "kit ", "vendas", "mordaza"), "pareja-y-bondage"),
