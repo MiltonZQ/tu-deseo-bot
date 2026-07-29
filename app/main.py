@@ -306,16 +306,17 @@ async def _enviar_fotos_productos(
          (envía las fotos de esa subcategoría de la web).
       4. Fallback: si el cliente pidió fotos explícitamente y el LLM no emitió
          marcador, se busca por nombre en el mensaje del usuario y la respuesta.
-    Máximo 5 fotos por turno.
+    Máximo 3 fotos por turno.
     """
     try:
         prods_to_send: list[dict] = []
 
-        # 1+2. Resolver marcadores emitidos por el LLM
-        for ref in foto_refs[:5]:
+        # 1+2. Resolver marcadores emitidos por el LLM (máximo 3)
+        for ref in foto_refs[:3]:
             if ref.isdigit():
                 p = await catalog.get_producto_by_id(int(ref))
                 if p:
+                    p["_explicit_id"] = True
                     prods_to_send.append(p)
                     continue
             # Referencia por nombre: buscar en el texto del propio ref
@@ -324,18 +325,16 @@ async def _enviar_fotos_productos(
                 prods_to_send.extend(found)
 
         # 3. Resolver marcadores de categoría [CATEGORIA:...] → fotos de esa subcategoría
-        # (marcados con _por_categoria para excluirlos del filtro de coherencia de categoría,
-        #  pues ya están correctamente filtrados por su categoría de origen).
-        if categoria_refs:
-            for cat in categoria_refs[:2]:
-                prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=5)
+        if categoria_refs and not prods_to_send:
+            for cat in categoria_refs[:1]:
+                prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=3)
                 for pc in prods_cat:
                     pc["_por_categoria"] = True
                     prods_to_send.append(pc)
                 if cat:
                     log.info("Fotos por categoría '%s': %d productos", cat, len(prods_cat))
 
-        # 3. Fallback: cliente pidió fotos explícitamente y no hubo marcador
+        # 4. Fallback: cliente pidió fotos explícitamente y no hubo marcador
         if not prods_to_send and _FOTO_REQUEST_RE.search(user_text):
             is_multi = bool(re.search(
                 r"\b(cada\s+uno|todas|todos|cada\s+una|los\s+\w+|las\s+\w+)\b",
@@ -357,27 +356,21 @@ async def _enviar_fotos_productos(
                 found_reply = await catalog.get_productos_en_texto(reply, limit=2)
                 prods_to_send.extend(found_reply)
 
-        # Determinar la categoría funcional que pidió el cliente (intención).
-        # Sirve para filtrar productos resueltos que no correspondan (ej: el bot
-        # emitió [FOTO:ID] de un dildo cuando piden arnés → se descarta).
         cat_cliente = catalog._categoria_normalizada(user_text) if user_text else ""
 
-        # Enviar (máx 5, dedup por id, solo con imagen, y que coincidan con la
-        # categoría pedida cuando esta sea identificable).
+        # Enviar (máx 3, dedup por id, solo con imagen)
         seen_ids: set[int] = set()
         enviadas = 0
         sin_imagen = 0
         fuera_categoria = 0
         for p in prods_to_send:
-            if enviadas >= 5:
+            if enviadas >= 3:
                 break
             pid = p["id"]
             if pid in seen_ids:
                 continue
-            # Validar coherencia de categoría: si el cliente pidió una categoría
-            # específica (no el cajón de sastre), el producto debe ser de esa categoría.
-            # Se excluyen los productos resueltos vía [CATEGORIA:...] (ya correctos).
-            if cat_cliente and cat_cliente != "juegos-y-accesorios" and not p.get("_por_categoria"):
+            # Omitir filtro de categoría si el producto se resolvió por ID explícito numérico o por categoría
+            if cat_cliente and cat_cliente != "juegos-y-accesorios" and not p.get("_por_categoria") and not p.get("_explicit_id"):
                 cat_prod = catalog._categoria_normalizada(
                     p.get("nombre", ""), p.get("descripcion", ""), p.get("categoria", ""),
                 )
@@ -399,7 +392,6 @@ async def _enviar_fotos_productos(
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
             log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
             enviadas += 1
-            # Espaciar envíos para no saturar yCloud/WhatsApp (rate limit)
             if enviadas < 3 and prods_to_send:
                 await asyncio.sleep(1.0)
         log.info(

@@ -258,15 +258,14 @@ async def get_producto_con_imagen(query: str) -> dict | None:
     return None
 
 
-async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
+async def get_productos_en_texto(text: str, limit: int = 3) -> list[dict]:
     """Extrae productos únicos del catálogo mencionados en el texto.
 
-    Dos estrategias:
-      1. Match literal: el nombre completo del producto aparece como subcadena
-         (ej. el bot escribió el nombre exacto).
-      2. Match tolerante a tokens: si el texto contiene ≥60% de los tokens
-         significativos del nombre del producto (para parafraseos como
-         "BliX H2O Neutro 30 ml" → "BliX Lubricante H2O Neutro X 30 Ml").
+    Estrategia de dos niveles:
+      1. Match literal: el nombre completo del producto aparece como subcadena.
+      2. Match por cobertura de tokens del producto: si la mayoría (≥70%) de los
+         tokens del nombre del producto (ej. 'blix', 'lubricante', 'h2o') están
+         presentes en el texto.
     """
     if not text:
         return []
@@ -284,12 +283,10 @@ async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
 
     import unicodedata
     text_clean = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
-    text_tokens = set(_extract_search_tokens(text))
-
     matched: list[dict] = []
     seen_ids: set[int] = set()
 
-    # 1. Match literal (prioritario: más preciso)
+    # 1. Match literal
     for r in rows:
         name_clean = unicodedata.normalize("NFKD", r["nombre"].lower()).encode("ascii", "ignore").decode()
         if name_clean in text_clean and r["id"] not in seen_ids:
@@ -298,23 +295,26 @@ async def get_productos_en_texto(text: str, limit: int = 4) -> list[dict]:
             if len(matched) >= limit:
                 return matched
 
-    # 2. Match tolerante a tokens (para parafraseos del LLM)
-    if len(matched) < limit and text_tokens:
-        scored: list[tuple[float, dict]] = []
-        for r in rows:
-            if r["id"] in seen_ids:
-                continue
-            score = _score_product_match(r["nombre"], list(text_tokens))
-            if score >= 0.6:
-                scored.append((score, dict(r)))
-        # Ordenar por score descendente; a igual score, nombre más corto primero
-        scored.sort(key=lambda x: (x[0], -len(x[1]["nombre"])), reverse=True)
-        for score, r in scored:
-            if r["id"] not in seen_ids:
-                seen_ids.add(r["id"])
-                matched.append(r)
-                if len(matched) >= limit:
-                    break
+    # 2. Match por cobertura de tokens del nombre del producto en el texto
+    scored: list[tuple[float, dict]] = []
+    for r in rows:
+        if r["id"] in seen_ids:
+            continue
+        p_tokens = _extract_search_tokens(r["nombre"])
+        if not p_tokens:
+            continue
+        matches = sum(1 for t in p_tokens if t in text_clean)
+        coverage = matches / len(p_tokens)
+        if coverage >= 0.7:  # Al menos el 70% de las palabras del producto aparecen en el texto
+            scored.append((coverage, dict(r)))
+
+    scored.sort(key=lambda x: (x[0], -len(x[1]["nombre"])), reverse=True)
+    for cov, r in scored:
+        if r["id"] not in seen_ids:
+            seen_ids.add(r["id"])
+            matched.append(r)
+            if len(matched) >= limit:
+                break
 
     return matched
 
