@@ -392,6 +392,45 @@ def _es_respuesta_afirmativa(user_text: str) -> bool:
     return False
 
 
+# Patrones que indican que el cliente está en FASE DE VENTA/PAGO (no explorando
+# productos). En estos turnos NO se envían fotos: el cliente ya eligió o está
+# dando datos/pagando. Evita el ruido de reenviar productos durante el checkout.
+_FASE_VENTA_RE = re.compile(
+    r"\b(nequi|daviplata|bancolombia|bold|pago|pagar|pague|transferencia|"
+    r"comprobante|comprobant|envio|envío|despacho|despachar|direcci[oó]n|"
+    r"telefono|tel[eé]fono|celular|nombre completo|ciudad|barrio|"
+    r"cuesta|cuanto cuesta|cu[aá]nto|valor|total|yappi|yapy|"
+    r"pedido|lo quiero|lo compro|lo llevo|me lo llevo|ese quiero|"
+    r"ya pague|ya pagu|ya transferi|ya transferí|adjunto|adjunt|"
+    r"comprobante de pago|efectivo|contra ?entrega)\b",
+    re.IGNORECASE,
+)
+
+
+def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
+    """Detecta si el cliente está en fase de venta/pago (no de exploración).
+
+    True si el mensaje actual habla de pago/datos/envío, O si en los últimos
+    turnos el bot ya pidió datos de envío / cerró venta (el cliente ya eligió y
+    está dando sus datos → no es momento de mandar más fotos de productos).
+    """
+    texto = user_text or ""
+    if _FASE_VENTA_RE.search(texto):
+        return True
+    # Mirar últimos turnos del bot: si pidió datos de envío o cerró venta,
+    # estamos en checkout aunque el mensaje actual sea corto ("miltn zambrano...").
+    for m in reversed(history[-6:]):
+        if m.get("role") != "assistant":
+            continue
+        c = (m.get("content") or "").lower()
+        if any(w in c for w in ("nombre completo", "direcci", "teléfono de contacto",
+                                "teléfono", "ciudad", "pedido", "datos de envío",
+                                "datos de envio", "nequi", "daviplata", "bancolombia",
+                                "pago", "total", "[[pedido")):
+            return True
+    return False
+
+
 async def _recuperar_candidatos(
     user_text: str, history: list[dict], estado: dict | None,
 ) -> tuple[list[dict], dict]:
@@ -455,6 +494,17 @@ async def _recuperar_candidatos(
 
     # ¿Hay que mostrar fotos? Sí si: ya calificado, pide fotos, o regla híbrida.
     debe_mostrar = bool(clasif["calificado"] or clasif["pide_fotos"] or mostrar_por_estado)
+
+    # REGLA ANTI-RUIDO EN CHECKOUT: si el cliente está en fase de venta/pago
+    # (dio datos, habla de nequi/comprobante, o el bot ya pidió datos de envío),
+    # NO mostrar fotos. El cliente ya eligió su producto; reenviar opciones ahora
+    # es ruido que confunde y rompe la venta. Las fotos vuelven solo cuando el
+    # cliente haga una consulta NUEVA de productos (el detector de cambio de tema
+    # reinicia el estado).
+    if debe_mostrar and _es_fase_venta(user_text, history):
+        debe_mostrar = False
+        clasif["calificado"] = False
+        log.info("Fase de venta detectada — fotos desactivadas este turno")
 
     candidatos: list[dict] = []
     if debe_mostrar and cat_func:
