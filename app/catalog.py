@@ -352,6 +352,10 @@ _REGLAS_CATEGORIA = [
       "friction", "estrechant", "booster", "serum", "crema "), "lubricantes-y-cuidado"),
     # Succionadores de clítoris (antes que vibradores genéricos)
     (("succionador", "suction", "air pulse", "succión de clítoris", "succio"), "succionadores"),
+    # Bondage / BDSM / pareja — ANTES que lencería para que antifaz/esposas/bondage
+    # no caigan en lencería por tener cat_origen="Lencería" en WooCommerce.
+    (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
+      "kit ", "vendas", "mordaza"), "pareja-y-bondage"),
     # Lencería y disfraces (incluye suspensorios masculinos, pecheras y lencería erótica de hombre)
     (("suspensorio", "suspensor", "pechera", "body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
       "disfra", "pantuflas", "pezonera", "ligero", "encaje"), "lenceria"),
@@ -368,9 +372,6 @@ _REGLAS_CATEGORIA = [
     # Vibradores (rabbit, bala, huevo vibr, tipo hitachi, panty vibr, app)
     (("vibrador", "vibr ", "rabbit", "bala vibr", "huevo vibr", "hitachi", "panty vibr",
       "con app", "control remoto", "con vibrac"), "vibradores"),
-    # Bondage / BDSM / pareja
-    (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
-      "kit ", "vendas", "mordaza"), "pareja-y-bondage"),
     # Juegos de mesa y accesorios varios
     (("juego", "jenga", "cartas", "dado", "dados"), "juegos-y-accesorios"),
 ]
