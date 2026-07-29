@@ -23,7 +23,7 @@ log = logging.getLogger("tu-deseo-bot")
 
 _message_buffer: dict[str, list[str]] = {}
 _message_buffer_lock = asyncio.Lock()
-MESSAGE_GROUP_WAIT = 6.0  # segundos de espera para agrupar mensajes del mismo número
+MESSAGE_GROUP_WAIT = 3.0  # segundos de espera para agrupar mensajes del mismo número
 
 # Lock por usuario: serializa el procesamiento de un mismo wa_id para que sus
 # mensajes se atiendan en secuencia (evita respuestas duplicadas y race conditions

@@ -156,7 +156,9 @@ async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
             imagen_url = images[0].get("src") if images else None
             galeria_urls = json.dumps([img.get("src") for img in images if img.get("src")]) if images else None
 
-            activo = (item.get("status") == "publish") and (stock_status == "instock")
+            activo = (item.get("status") == "publish") and (
+                stock_status == "instock" or stock_status == "onbackorder"
+            )
 
             res = await conn.fetchrow(
                 """
@@ -190,6 +192,20 @@ async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
     # Actualizar prompt de conocimiento
     await catalog.export_knowledge_md()
     log.info("Sincronización WooCommerce finalizada: %d productos procesados", insertados)
+
+    # Diagnóstico post-sync: cuántos productos hay con imagen/activo (para detectar
+    # si los filtros del bot van a encontrar candidatos).
+    try:
+        async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+            total_db = await conn.fetchval("SELECT COUNT(*) FROM productos")
+            con_imagen = await conn.fetchval("SELECT COUNT(*) FROM productos WHERE imagen_url IS NOT NULL AND imagen_url != ''")
+            activos = await conn.fetchval("SELECT COUNT(*) FROM productos WHERE activo = TRUE")
+            susp_con_img = await conn.fetchval("SELECT COUNT(*) FROM productos WHERE nombre ILIKE '%suspensor%' AND imagen_url IS NOT NULL AND imagen_url != ''")
+        log.info("Diagnóstico DB: %d productos | con imagen: %d | activos: %d | suspensorios con imagen: %d",
+                 total_db, con_imagen, activos, susp_con_img)
+    except Exception:
+        log.exception("Error en diagnóstico post-sync")
+
     return {"total": len(raw_products), "sincronizados": insertados}
 
 

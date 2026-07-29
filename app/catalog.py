@@ -788,15 +788,17 @@ async def get_productos_para_recomendar(
     "0 candidatos" que hacía que el bot respondiera sin fotos.
 
     - Intento A: categoría funcional + género + con imagen + activo.
-    - Intento B: categoría funcional (sin género) + con imagen.
-    - Intento C: categoría funcional + género, sin exigir imagen (los sin foto se
-      omiten al enviar, pero al menos hay candidatos válidos).
-    - Intento D: búsqueda ILIKE por el sustantivo del user_text + con imagen
-      (captura productos mal clasificados por _categoria_normalizada).
+    - Intento B: categoría funcional + género, sin exigir imagen (los sin foto se
+      omiten al enviar, pero al menos hay candidatos del género correcto).
+    - Intento C: categoría funcional + género + con imagen, sin exigir activo.
+    - Intento D: categoría funcional + género, sin exigir imagen ni activo.
+    - Intento E: búsqueda ILIKE por el sustantivo del user_text + género (con imagen).
+      Captura productos que _categoria_normalizada etiqueta mal.
     Devuelve el primer intento con resultados.
 
-    NOTA: no exige activo=TRUE en los intents B/C/D, solo stock != outofstock + lo
-    que cada intento pida. El campo activo puede quedar mal por la sync de Woo.
+    REGLA CRÍTICA: el género NUNCA se relaja. Es lo que distingue un suspensorio
+    masculino de un conjunto de lencería femenino. Relajar el género (como hacía la
+    versión anterior) metía productos de mujer cuando el cliente pedía hombre.
     """
     exclude_set = set(exclude_ids or [])
 
@@ -835,28 +837,36 @@ async def get_productos_para_recomendar(
         out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
         return out[:limit]
 
-    # Intento A: categoría + género + con imagen + activo
+    # Intento A: categoría + género + con imagen + activo (más estricto)
     candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
                           exige_cat=True, exige_gen=True)
     if candidatos:
         return candidatos
 
-    # Intento B: categoría (sin género) + con imagen + activo
-    candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
-                          exige_cat=True, exige_gen=False)
+    # Intento C: categoría + género + con imagen, sin exigir activo
+    candidatos = _filtrar(await _query(con_imagen=True, con_activo=False),
+                          exige_cat=True, exige_gen=True)
     if candidatos:
-        log.info("get_productos_para_recomendar: resultado vía intento B (sin género) cat=%s", categoria_funcional)
+        log.info("get_productos_para_recomendar: intento C (sin activo) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
         return candidatos
 
-    # Intento C: categoría + género, sin exigir imagen
+    # Intento B: categoría + género, sin exigir imagen (candidatos correctos aunque falte foto)
     candidatos = _filtrar(await _query(con_imagen=False, con_activo=True),
                           exige_cat=True, exige_gen=True)
     if candidatos:
-        log.info("get_productos_para_recomendar: resultado vía intento C (sin exigir imagen) cat=%s género=%s", categoria_funcional, genero)
+        log.info("get_productos_para_recomendar: intento B (sin imagen) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
         return candidatos
 
-    # Intento D: búsqueda ILIKE por sustantivo del user_text + con imagen.
-    # Captura productos que _categoria_normalizada etiqueta mal.
+    # Intento D: categoría + género, sin exigir imagen ni activo
+    candidatos = _filtrar(await _query(con_imagen=False, con_activo=False),
+                          exige_cat=True, exige_gen=True)
+    if candidatos:
+        log.info("get_productos_para_recomendar: intento D (sin imagen ni activo) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
+        return candidatos
+
+    # Intento E: búsqueda ILIKE por sustantivo del user_text + género (con imagen).
+    # Último recurso: captura productos que _categoria_normalizada etiqueta mal,
+    # pero SIGUE exigiendo el género correcto para no mezclar hombre/mujer.
     tokens = user_text and _extract_search_tokens(user_text)
     if tokens:
         for tok in tokens[:3]:
@@ -871,13 +881,14 @@ async def get_productos_para_recomendar(
                       AND imagen_url IS NOT NULL AND imagen_url != ''
                       AND (nombre ILIKE '%' || $1 || '%' OR descripcion ILIKE '%' || $1 || '%')
                     ORDER BY nombre
-                    LIMIT 20
+                    LIMIT 30
                     """,
                     tok,
                 )
-            res = _filtrar([dict(r) for r in rows], exige_cat=False, exige_gen=False)
+            # Aquí sí exigimos género (no categoría funcional) para no mezclar.
+            res = _filtrar([dict(r) for r in rows], exige_cat=False, exige_gen=True)
             if res:
-                log.info("get_productos_para_recomendar: resultado vía intento D (ILIKE %r) %d productos", tok, len(res))
+                log.info("get_productos_para_recomendar: intento E (ILIKE %r + género) → %d", tok, len(res))
                 return res
 
     if not candidatos:
