@@ -23,7 +23,7 @@ YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
 
 # ── IA / Modelos ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-3.6-flash")  # chat conversacional Gemini 3.6 Flash (vía OpenRouter)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "openai/gpt-4.1-mini")  # chat conversacional GPT-4.1 mini (vía OpenRouter)
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
@@ -38,7 +38,7 @@ MODEL_REASONING_EXCLUDE = os.getenv("MODEL_REASONING_EXCLUDE", "false").strip().
 }
 # Máximo de tokens para la respuesta del LLM. Generoso para que el bot pueda redactar
 # saludo + 5 marcadores [FOTO:ID] + CTA sin cortarse, pero acotado para control de costo.
-MAX_REPLY_TOKENS = int(os.getenv("MAX_REPLY_TOKENS", "800"))
+MAX_REPLY_TOKENS = int(os.getenv("MAX_REPLY_TOKENS", "1200"))
 
 # ── Base de datos ──
 DATABASE_URL = os.getenv("DATABASE_URL", "")
