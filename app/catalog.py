@@ -642,10 +642,30 @@ _GENERO_KEYWORDS_CLIENTE = [
 ]
 
 # Marcadores de que el cliente ya está especificando subtipo (no necesita calificar).
+# Subtipos REALES (variantes dentro de una categoría), NO sustantivos de categoría.
+# Importante: NO incluir aquí sustantivos de categoría (lubricante, dildo, anillo,
+# succionador, funda, masturbador, suspensorio, conjunto, body, bondage, etc.) porque
+# si no, "tienen lubricantes" se marcaría calificado=True y se saltaría la pregunta
+# de calificación del turno 1. Solo subtipos que aclaran una variante concreta.
 _SUBTIPO_KEYWORDS = (
-    "anillo", "funda", "bomba", "succionador", "plug", "dildo", "consolador", "masturbador",
-    "body", "baby", "suspensorio", "conjunto", "arnes", "arnés", "lubricante", "bondage",
-    "rabbit", "punto g", "clitor", "prostat", "realista", "ventosa",
+    # Dildos
+    "realista", "ventosa", "vidrio", "cristal", "doble",
+    # Vibradores
+    "rabbit", "punto g", "clitor", "clitori", "hitachi", "bala", "huevo vibr",
+    # Anal
+    "prostat", "próstata", "cola", "primera vez",
+    # Lubricantes
+    "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
+    "desensibiliz", "caliente",
+    # Anillos/fundas
+    # (Nota: "vibrador" NO se incluye aquí porque es sustantivo de categoría;
+    # "anillo vibrador" se cubre porque "anillo" es categoría y el género/contexto
+    # determina el subtipo en la regla híbrida.)
+    # Lencería
+    "arnes", "arnés", "liguero", "pechera", "encaje",
+    # Generales de control
+    "con app", "control remoto", "recargable", "inalambrico", "inalámbrico",
+    "sencillo", "simple",
 )
 
 # Petición explícita de fotos por parte del cliente.
@@ -893,31 +913,34 @@ async def get_productos_para_recomendar(
         return candidatos
 
     # Intento E: búsqueda ILIKE por sustantivo del user_text + género (con imagen).
-    # Último recurso: captura productos que _categoria_normalizada etiqueta mal,
-    # pero SIGUE exigiendo el género correcto para no mezclar hombre/mujer.
-    tokens = user_text and _extract_search_tokens(user_text)
-    if tokens:
-        for tok in tokens[:3]:
-            if len(tok) < 4:
-                continue
-            async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
-                rows = await conn.fetch(
-                    """
-                    SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
-                    FROM productos
-                    WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
-                      AND imagen_url IS NOT NULL AND imagen_url != ''
-                      AND (nombre ILIKE '%' || $1 || '%' OR descripcion ILIKE '%' || $1 || '%')
-                    ORDER BY nombre
-                    LIMIT 30
-                    """,
-                    tok,
-                )
-            # Aquí sí exigimos género (no categoría funcional) para no mezclar.
-            res = _filtrar([dict(r) for r in rows], exige_cat=False, exige_gen=True)
-            if res:
-                log.info("get_productos_para_recomendar: intento E (ILIKE %r + género) → %d", tok, len(res))
-                return res
+    # Último recurso: captura productos que _categoria_normalizada etiqueta mal.
+    # PROHIBIDO si hay una categoria_funcional explícita pedida: si el cliente pidió
+    # "lubricantes", un ILIKE libre traería vibradores/dildos/etc. (mezcla de categorías).
+    # Solo se usa cuando NO hay categoría clara (búsqueda abierta por género).
+    if not categoria_funcional:
+        tokens = user_text and _extract_search_tokens(user_text)
+        if tokens:
+            for tok in tokens[:3]:
+                if len(tok) < 4:
+                    continue
+                async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+                        FROM productos
+                        WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
+                          AND imagen_url IS NOT NULL AND imagen_url != ''
+                          AND (nombre ILIKE '%' || $1 || '%' OR descripcion ILIKE '%' || $1 || '%')
+                          ORDER BY nombre
+                          LIMIT 30
+                        """,
+                        tok,
+                    )
+                # Aquí sí exigimos género (no categoría funcional) para no mezclar.
+                res = _filtrar([dict(r) for r in rows], exige_cat=False, exige_gen=True)
+                if res:
+                    log.info("get_productos_para_recomendar: intento E (ILIKE %r + género) → %d", tok, len(res))
+                    return res
 
     if not candidatos:
         log.warning("get_productos_para_recomendar: 0 candidatos tras todos los intentos cat=%s género=%s", categoria_funcional, genero)

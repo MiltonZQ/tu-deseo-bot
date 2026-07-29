@@ -464,11 +464,14 @@ async def _recuperar_candidatos(
 
     # Detectar cambio radical de tema: si la nueva intención es distinta y clara
     # respecto a la persistida, reiniciar el estado para no mezclar productos.
+    # Esto es CRÍTICO: si el cliente vio dildos y ahora pide "lubricantes", debe
+    # resetear el estado (productos_mostrados, calificado) para no mezclar dildos
+    # con lubricantes en los candidatos.
     reset_state = False
     nueva_cat_clara = bool(clasif["categoria_funcional"] and clasif["intencion"])
     if (estado_tiene_cat and nueva_cat_clara
             and clasif["categoria_funcional"] != estado.get("categoria_funcional")):
-        log.info("Cambio de tema detectado: %s -> %s para este wa_id",
+        log.info("Cambio de tema detectado: %s -> %s — reseteando estado",
                  estado.get("categoria_funcional"), clasif["categoria_funcional"])
         reset_state = True
         estado = None  # ignorar el estado viejo para la recuperación
