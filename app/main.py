@@ -300,19 +300,19 @@ async def _enviar_fotos_productos(
     """Envía fotos de productos por WhatsApp.
 
     Resolución por orden de fiabilidad:
-      1. Marcadores [FOTO:ID] del LLM → get_producto_by_id (fiable).
-      2. Marcadores [FOTO:NOMBRE] → get_productos_en_texto sobre el nombre.
-      3. Marcadores [CATEGORIA:Punto G] → get_productos_por_categoria_origen
+      1. Marcadores [FOTO:ID] del LLM -> get_producto_by_id (fiable).
+      2. Marcadores [FOTO:NOMBRE] -> get_productos_en_texto sobre el nombre.
+      3. Marcadores [CATEGORIA:Punto G] -> get_productos_por_categoria_origen
          (envía las fotos de esa subcategoría de la web).
       4. Fallback: si el cliente pidió fotos explícitamente y el LLM no emitió
          marcador, se busca por nombre en el mensaje del usuario y la respuesta.
-    Máximo 3 fotos por turno.
+    Máximo 5 fotos por turno.
     """
     try:
         prods_to_send: list[dict] = []
 
-        # 1+2. Resolver marcadores emitidos por el LLM (máximo 3)
-        for ref in foto_refs[:3]:
+        # 1+2. Resolver marcadores emitidos por el LLM (máximo 5)
+        for ref in foto_refs[:5]:
             if ref.isdigit():
                 p = await catalog.get_producto_by_id(int(ref))
                 if p:
@@ -327,7 +327,7 @@ async def _enviar_fotos_productos(
         # 3. Resolver marcadores de categoría [CATEGORIA:...] → fotos de esa subcategoría
         if categoria_refs and not prods_to_send:
             for cat in categoria_refs[:1]:
-                prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=3)
+                prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=5)
                 for pc in prods_cat:
                     pc["_por_categoria"] = True
                     prods_to_send.append(pc)
@@ -343,7 +343,7 @@ async def _enviar_fotos_productos(
             if is_multi and history:
                 for prev_msg in reversed(history[-6:]):
                     found_list = await catalog.get_productos_en_texto(
-                        prev_msg.get("content", ""), limit=3,
+                        prev_msg.get("content", ""), limit=5,
                     )
                     if found_list:
                         prods_to_send.extend(found_list)
@@ -353,18 +353,18 @@ async def _enviar_fotos_productos(
                 if p_user:
                     prods_to_send.append(p_user)
             if not prods_to_send:
-                found_reply = await catalog.get_productos_en_texto(reply, limit=2)
+                found_reply = await catalog.get_productos_en_texto(reply, limit=4)
                 prods_to_send.extend(found_reply)
 
         cat_cliente = catalog._categoria_normalizada(user_text) if user_text else ""
 
-        # Enviar (máx 3, dedup por id, solo con imagen)
+        # Enviar (máx 5, dedup por id, solo con imagen)
         seen_ids: set[int] = set()
         enviadas = 0
         sin_imagen = 0
         fuera_categoria = 0
         for p in prods_to_send:
-            if enviadas >= 3:
+            if enviadas >= 5:
                 break
             pid = p["id"]
             if pid in seen_ids:
@@ -392,8 +392,8 @@ async def _enviar_fotos_productos(
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
             log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
             enviadas += 1
-            if enviadas < 3 and prods_to_send:
-                await asyncio.sleep(1.0)
+            if enviadas < 5 and prods_to_send:
+                await asyncio.sleep(0.8)
         log.info(
             "Fotos a %s: refs=%d resueltos=%d enviadas=%d sin_imagen=%d fuera_categoria=%d",
             wa_id, len(foto_refs), len(prods_to_send), enviadas, sin_imagen, fuera_categoria,
