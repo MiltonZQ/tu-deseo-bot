@@ -23,7 +23,7 @@ YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
 
 # ── IA / Modelos ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "google/gemini-3.5-flash")  # chat conversacional Gemini 3.5 Flash
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "meta/muse-spark-1.1")  # chat conversacional Muse Spark 1.1 (vía OpenRouter)
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
@@ -45,7 +45,11 @@ MAX_USER_MESSAGE_CHARS = int(os.getenv("MAX_USER_MESSAGE_CHARS", "4000"))
 HISTORY_TTL_DAYS = int(os.getenv("HISTORY_TTL_DAYS", "30"))
 # Cuándo consolidar el historial en un resumen persistido (memoria comprimida).
 # Se regenera al superar este nº de mensajes, reinyectándose luego en el prompt.
-SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "30"))
+# IMPORTANTE: debe ser SIEMPRE menor que HISTORY_WINDOW para que se dispare:
+# total_msgs = len(history) + 2 <= HISTORY_WINDOW + 2, y el resumen se crea al
+# superar este umbral. Con HISTORY_WINDOW=30, SUMMARY_THRESHOLD=18 garantiza
+# que la memoria de largo plazo se regenere periódicamente.
+SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "18"))
 
 # ── Operaciones ──
 RELOAD_TOKEN = os.getenv("RELOAD_TOKEN", "")
@@ -114,7 +118,13 @@ FALLBACK_PROMPT = (
 
 
 def load_prompts() -> str:
-    """Lee prompts/system.md + prompts/knowledge/*.md y construye el system prompt."""
+    """Lee prompts/system.md + prompts/knowledge/*.md y construye el system prompt.
+
+    NOTA: catalogo.md se EXCLUYE deliberadamente del prompt estático (~27k tokens).
+    El catálogo se inyecta por turno solo con los 4-5 candidatos que el sistema
+    recupera de la DB (pipeline determinístico), reduciendo costo, latencia y
+    las alucinaciones de IDs que generaba el prompt gigante.
+    """
     global SYSTEM_PROMPT
 
     system_file = PROMPTS_DIR / "system.md"
@@ -128,6 +138,8 @@ def load_prompts() -> str:
     extras: list[str] = []
     if knowledge_dir.is_dir():
         for md in sorted(knowledge_dir.glob("*.md")):
+            if md.name == "catalogo.md":
+                continue  # catálogo gestionado por turno vía candidatos (pipeline)
             content = md.read_text(encoding="utf-8").strip()
             if content:
                 extras.append(f"--- {md.name} ---\n{content}")

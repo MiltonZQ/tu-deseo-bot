@@ -411,6 +411,51 @@ def _categoria_normalizada(nombre: str, descripcion: str | None = "",
     return "juegos-y-accesorios"
 
 
+# ── Capa de género/uso (para quién es el producto) ──
+#
+# La tabla productos NO tiene columna de género. Se infiere en runtime por reglas
+# sobre nombre + descripción + categoría origen, igual que _categoria_normalizada.
+# Esto es lo que permite enviar anillos para pene (hombre) y no vibradores de
+# clítoris (mujer) cuando el cliente dice "para él / chimbo / pene".
+
+# (palabras clave, género) — orden importa: se evalúa de arriba a abajo y la
+# primera coincidencia gana. Van de lo más específico a lo más general.
+_REGLAS_GENERO = [
+    # HOMBRE: anillos/fundas para pene, masturbadores, próstata, bombas, lencería masculina
+    (("anillo", "funda", "bomba pene", "bomba para", "bomba automatic", "bomba automática",
+      "prostat", "próstata", "masturbador", "suspensorio", "suspensor", "pechera",
+      "potenciador", "lovense diamo", "flexring", "candil", "frodo", "optimus", "diamo",
+      "pene"), "hombre"),
+    # PAREJA: juguetes de uso compartido (We-Vibe Chorus, doble estimulación, arnés con dildo)
+    (("pareja", "we vibe", "we-vibe", "chorus", "doble estimulacion", "doble estimulación",
+      "rabbit para pare", "arnes con dildo", "strap on", "strap-on"), "pareja"),
+    # ANAL: plugs, bolas anales, dilatadores (puede ser para él o ella; se marca anal)
+    (("plug", "bolas anal", "dilatador", "entrenamiento anal", "culo", "estimulacion anal",
+      "estimulación anal"), "anal"),
+    # MUJER: clítoris, punto G (no próstata), succionadores, rabbit, panty, body, baby doll
+    (("clitoris", "clítoris", "clitorial", "punto g", "succionador", "suction", "air pulse",
+      "rabbit", "panty vibr", "pezonera", "baby doll", "babydoll", "body ",
+      "estimulacion clitor", "estimulación clitor"), "mujer"),
+]
+
+
+def _genero_normalizado(nombre: str, descripcion: str | None = "",
+                        cat_origen: str | None = "") -> str:
+    """Clasifica un producto en su género/uso: hombre|pareja|anal|mujer|unisex.
+
+    Devuelve 'unisex' como fallback (lubricantes, bondage, cosmética, juegos,
+    accesorios que aplican a cualquier persona).
+    """
+    haystack = _normalizar_texto(f"{nombre or ''} {descripcion or ''} {cat_origen or ''}")
+    if not haystack.strip():
+        return "unisex"
+    for claves, genero in _REGLAS_GENERO:
+        for clave in claves:
+            if clave in haystack:
+                return genero
+    return "unisex"
+
+
 async def get_producto_by_id(producto_id: int) -> dict | None:
     """Devuelve un producto por su ID (para resolver marcadores [FOTO:ID] del LLM)."""
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
@@ -525,3 +570,290 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
     out.write_text("\n".join(lines), encoding="utf-8")
     log.info("Catálogo exportado a %s (%d productos)", out, len(rows))
     return out
+
+
+# ── Pipeline determinístico: recuperación por género + clasificación de intención ──
+#
+# Estas funciones reemplazan la delegación total de la selección de productos al
+# LLM. El sistema clasifica la intención del cliente y recupera los productos
+# CORRECTOS de la DB (filtrados por categoría funcional + género), devolviendo
+# candidatos confirmados que el LLM solo redacta.
+
+# Mapa de intención del cliente (lo que busca) -> categoría funcional interna.
+# Incluye sinónimos y jerga colombiana ("chimbo" = pene -> hombre / anillos).
+_INTENCION_A_CATEGORIA_FUNCIONAL = {
+    "vibradores": "vibradores",
+    "vibrador": "vibradores",
+    "succionador": "succionadores",
+    "succionadores": "succionadores",
+    "dildo": "dildos",
+    "dildos": "dildos",
+    "consolador": "dildos",
+    "plug": "anal",
+    "anal": "anal",
+    "masturbador": "masturbadores",
+    "masturbadores": "masturbadores",
+    "anillo": "anillos-y-fundas",
+    "anillos": "anillos-y-fundas",
+    "funda": "anillos-y-fundas",
+    "fundas": "anillos-y-fundas",
+    "bomba": "anillos-y-fundas",
+    "suspensorio": "lenceria",
+    "suspensorios": "lenceria",
+    "lenceria": "lenceria",
+    "lencería": "lenceria",
+    "body": "lenceria",
+    "baby doll": "lenceria",
+    "arnes": "anal",
+    "arnés": "anal",
+    "bondage": "pareja-y-bondage",
+    "lubricante": "lubricantes-y-cuidado",
+    "lubricantes": "lubricantes-y-cuidado",
+}
+
+# Sustantivos de producto que el cliente puede mencionar (para RAG/fallback).
+_NOUN_KEYWORDS = [
+    "suspensorio", "suspensor", "lenceria", "lencería", "body", "babydoll", "baby doll",
+    "disfraz", "vibrador", "dildo", "succionador", "plug", "anal", "arnes", "arnés",
+    "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage", "chimbo", "pene",
+]
+
+# Detección de género en el MENSAJE DEL CLIENTE (no del producto).
+# Incluye jerga colombiana. Orden: de específico a general; gana el primero.
+_GENERO_KEYWORDS_CLIENTE = [
+    (("chimbo", "pene", "para el", "para él", "para mi pene", "hombre", "masculino",
+      "prostata", "próstata", "miembro", "verga", "gallo", "pito"), "hombre"),
+    (("pareja", "en pareja", "los dos", "mi novia", "mi esposa", "mi novio", "mi esposo",
+      "we vibe", "chorus"), "pareja"),
+    (("anal", "el culo", "por atras", "por atrás", "cola", "recto"), "anal"),
+    (("clitoris", "clítoris", "clitorial", "para ella", "punto g", "vagina", "vaginal",
+      "mujer", "femenino", "mi novia", "clit"), "mujer"),
+]
+
+# Marcadores de que el cliente ya está especificando subtipo (no necesita calificar).
+_SUBTIPO_KEYWORDS = (
+    "anillo", "funda", "bomba", "succionador", "plug", "dildo", "consolador", "masturbador",
+    "body", "baby", "suspensorio", "conjunto", "arnes", "arnés", "lubricante", "bondage",
+    "rabbit", "punto g", "clitor", "prostat", "realista", "ventosa",
+)
+
+# Petición explícita de fotos por parte del cliente.
+import re as _re_mod
+_FOTO_REQUEST_RE = _re_mod.compile(
+    r"\b(foto[s]?|imagen(es)?|fotografia[s]?|muestr(a|ame|amelo|amelas)|"
+    r"mand(a|ame|ala|amelas)|envi(a|ame|ala|amelas)|ver la[s]? (foto|imagen)|"
+    r"dame|las foto[s]?|puta[s]? foto[s]?|ver el producto|cada uno|todas las (foto|imagen))\b",
+    _re_mod.IGNORECASE,
+)
+
+
+def _genero_desde_texto_cliente(texto: str) -> str | None:
+    """Detecta el género/uso que el cliente expresa en su mensaje (None si no aclara).
+
+    Usa word boundaries para evitar falsos positivos: "para el" NO debe coincidir
+    dentro de "para ella" (substring). Así distinguimos "para él/hombre" de "para ella".
+    """
+    haystack = _normalizar_texto(texto)
+    if not haystack.strip():
+        return None
+    for claves, genero in _GENERO_KEYWORDS_CLIENTE:
+        for clave in claves:
+            # Buscar la clave como palabra/frase completa con límites de palabra.
+            patron = r"\b" + _re_mod.escape(clave) + r"\b"
+            if _re_mod.search(patron, haystack):
+                return genero
+    return None
+
+
+def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
+    """Extrae (intencion, sustantivo) del mensaje del cliente.
+
+    intencion = clave de _INTENCION_A_CATEGORIA_FUNCIONAL o None.
+    sustantivo = el primer _NOUN_KEYWORDS hallado (para fallback).
+    """
+    haystack = _normalizar_texto(texto)
+    if not haystack.strip():
+        return None, None
+    # Buscar la intención por sustantivo (longitud desc para preferir compuestos)
+    intencion = None
+    for clave, cat_func in sorted(_INTENCION_A_CATEGORIA_FUNCIONAL.items(),
+                                  key=lambda kv: -len(kv[0])):
+        if clave in haystack:
+            intencion = clave
+            break
+    # Sustantivo para fallback
+    sustantivo = None
+    for n in _NOUN_KEYWORDS:
+        if n in haystack:
+            sustantivo = n
+            break
+    return intencion, sustantivo
+
+
+def clasificar_intencion_cliente(user_text: str,
+                                 history: list[dict] | None = None) -> dict:
+    """Clasifica la intención del cliente de forma determinística.
+
+    Devuelve:
+      {
+        "intencion": "anillos" | "vibradores" | ... | None,  # sustantivo crudo
+        "categoria_funcional": "anillos-y-fundas" | ... | None,
+        "genero": "hombre" | "mujer" | "pareja" | "anal" | None,
+        "calificado": bool,   # ¿ya sabemos subtipo/género suficientes para mostrar fotos?
+        "pide_fotos": bool,
+        "sustantivo": "anillo" | ... | None,
+      }
+    """
+    if not user_text or not user_text.strip():
+        return {
+            "intencion": None, "categoria_funcional": None, "genero": None,
+            "calificado": False, "pide_fotos": False, "sustantivo": None,
+        }
+
+    intencion, sustantivo = _intencion_desde_texto(user_text)
+    genero = _genero_desde_texto_cliente(user_text)
+    pide_fotos = bool(_FOTO_REQUEST_RE.search(user_text))
+
+    # Si el mensaje es corto y no trae intención/género, mirar el historial reciente
+    # (mismo truco ya usado por el RAG anterior) para frases como "negro", "sencillo".
+    if not intencion and history:
+        for h_msg in reversed(history[-6:]):
+            c = h_msg.get("content", "")
+            if h_msg.get("role") != "user":
+                continue
+            h_int, h_sus = _intencion_desde_texto(c)
+            if h_int and not intencion:
+                intencion = h_int
+                if not sustantivo:
+                    sustantivo = h_sus
+            h_gen = _genero_desde_texto_cliente(c)
+            if h_gen and not genero:
+                genero = h_gen
+            if intencion and genero:
+                break
+
+    categoria_funcional = _INTENCION_A_CATEGORIA_FUNCIONAL.get(intencion) if intencion else None
+
+    # calificado: hay una intención clara Y (género o subtipo explícito o petición de fotos).
+    tiene_subtipo = bool(sustantivo and any(
+        s in _normalizar_texto(user_text) for s in _SUBTIPO_KEYWORDS
+    ))
+    calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
+
+    return {
+        "intencion": intencion,
+        "categoria_funcional": categoria_funcional,
+        "genero": genero,
+        "calificado": calificado,
+        "pide_fotos": pide_fotos,
+        "sustantivo": sustantivo,
+    }
+
+
+def _score_candidato(producto: dict, user_text: str) -> float:
+    """Puntúa qué tan bien un producto se ajusta a la consulta del cliente.
+
+    Premia coincidencia de tokens significativos del mensaje en nombre/descripción.
+    """
+    if not user_text:
+        return 0.0
+    tokens = _extract_search_tokens(user_text)
+    if not tokens:
+        return 0.0
+    nombre = producto.get("nombre", "") or ""
+    desc = producto.get("descripcion", "") or ""
+    nombre_clean = _normalizar_texto(nombre)
+    desc_clean = _normalizar_texto(desc)
+    score = 0.0
+    for t in tokens:
+        if t in nombre_clean:
+            score += 2.0  # coincidencia en nombre pesa más
+        elif t in desc_clean:
+            score += 0.5
+    return score
+
+
+async def get_productos_para_recomendar(
+    categoria_funcional: str | None,
+    genero: str | None,
+    user_text: str = "",
+    exclude_ids: list[int] | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """Recupera los productos CORRECTOS para recomendar, filtrados por categoría
+    funcional y género, con imagen y stock disponibles.
+
+    - Filtra por _categoria_normalizada == categoria_funcional (si se da).
+    - Filtra por _genero_normalizado == genero (si se da).
+    - Excluye exclude_ids (productos ya mostrados, para soportar "ver más diseños").
+    - Ordena por score de coincidencia con user_text (desc) para relevancia.
+    - Garantiza imagen_url (sin foto no se puede enviar).
+
+    Devuelve hasta `limit` productos, cada uno con un campo extra '_genero' y
+    '_categoria_funcional' ya calculados para logging/validación.
+    """
+    exclude_set = set(exclude_ids or [])
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND (stock_status IS NULL OR stock_status <> 'outofstock')
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+            ORDER BY nombre
+            """
+        )
+
+    candidatos: list[dict] = []
+    for r in rows:
+        p = dict(r)
+        if p["id"] in exclude_set:
+            continue
+        cat_func = _categoria_normalizada(p["nombre"], p["descripcion"], p["categoria"])
+        gen = _genero_normalizado(p["nombre"], p["descripcion"], p["categoria"])
+        if categoria_funcional and cat_func != categoria_funcional:
+            continue
+        if genero and gen != genero:
+            continue
+        p["_categoria_funcional"] = cat_func
+        p["_genero"] = gen
+        p["_score"] = _score_candidato(p, user_text)
+        candidatos.append(p)
+
+    # Ordenar: score desc, luego nombre más corto (más específico) primero.
+    candidatos.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+    return candidatos[:limit]
+
+
+async def buscar_producto_especifico(user_text: str, limit: int = 3) -> list[dict]:
+    """Busca productos por nombre cuando el cliente pide algo específico (ej:
+    "tienen el Lovense Diamo?"). Usa coincidencia de tokens con score >= 0.5.
+
+    Para el pipeline: cuando no hay intención de categoría clara pero el texto
+    menciona un producto concreto, recupéralo para que el LLM lo muestre.
+    """
+    if not user_text or len(user_text.strip()) < 3:
+        return []
+    tokens = _extract_search_tokens(user_text)
+    if not tokens:
+        return []
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            FROM productos
+            WHERE activo = TRUE
+              AND (stock_status IS NULL OR stock_status <> 'outofstock')
+              AND imagen_url IS NOT NULL AND imagen_url != ''
+            """
+        )
+    scored = []
+    for r in rows:
+        p = dict(r)
+        score = _score_candidato(p, user_text)
+        if score >= 1.0:  # al menos una coincidencia fuerte en el nombre
+            p["_score"] = score
+            scored.append(p)
+    scored.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+    return scored[:limit]

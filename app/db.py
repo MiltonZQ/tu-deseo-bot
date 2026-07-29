@@ -169,6 +169,19 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
     message_count INT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- ── Estado de conversación (pipeline determinístico) ──
+-- Persiste qué busca el cliente y qué se le ha mostrado, para romper el bucle de
+-- preguntas en el SISTEMA (no en la memoria del LLM). Un registro por wa_id.
+CREATE TABLE IF NOT EXISTS conversation_state (
+    wa_id TEXT PRIMARY KEY,
+    categoria_busqueda TEXT,        -- 'anillos', 'vibradores', ... (intención)
+    categoria_funcional TEXT,       -- 'anillos-y-fundas', ... (mapeo a categoría interna)
+    genero TEXT,                    -- 'hombre'|'mujer'|'pareja'|'anal'
+    calificado BOOLEAN NOT NULL DEFAULT FALSE,
+    productos_mostrados BIGINT[] NOT NULL DEFAULT '{}',  -- ids ya enviados (no repetir)
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 """
 
 
@@ -405,6 +418,108 @@ async def save_summary(wa_id: str, summary: str, message_count: int) -> None:
                 updated_at = now()
             """,
             wa_id, summary, message_count,
+        )
+
+
+# ── Estado de conversación (pipeline determinístico) ──
+
+async def get_conversation_state(wa_id: str) -> dict | None:
+    """Devuelve el estado de conversación del cliente, o None si no existe.
+
+    Campos: categoria_busqueda, categoria_funcional, genero, calificado,
+    productos_mostrados (lista de int).
+    """
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT categoria_busqueda, categoria_funcional, genero, calificado,
+                   productos_mostrados
+            FROM conversation_state WHERE wa_id = $1
+            """,
+            wa_id,
+        )
+    if not row:
+        return None
+    return {
+        "categoria_busqueda": row["categoria_busqueda"],
+        "categoria_funcional": row["categoria_funcional"],
+        "genero": row["genero"],
+        "calificado": row["calificado"],
+        "productos_mostrados": list(row["productos_mostrados"] or []),
+    }
+
+
+async def upsert_conversation_state(
+    wa_id: str,
+    categoria_busqueda: str | None = None,
+    categoria_funcional: str | None = None,
+    genero: str | None = None,
+    calificado: bool | None = None,
+    add_productos_mostrados: list[int] | None = None,
+    reset: bool = False,
+) -> None:
+    """Crea o actualiza el estado de conversación de un cliente.
+
+    - Los campos categoria_busqueda/categoria_funcional/genero/calificado se
+      actualizan con el valor provisto (None los deja igual salvo reset=True).
+    - add_productos_mostrados añade IDs a los ya mostrados (sin duplicados).
+    - reset=True reinicia estado (ej: cliente cambia radicalmente de tema); en
+      ese caso los campos pasan a su default y productos_mostrados se vacía.
+    """
+    async with _pool.acquire() as conn:
+        if reset:
+            await conn.execute(
+                """
+                INSERT INTO conversation_state (wa_id, calificado, productos_mostrados, updated_at)
+                VALUES ($1, FALSE, '{}', now())
+                ON CONFLICT (wa_id) DO UPDATE SET
+                    categoria_busqueda = NULL,
+                    categoria_funcional = NULL,
+                    genero = NULL,
+                    calificado = FALSE,
+                    productos_mostrados = '{}',
+                    updated_at = now()
+                """,
+                wa_id,
+            )
+            return
+
+        # Construir SET dinámico solo con los campos provistos.
+        sets: list[str] = []
+        params: list = []
+        idx = 1
+        if categoria_busqueda is not None:
+            sets.append(f"categoria_busqueda = ${idx}")
+            params.append(categoria_busqueda)
+            idx += 1
+        if categoria_funcional is not None:
+            sets.append(f"categoria_funcional = ${idx}")
+            params.append(categoria_funcional)
+            idx += 1
+        if genero is not None:
+            sets.append(f"genero = ${idx}")
+            params.append(genero)
+            idx += 1
+        if calificado is not None:
+            sets.append(f"calificado = ${idx}")
+            params.append(calificado)
+            idx += 1
+        if add_productos_mostrados:
+            # Añadir a los existentes con UNION (sin duplicados).
+            sets.append(
+                f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(productos_mostrados || $${idx}::bigint[]))"
+            )
+            params.append(list(add_productos_mostrados))
+            idx += 1
+        sets.append("updated_at = now()")
+
+        await conn.execute(
+            f"""
+            INSERT INTO conversation_state (wa_id, calificado, productos_mostrados, updated_at)
+            VALUES ($1, FALSE, '{{}}', now())
+            ON CONFLICT (wa_id) DO UPDATE SET {', '.join(sets)}
+            """,
+            wa_id, *params,
         )
 
 

@@ -251,15 +251,6 @@ _FOTO_MARKER_RE = re.compile(r"\[FOTO:\s*([^\]]+)\]", re.IGNORECASE)
 # Marcador de categoría: [CATEGORIA:Punto G] → envía fotos de esa subcategoría.
 _CATEGORIA_MARKER_RE = re.compile(r"\[CATEGORIA:\s*([^\]]+)\]", re.IGNORECASE)
 
-# Petición explícita de fotos por parte del cliente (acotada para evitar falsos
-# positivos como "sí", "claro", "ver": requiere verbo de envío o sustantivo de imagen).
-_FOTO_REQUEST_RE = re.compile(
-    r"\b(foto[s]?|imagen(es)?|fotografia[s]?|muestr(a|ame|amelo|amelas)|"
-    r"mand(a|ame|ala|amelas)|envi(a|ame|ala|amelas)|ver la[s]? (foto|imagen)|"
-    r"dame|las foto[s]?|puta[s]? foto[s]?|ver el producto|cada uno|todas las (foto|imagen))\b",
-    re.IGNORECASE,
-)
-
 
 def _extraer_marcadores_foto(reply: str) -> tuple[list[str], str]:
     """Extrae marcadores [FOTO:...] de la respuesta y devuelve (ids/nombres, reply_limpio).
@@ -291,218 +282,182 @@ def _extraer_marcadores_categoria(reply: str) -> tuple[list[str], str]:
 
 async def _enviar_fotos_productos(
     wa_id: str,
-    foto_refs: list[str],
-    reply: str,
-    user_text: str,
-    history: list[dict],
-    categoria_refs: list[str] | None = None,
-) -> None:
-    """Envía fotos de productos por WhatsApp.
+    candidatos: list[dict],
+) -> list[int]:
+    """Envía las fotos de los candidatos confirmados por el pipeline.
 
-    Resolución por orden de fiabilidad:
-      1. Marcadores [FOTO:ID] del LLM -> get_producto_by_id (fiable).
-      2. Marcadores [FOTO:NOMBRE] -> get_productos_en_texto sobre el nombre.
-      3. Marcadores [CATEGORIA:Punto G] -> get_productos_por_categoria_origen
-         (envía las fotos de esa subcategoría de la web).
-      4. Fallback: si el cliente pidió fotos explícitamente y el LLM no emitió
-         marcador, se busca por nombre en el mensaje del usuario y la respuesta.
+    Los candidatos ya vienen validados por el sistema (categoría + género + stock
+    + imagen), filtrados por los marcadores [FOTO:ID] que el LLM emitió y que
+    estaban en la lista de candidatos. Esta función SOLO envía las imágenes.
+
+    Devuelve la lista de IDs efectivamente enviados (para persistir en estado).
     Máximo 5 fotos por turno.
     """
+    enviados: list[int] = []
     try:
-        prods_to_send: list[dict] = []
-
-        # 1+2. Resolver marcadores emitidos por el LLM (máximo 5)
-        for ref in foto_refs[:5]:
-            if ref.isdigit():
-                p = await catalog.get_producto_by_id(int(ref))
-                if p:
-                    p["_explicit_id"] = True
-                    prods_to_send.append(p)
-                    continue
-            # Referencia por nombre: buscar en el texto del propio ref
-            found = await catalog.get_productos_en_texto(ref, limit=1)
-            if found:
-                prods_to_send.extend(found)
-
-        # 3. Resolver marcadores de categoría [CATEGORIA:...] → fotos de esa subcategoría
-        if categoria_refs and not prods_to_send:
-            for cat in categoria_refs[:1]:
-                prods_cat = await catalog.get_productos_por_categoria_origen(cat, limit=5)
-                for pc in prods_cat:
-                    pc["_por_categoria"] = True
-                    prods_to_send.append(pc)
-                if cat:
-                    log.info("Fotos por categoría '%s': %d productos", cat, len(prods_cat))
-
-        # 4. Fallback automático: si no hubo marcador explícito del LLM
-        if not prods_to_send:
-            # Reconstruir frase de búsqueda con el sustantivo principal del historial si user_text es corto
-            search_query = user_text.strip()
-            has_noun = any(w in search_query.lower() for w in _NOUN_KEYWORDS)
-            if not has_noun and history:
-                for h_msg in reversed(history[-6:]):
-                    c = h_msg.get("content", "").lower()
-                    for n_kw in _NOUN_KEYWORDS:
-                        if n_kw in c:
-                            search_query = f"{n_kw} {search_query}"
-                            break
-                    if search_query != user_text.strip():
-                        break
-
-            found_stock = await catalog.search_with_stock(search_query, limit=5)
-            if found_stock:
-                for ps in found_stock:
-                    p_full = await catalog.get_producto_by_id(ps["id"])
-                    if p_full:
-                        p_full["_por_categoria"] = True
-                        prods_to_send.append(p_full)
-
-        if not prods_to_send and _FOTO_REQUEST_RE.search(user_text):
-            is_multi = bool(re.search(
-                r"\b(cada\s+uno|todas|todos|cada\s+una|los\s+\w+|las\s+\w+)\b",
-                user_text.lower(),
-            ))
-            if is_multi and history:
-                for prev_msg in reversed(history[-6:]):
-                    found_list = await catalog.get_productos_en_texto(
-                        prev_msg.get("content", ""), limit=5,
-                    )
-                    if found_list:
-                        prods_to_send.extend(found_list)
-                        break
-            if not prods_to_send:
-                p_user = await catalog.get_producto_con_imagen(user_text)
-                if p_user:
-                    prods_to_send.append(p_user)
-            if not prods_to_send:
-                found_reply = await catalog.get_productos_en_texto(reply, limit=4)
-                prods_to_send.extend(found_reply)
-
-        cat_cliente = catalog._categoria_normalizada(user_text) if user_text else ""
-
-        # Enviar (máx 5, dedup por id, solo con imagen)
         seen_ids: set[int] = set()
-        enviadas = 0
-        sin_imagen = 0
-        fuera_categoria = 0
-        for p in prods_to_send:
-            if enviadas >= 5:
+        for p in candidatos:
+            if len(enviados) >= 5:
                 break
             pid = p["id"]
             if pid in seen_ids:
                 continue
-            # Omitir filtro de categoría si el producto se resolvió por ID explícito numérico o por categoría
-            if cat_cliente and cat_cliente != "juegos-y-accesorios" and not p.get("_por_categoria") and not p.get("_explicit_id"):
-                cat_prod = catalog._categoria_normalizada(
-                    p.get("nombre", ""), p.get("descripcion", ""), p.get("categoria", ""),
-                )
-                if cat_prod != cat_cliente:
-                    fuera_categoria += 1
-                    log.warning(
-                        "Foto omitida (otra categoría): '%s' es %s, cliente pidió %s",
-                        p.get("nombre"), cat_prod, cat_cliente,
-                    )
-                    continue
             if not p.get("imagen_url"):
-                sin_imagen += 1
-                log.warning(
-                    "Producto sin imagen_url, foto omitida: '%s' (id=%s)", p.get("nombre"), pid,
-                )
+                log.warning("Candidato sin imagen_url, omitido: '%s' (id=%s)", p.get("nombre"), pid)
                 continue
             seen_ids.add(pid)
             caption = f"📸 *{p['nombre']}*\n💰 ${p['precio']:,}"
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
             log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
-            enviadas += 1
-            if enviadas < 5 and prods_to_send:
+            enviados.append(pid)
+            if len(enviados) < 5:
                 await asyncio.sleep(0.8)
-        log.info(
-            "Fotos a %s: refs=%d resueltos=%d enviadas=%d sin_imagen=%d fuera_categoria=%d",
-            wa_id, len(foto_refs), len(prods_to_send), enviadas, sin_imagen, fuera_categoria,
-        )
+        log.info("Fotos a %s: %d enviadas de %d candidatos", wa_id, len(enviados), len(candidatos))
     except Exception:
         log.exception("Error enviando foto de producto a %s", wa_id)
+    return enviados
 
 
-_NOUN_KEYWORDS = [
-    "suspensorio", "suspensor", "lenceria", "lencería", "body", "babydoll", "baby doll",
-    "disfraz", "vibrador", "dildo", "succionador", "plug", "anal", "arnes", "arnés",
-    "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage", "chimbo", "pene"
-]
+def _resolver_candidatos_del_llm(
+    foto_refs: list[str], candidatos: list[dict]
+) -> list[dict]:
+    """Filtra los marcadores [FOTO:ID] del LLM contra los candidatos confirmados.
 
+    Pipeline determinístico: el LLM solo puede mostrar productos que estén en la
+    lista de candidatos recuperados por el sistema. Esto elimina las alucinaciones
+    de IDs que causaban fotos incoherentes (ej: Antifaz/Esposas al pedir anillo).
 
-async def _buscar_productos_para_contexto(
-    user_text: str, history: list[dict] | None = None
-) -> str | None:
-    """Busca en la DB productos que coincidan con el mensaje del cliente y los
-    devuelve formateados como bloque de contexto para el LLM (RAG ligero).
-
-    Si el mensaje del cliente es corto o un atributo/color (ej: "negro", "rojo", "sencillo"),
-    extrae el sustantivo principal del historial de la conversación (ej: "suspensorio")
-    para buscar "suspensorio negro" en Postgres en lugar de "negro" a secas.
+    - Cualquier ID numérico del LLM que NO esté en candidatos se descarta (log).
+    - Referencias por nombre se resuelven contra candidatos por coincidencia.
+    - Devuelve los candidatos en el orden que el LLM los mencionó (máx 5).
     """
-    if not user_text or len(user_text.strip()) < 2:
-        return None
-    try:
-        search_phrase = user_text.strip()
-
-        # Si user_text no contiene un sustantivo explícito, buscar el sustantivo principal en el historial
-        has_noun = any(w in search_phrase.lower() for w in _NOUN_KEYWORDS)
-        if not has_noun and history:
-            found_noun = None
-            for h_msg in reversed(history[-6:]):
-                content = h_msg.get("content", "").lower()
-                for n_kw in _NOUN_KEYWORDS:
-                    if n_kw in content:
-                        found_noun = n_kw
-                        break
-                if found_noun:
-                    break
-            if found_noun:
-                search_phrase = f"{found_noun} {search_phrase}"
-                log.info("RAG: frase combinada con historial: %r", search_phrase)
-
-        candidatos = set()
-        # 1. Frase completa o combinada
-        for p in await catalog.search_with_stock(search_phrase, limit=6):
-            candidatos.add(p["id"])
-            if len(candidatos) >= 6:
+    if not foto_refs:
+        return []
+    por_id = {p["id"]: p for p in candidatos}
+    por_nombre: list[dict] = candidatos
+    resueltos: list[dict] = []
+    seen: set[int] = set()
+    for ref in foto_refs[:5]:
+        ref_s = ref.strip()
+        # 1. ID numérico: válido solo si está en candidatos
+        if ref_s.isdigit():
+            pid = int(ref_s)
+            if pid in por_id and pid not in seen:
+                resueltos.append(por_id[pid])
+                seen.add(pid)
+                continue
+            if pid not in por_id:
+                log.warning("ID %d del LLM rechazado (no está en candidatos) — alucinación evitada", pid)
+            continue
+        # 2. Referencia por nombre: buscar coincidencia en candidatos
+        ref_norm = catalog._normalizar_texto(ref_s)
+        for p in por_nombre:
+            if p["id"] in seen:
+                continue
+            nombre_norm = catalog._normalizar_texto(p.get("nombre", ""))
+            if ref_norm and (ref_norm in nombre_norm or nombre_norm in ref_norm):
+                resueltos.append(p)
+                seen.add(p["id"])
                 break
+    return resueltos
 
-        # 2. Si no hay suficientes, probar tokens de la frase original
-        if len(candidatos) < 4:
-            tokens = [t for t in re.findall(r"[a-záéíóúñ]{3,}", user_text.lower())
-                      if t not in {"quiero", "necesito", "busco", "tienen", "hola", "buenas",
-                                   "buenos", "gracias", "podrian", "podemos", "deseo",
-                                   "gustaria", "para", "hombre", "mujer", "pareja"}]
-            for tok in tokens[:3]:
-                for p in await catalog.search_with_stock(tok, limit=3):
-                    candidatos.add(p["id"])
-                    if len(candidatos) >= 8:
-                        break
 
-        if not candidatos:
-            return None
+async def _recuperar_candidatos(
+    user_text: str, history: list[dict], estado: dict | None,
+) -> tuple[list[dict], dict]:
+    """Núcleo del pipeline determinístico: clasifica la intención del cliente,
+    la fusiona con el estado persistido, y recupera los productos correctos.
 
-        productos = []
-        for pid in list(candidatos)[:6]:
-            p = await catalog.get_producto_by_id(pid)
-            if p:
-                productos.append(p)
-        if not productos:
-            return None
+    Devuelve (candidatos, info_clasificacion):
+      - candidatos: lista de productos confirmados (vacía si hay que calificar).
+      - info_clasificacion: dict con la clasificación resultante + estado a guardar.
+    """
+    clasif = catalog.clasificar_intencion_cliente(user_text, history)
 
-        lineas = ["## Productos disponibles que coinciden con la consulta del cliente"]
-        lineas.append("(Ofrécelos usando [FOTO:ID] con el ID exacto; son productos reales con stock):")
-        for p in productos:
-            desc = (p.get("descripcion") or "")[:80]
-            lineas.append(f"- **{p['nombre']}** — ${p['precio']:,} — {desc}  #{p['id']}")
-        log.info("RAG: %d productos inyectados al contexto para consulta %r",
-                 len(productos), search_phrase)
-        return "\n".join(lineas)
-    except Exception:
-        log.exception("Error en búsqueda RAG para contexto")
-        return None
+    # Fusionar con estado previo (el estado recalifica categoría/género si el
+    # nuevo mensaje los aclara; si no, conserva lo persistido).
+    cat_func = clasif["categoria_funcional"]
+    genero = clasif["genero"]
+    intencion = clasif["intencion"]
+    if estado:
+        if not cat_func and estado.get("categoria_funcional"):
+            cat_func = estado["categoria_funcional"]
+            intencion = intencion or estado.get("categoria_busqueda")
+        if not genero and estado.get("genero"):
+            genero = estado["genero"]
+        # Si ya estaba calificado, mantener calificado.
+        if estado.get("calificado"):
+            clasif["calificado"] = True
+
+    # Detectar cambio radical de tema: si la nueva intención es distinta y clara
+    # respecto a la persistida, reiniciar el estado para no mezclar productos.
+    reset_state = False
+    if (estado and estado.get("categoria_funcional")
+            and clasif["categoria_funcional"]
+            and clasif["categoria_funcional"] != estado.get("categoria_funcional")
+            and clasif["intencion"]):
+        log.info("Cambio de tema detectado: %s -> %s para este wa_id",
+                 estado.get("categoria_funcional"), clasif["categoria_funcional"])
+        reset_state = True
+        estado = None  # ignorar el estado viejo para la recuperación
+
+    # ¿Hay que mostrar fotos? Sí si: ya calificado, o pide fotos explícitamente.
+    debe_mostrar = bool(clasif["calificado"] or clasif["pide_fotos"])
+
+    candidatos: list[dict] = []
+    if debe_mostrar and cat_func:
+        exclude = estado.get("productos_mostrados", []) if estado else []
+        # Si pide "ver más", excluir los ya mostrados; si es nueva consulta, no excluir.
+        pide_mas = clasif["pide_fotos"] and any(
+            w in catalog._normalizar_texto(user_text)
+            for w in ("mas", "más", "otro", "otra", "otros", "otras", "diseño", "diseños", "opciones")
+        )
+        candidatos = await catalog.get_productos_para_recomendar(
+            categoria_funcional=cat_func,
+            genero=genero,
+            user_text=user_text,
+            exclude_ids=exclude if pide_mas else None,
+            limit=5,
+        )
+        # Si pedir "más" dejó la lista vacía (ya mostró todo), reintentar sin excluir.
+        if pide_mas and not candidatos:
+            candidatos = await catalog.get_productos_para_recomendar(
+                categoria_funcional=cat_func, genero=genero,
+                user_text=user_text, exclude_ids=None, limit=5,
+            )
+
+    # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,
+    # intentar recuperación por el sustantivo (fallback).
+    if not candidatos and clasif["pide_fotos"] and clasif["sustantivo"]:
+        cat_func_fb = catalog._INTENCION_A_CATEGORIA_FUNCIONAL.get(
+            clasif["sustantivo"],
+            catalog._categoria_normalizada(clasif["sustantivo"], "", ""),
+        )
+        if cat_func_fb and cat_func_fb != "juegos-y-accesorios":
+            candidatos = await catalog.get_productos_para_recomendar(
+                categoria_funcional=cat_func_fb, genero=genero,
+                user_text=user_text, limit=5,
+            )
+            if candidatos:
+                cat_func = cat_func_fb
+
+    # Si no hay candidatos por categoría pero el cliente menciona un producto
+    # específico (ej: "tienen el Lovense Diamo?"), buscar por nombre.
+    if not candidatos:
+        especificos = await catalog.buscar_producto_especifico(user_text, limit=3)
+        if especificos:
+            candidatos = especificos
+
+    info = {
+        "intencion": intencion,
+        "categoria_funcional": cat_func,
+        "genero": genero,
+        "calificado": clasif["calificado"] or bool(candidatos),
+        "pide_fotos": clasif["pide_fotos"],
+        "reset_state": reset_state,
+        "debe_mostrar": debe_mostrar or bool(candidatos),
+    }
+    return candidatos, info
 
 
 async def _process_message(payload: dict) -> None:
@@ -649,13 +604,31 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     summary_row = await db.get_summary(wa_id)
     summary_text = summary_row["summary"] if summary_row else None
 
-    # RAG ligero: buscar en la DB productos que coincidan con la consulta del cliente
-    # ANTES de llamar al LLM, e inyectarlos como contexto. Así el bot encuentra
-    # productos que no están en su catalogo.md (ej: suspensorios, productos nuevos).
-    extra_context = await _buscar_productos_para_contexto(user_text, history=history)
+    # ── PIPELINE DETERMINÍSTICO ──
+    # El SISTEMA (no el LLM) clasifica la intención del cliente, la fusiona con
+    # el estado persistido, y recupera los productos CORRECTOS de la DB. El LLM
+    # solo redacta con los candidatos confirmados. Así se eliminan:
+    #  - fotos incoherentes (los IDs se validan contra candidatos reales),
+    #  - el bucle de preguntas (el estado controla si ya se calificó),
+    #  - la dependencia de un catálogo gigante en el prompt.
+    estado_previo = await db.get_conversation_state(wa_id)
+    candidatos, info = await _recuperar_candidatos(user_text, history, estado_previo)
+
+    if info["reset_state"] and estado_previo:
+        await db.upsert_conversation_state(wa_id, reset=True)
 
     raw_reply = await openai_client.complete(
-        user_text, history, lead=lead, summary=summary_text, extra_context=extra_context,
+        user_text, history,
+        lead=lead, summary=summary_text,
+        candidatos=candidatos if info["debe_mostrar"] else [],
+        estado={
+            "categoria_busqueda": info["intencion"],
+            "categoria_funcional": info["categoria_funcional"],
+            "genero": info["genero"],
+            "calificado": info["calificado"],
+            "productos_mostrados": (estado_previo or {}).get("productos_mostrados", []),
+        },
+        debe_mostrar_fotos=info["debe_mostrar"],
     )
     reply = await leads.process_reply(
         wa_id,
@@ -663,25 +636,27 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         history + [{"role": "user", "content": user_text}],
     )
 
-    # Extraer marcadores de foto [FOTO:ID] y de categoría [CATEGORIA:...] y limpiarlos
-    # del texto visible. Las fotos se envían tras el mensaje de texto.
+    # Extraer marcadores de foto [FOTO:ID] y limpiarlos del texto visible.
     foto_ids, reply = _extraer_marcadores_foto(reply)
-    categoria_refs, reply = _extraer_marcadores_categoria(reply)
+    _, reply = _extraer_marcadores_categoria(reply)
 
-    # Control estricto en Python: evitar bucles de preguntas redundantes.
-    # Si la conversación ya tiene al menos 1 turno previo con preguntas del asistente,
-    # cortar cualquier pregunta redundante nueva y forzar la muestra visual.
-    assistant_questions = sum(
-        1 for m in history if m.get("role") == "assistant" and ("?" in m.get("content", "") or "¿" in m.get("content", ""))
-    )
-    if assistant_questions >= 1 and ("?" in reply or "¿" in reply):
-        clean_reply = re.sub(r"¿[^?]+\?", "", reply).strip()
-        clean_reply = re.sub(r"\s+", " ", clean_reply).strip()
-        if len(clean_reply) < 10:
-            clean_reply = "Te muestro nuestras mejores opciones disponibles 👇"
-        elif not clean_reply.endswith("👇") and not clean_reply.endswith(":"):
-            clean_reply += " 👇"
-        reply = clean_reply
+    # VALIDAR candidatos: los [FOTO:ID] del LLM deben estar en la lista de
+    # candidatos confirmados. Esto elimina alucinaciones (ej: Antifaz/Esposas
+    # cuando el cliente pidió anillo). Si el LLM no emitió marcadores válidos
+    # pero teníamos candidatos, se inyectan los del sistema.
+    if info["debe_mostrar"] and candidatos:
+        final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
+        if len(final_productos) < 2:
+            # El LLM omitió las fotos o puso IDs inválidos: forzar candidatos.
+            log.info(
+                "Fotos forzadas desde candidatos del sistema (%d) — LLM omitió marcadores",
+                len(candidatos),
+            )
+            final_productos = candidatos[:5]
+    else:
+        # No debía mostrar fotos: el LLM solo califica. Si por error emitió
+        # marcadores, validarlos igualmente contra candidatos (vacío = nada).
+        final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
 
     # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
     # (con datos de envío del historial y total calculado del catálogo).
@@ -695,8 +670,20 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
 
-    # Enviar fotos resueltas por marcador (fiable) o por fallback de nombre.
-    await _enviar_fotos_productos(wa_id, foto_ids, reply, user_text, history, categoria_refs)
+    # Enviar fotos (candidatos ya validados por el pipeline).
+    enviados_ids = await _enviar_fotos_productos(wa_id, final_productos)
+
+    # Persistir estado de conversación: registrar categoría/género/calificación
+    # y los productos efectivamente mostrados.
+    if info["categoria_funcional"] or enviados_ids:
+        await db.upsert_conversation_state(
+            wa_id,
+            categoria_busqueda=info["intencion"],
+            categoria_funcional=info["categoria_funcional"],
+            genero=info["genero"],
+            calificado=info["calificado"] or bool(enviados_ids),
+            add_productos_mostrados=enviados_ids,
+        )
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen
     # que se reinyecta en futuros turnos para no perder contexto de largo plazo.

@@ -74,7 +74,23 @@ def _model_kwargs(messages: list[dict]) -> dict:
 async def complete(user_message: str, history: list[dict],
                    lead: dict | None = None,
                    summary: str | None = None,
-                   extra_context: str | None = None) -> str:
+                   candidatos: list[dict] | None = None,
+                   estado: dict | None = None,
+                   debe_mostrar_fotos: bool = False) -> str:
+    """Redacta la respuesta del bot.
+
+    Pipeline determinístico: el SISTEMA ya recuperó los `candidatos` correctos de
+    la DB (filtrados por categoría + género) y los pasa al modelo para que los
+    muestre con [FOTO:ID]. El modelo ya NO recibe el catálogo completo; solo los
+    candidatos confirmados de este turno, lo que elimina las alucinaciones de IDs.
+
+    Args:
+      candidatos: productos confirmados a mostrar (lista de dicts de la DB). Si es
+        vacío, el bot hará su ÚNICA pregunta de calificación.
+      estado: estado de conversación persistido (categoria, genero, calificado).
+      debe_mostrar_fotos: si True, el sistema ya decidió mostrar productos; el
+        modelo NO debe preguntar, solo redactar con los candidatos.
+    """
     now = datetime.now(config.bot_zoneinfo())
 
     # Contexto dinámico: operativo (fecha/negocio) + cliente (perfil conocido).
@@ -88,20 +104,56 @@ async def complete(user_message: str, history: list[dict],
             cliente_bits.append(f"Nombre: {lead['nombre']}")
         if lead.get("negocio"):
             cliente_bits.append(f"Negocio: {lead['negocio']}")
-        estado = lead.get("qualification_status")
-        if estado and estado != "en_progreso":
-            cliente_bits.append(f"Estado del lead: {estado}")
+        estado_lead = lead.get("qualification_status")
+        if estado_lead and estado_lead != "en_progreso":
+            cliente_bits.append(f"Estado del lead: {estado_lead}")
         if cliente_bits:
             context_lines.append("- Cliente: " + "; ".join(cliente_bits))
 
+    # Bloque de memoria consolidada (resumen de conversaciones anteriores).
     summary_block = f"\n\n## Memoria previa de este cliente\n{summary}\n" if summary else ""
-    # El extra_context (productos encontrados por RAG) se inserta antes del contexto
-    # operativo para que el bot los vea como parte de su conocimiento disponible.
-    rag_block = f"{extra_context}\n\n" if extra_context else ""
+
+    # Bloque de estado de conversación (qué busca el cliente, qué se le mostró).
+    estado_block = ""
+    if estado:
+        estado_lines = []
+        if estado.get("categoria_busqueda"):
+            estado_lines.append(f"- Buscando: {estado['categoria_busqueda']}")
+        if estado.get("genero"):
+            estado_lines.append(f"- Género/uso: {estado['genero']}")
+        if estado.get("calificado"):
+            estado_lines.append("- Ya fue calificado (NO vuelvas a preguntar la categoría)")
+        if estado.get("productos_mostrados"):
+            estado_lines.append(
+                f"- Productos ya mostrados (IDs): {', '.join(str(i) for i in estado['productos_mostrados'][-10:])}"
+            )
+        if estado_lines:
+            estado_block = "\n\n## Estado de la conversación\n" + "\n".join(estado_lines) + "\n"
+
+    # Bloque de candidatos confirmados (pipeline). Reemplaza al catálogo gigante.
+    candidatos_block = ""
+    if candidatos:
+        c_lines = [
+            "## Productos confirmados para mostrar AHORA (recuperados del inventario real)",
+            "Muestra ESTOS productos usando sus [FOTO:ID] exactos. NO inventes otros IDs,",
+            "NO uses productos que no estén en esta lista. Si no encajan, di que los",
+            "verificarás con el equipo en vez de ofrecer productos distintos:",
+        ]
+        for p in candidatos:
+            desc = (p.get("descripcion") or "")[:90]
+            gen = p.get("_genero", "")
+            c_lines.append(
+                f"- **{p['nombre']}** — ${p['precio']:,} — {desc}"
+                + (f" (uso: {gen})" if gen else "")
+                + f"  #{p['id']}"
+            )
+        candidatos_block = "\n\n" + "\n".join(c_lines) + "\n"
+
     system_prompt = (
         f"{config.SYSTEM_PROMPT}\n\n"
         f"{summary_block}"
-        f"{rag_block}"
+        f"{estado_block}"
+        f"{candidatos_block}"
         "## Contexto operativo\n"
         + "\n".join(context_lines)
     )
