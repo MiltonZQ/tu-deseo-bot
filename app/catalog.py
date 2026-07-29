@@ -125,6 +125,34 @@ async def search(query: str, limit: int = 5) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def search_with_stock(query: str, limit: int = 6) -> list[dict]:
+    """Búsqueda RAG para inyectar al LLM: productos que coinciden con la consulta
+    del cliente, con stock disponible, priorizando los que tienen imagen.
+
+    A diferencia de search(): filtra por stock_status (solo disponibles), NO exige
+    imagen_url (encuentra productos aunque falte foto), y ordena los que sí tienen
+    imagen primero (para que el bot pueda enviar fotos). Usada para que el bot
+    encuentre productos que NO están en el catalogo.md del prompt.
+    """
+    if not query or len(query.strip()) < 3:
+        return []
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        rows = await conn.fetch(
+            """
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, stock_status
+            FROM productos
+            WHERE activo = TRUE
+              AND (stock_status IS NULL OR stock_status <> 'outofstock')
+              AND (nombre ILIKE '%' || $1 || '%' OR categoria ILIKE '%' || $1 || '%'
+                   OR descripcion ILIKE '%' || $1 || '%')
+            ORDER BY (imagen_url IS NULL) ASC, LENGTH(nombre) ASC
+            LIMIT $2
+            """,
+            query.strip(), limit,
+        )
+    return [dict(r) for r in rows]
+
+
 STOP_WORDS = {
     "puedo", "ver", "una", "un", "el", "la", "los", "las", "de", "del",
     "foto", "fotos", "imagen", "imagenes", "fotografia", "muestra",
@@ -340,7 +368,7 @@ _REGLAS_CATEGORIA = [
       "con app", "control remoto", "con vibrac"), "vibradores"),
     # Lencería y disfraces
     (("body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
-      "disfra", "pantuflas", "pezonera", "ligero", "encaje"), "lenceria"),
+      "disfra", "pantuflas", "pezonera", "ligero", "encaje", "suspensorio"), "lenceria"),
     # Bondage / BDSM / pareja
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
       "kit ", "vendas", "mordaza"), "pareja-y-bondage"),

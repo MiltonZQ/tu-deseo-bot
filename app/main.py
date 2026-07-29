@@ -410,6 +410,61 @@ async def _enviar_fotos_productos(
         log.exception("Error enviando foto de producto a %s", wa_id)
 
 
+async def _buscar_productos_para_contexto(user_text: str) -> str | None:
+    """Busca en la DB productos que coincidan con el mensaje del cliente y los
+    devuelve formateados como bloque de contexto para el LLM (RAG ligero).
+
+    Esto permite que el bot encuentre productos que NO están en su catalogo.md
+    (ej: suspensorios, productos nuevos cargados en la web). Devuelve None si no
+    hay coincidencias (comportamiento normal, sin overhead).
+    """
+    if not user_text or len(user_text.strip()) < 3:
+        return None
+    try:
+        # Extraer keywords significativas del mensaje del cliente (sustantivos
+        # de producto). Para mantenerlo simple, probamos el texto tal cual y los
+        # tokens principales contra el catálogo.
+        candidatos = set()
+        # 1. Frase completa (para consultas tipo "suspensorios para hombre")
+        for p in await catalog.search_with_stock(user_text.strip(), limit=6):
+            candidatos.add(p["id"])
+            if len(candidatos) >= 6:
+                break
+        # 2. Tokens individuales para consultas tipo "quiero un arnes"
+        if len(candidatos) < 4:
+            tokens = [t for t in re.findall(r"[a-záéíóúñ]{4,}", user_text.lower())
+                      if t not in {"quiero", "necesito", "busco", "tienen", "hola", "buenas",
+                                   "buenos", "gracias", "podrian", "podemos", "deseo",
+                                   "gustaria", "me gustaria", "para", "hombre", "mujer",
+                                   "pareja", "como", "donde", "cual", "cuales", "tambien"}]
+            for tok in tokens[:3]:
+                for p in await catalog.search_with_stock(tok, limit=3):
+                    candidatos.add(p["id"])
+                    if len(candidatos) >= 8:
+                        break
+        if not candidatos:
+            return None
+        # Recuperar los productos completos y formatear el bloque
+        productos = []
+        for pid in list(candidatos)[:6]:
+            p = await catalog.get_producto_by_id(pid)
+            if p:
+                productos.append(p)
+        if not productos:
+            return None
+        lineas = ["## Productos disponibles que coinciden con la consulta del cliente"]
+        lineas.append("(Ofrécelos usando [FOTO:ID] con el ID exacto; son productos reales con stock):")
+        for p in productos:
+            desc = (p.get("descripcion") or "")[:80]
+            lineas.append(f"- **{p['nombre']}** — ${p['precio']:,} — {desc}  #{p['id']}")
+        log.info("RAG: %d productos inyectados al contexto para consulta %r",
+                 len(productos), user_text[:40])
+        return "\n".join(lineas)
+    except Exception:
+        log.exception("Error en búsqueda RAG para contexto")
+        return None
+
+
 async def _process_message(payload: dict) -> None:
     # Bloquear wabaIds no autorizados (yCloud)
     if config.WHATSAPP_PROVIDER == "ycloud":
@@ -554,8 +609,13 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     summary_row = await db.get_summary(wa_id)
     summary_text = summary_row["summary"] if summary_row else None
 
+    # RAG ligero: buscar en la DB productos que coincidan con la consulta del cliente
+    # ANTES de llamar al LLM, e inyectarlos como contexto. Así el bot encuentra
+    # productos que no están en su catalogo.md (ej: suspensorios, productos nuevos).
+    extra_context = await _buscar_productos_para_contexto(user_text)
+
     raw_reply = await openai_client.complete(
-        user_text, history, lead=lead, summary=summary_text,
+        user_text, history, lead=lead, summary=summary_text, extra_context=extra_context,
     )
     reply = await leads.process_reply(
         wa_id,
