@@ -94,11 +94,13 @@ async def complete(user_message: str, history: list[dict],
         if cliente_bits:
             context_lines.append("- Cliente: " + "; ".join(cliente_bits))
 
+    summary_block = f"\n\n## Memoria previa de este cliente\n{summary}\n" if summary else ""
     # El extra_context (productos encontrados por RAG) se inserta antes del contexto
     # operativo para que el bot los vea como parte de su conocimiento disponible.
     rag_block = f"{extra_context}\n\n" if extra_context else ""
     system_prompt = (
         f"{config.SYSTEM_PROMPT}\n\n"
+        f"{summary_block}"
         f"{rag_block}"
         "## Contexto operativo\n"
         + "\n".join(context_lines)

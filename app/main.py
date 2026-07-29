@@ -334,7 +334,29 @@ async def _enviar_fotos_productos(
                 if cat:
                     log.info("Fotos por categoría '%s': %d productos", cat, len(prods_cat))
 
-        # 4. Fallback: cliente pidió fotos explícitamente y no hubo marcador
+        # 4. Fallback automático: si no hubo marcador explícito del LLM
+        if not prods_to_send:
+            # Reconstruir frase de búsqueda con el sustantivo principal del historial si user_text es corto
+            search_query = user_text.strip()
+            has_noun = any(w in search_query.lower() for w in _NOUN_KEYWORDS)
+            if not has_noun and history:
+                for h_msg in reversed(history[-6:]):
+                    c = h_msg.get("content", "").lower()
+                    for n_kw in _NOUN_KEYWORDS:
+                        if n_kw in c:
+                            search_query = f"{n_kw} {search_query}"
+                            break
+                    if search_query != user_text.strip():
+                        break
+
+            found_stock = await catalog.search_with_stock(search_query, limit=5)
+            if found_stock:
+                for ps in found_stock:
+                    p_full = await catalog.get_producto_by_id(ps["id"])
+                    if p_full:
+                        p_full["_por_categoria"] = True
+                        prods_to_send.append(p_full)
+
         if not prods_to_send and _FOTO_REQUEST_RE.search(user_text):
             is_multi = bool(re.search(
                 r"\b(cada\s+uno|todas|todos|cada\s+una|los\s+\w+|las\s+\w+)\b",
@@ -645,6 +667,21 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # del texto visible. Las fotos se envían tras el mensaje de texto.
     foto_ids, reply = _extraer_marcadores_foto(reply)
     categoria_refs, reply = _extraer_marcadores_categoria(reply)
+
+    # Control estricto en Python: evitar bucles de preguntas redundantes.
+    # Si la conversación ya tiene al menos 1 turno previo con preguntas del asistente,
+    # cortar cualquier pregunta redundante nueva y forzar la muestra visual.
+    assistant_questions = sum(
+        1 for m in history if m.get("role") == "assistant" and ("?" in m.get("content", "") or "¿" in m.get("content", ""))
+    )
+    if assistant_questions >= 1 and ("?" in reply or "¿" in reply):
+        clean_reply = re.sub(r"¿[^?]+\?", "", reply).strip()
+        clean_reply = re.sub(r"\s+", " ", clean_reply).strip()
+        if len(clean_reply) < 10:
+            clean_reply = "Te muestro nuestras mejores opciones disponibles 👇"
+        elif not clean_reply.endswith("👇") and not clean_reply.endswith(":"):
+            clean_reply += " 👇"
+        reply = clean_reply
 
     # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
     # (con datos de envío del historial y total calculado del catálogo).
