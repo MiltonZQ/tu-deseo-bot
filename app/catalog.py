@@ -783,47 +783,106 @@ async def get_productos_para_recomendar(
     """Recupera los productos CORRECTOS para recomendar, filtrados por categoría
     funcional y género, con imagen y stock disponibles.
 
-    - Filtra por _categoria_normalizada == categoria_funcional (si se da).
-    - Filtra por _genero_normalizado == genero (si se da).
-    - Excluye exclude_ids (productos ya mostrados, para soportar "ver más diseños").
-    - Ordena por score de coincidencia con user_text (desc) para relevancia.
-    - Garantiza imagen_url (sin foto no se puede enviar).
+    Usa un FALLBACK PROGRESIVO para ser robusto: si el filtro más estricto no da
+    resultados, relaja por etapas hasta encontrar productos. Esto evita el bug de
+    "0 candidatos" que hacía que el bot respondiera sin fotos.
 
-    Devuelve hasta `limit` productos, cada uno con un campo extra '_genero' y
-    '_categoria_funcional' ya calculados para logging/validación.
+    - Intento A: categoría funcional + género + con imagen + activo.
+    - Intento B: categoría funcional (sin género) + con imagen.
+    - Intento C: categoría funcional + género, sin exigir imagen (los sin foto se
+      omiten al enviar, pero al menos hay candidatos válidos).
+    - Intento D: búsqueda ILIKE por el sustantivo del user_text + con imagen
+      (captura productos mal clasificados por _categoria_normalizada).
+    Devuelve el primer intento con resultados.
+
+    NOTA: no exige activo=TRUE en los intents B/C/D, solo stock != outofstock + lo
+    que cada intento pida. El campo activo puede quedar mal por la sync de Woo.
     """
     exclude_set = set(exclude_ids or [])
-    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
-        rows = await conn.fetch(
-            """
-            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
-            FROM productos
-            WHERE activo = TRUE
-              AND (stock_status IS NULL OR stock_status <> 'outofstock')
-              AND imagen_url IS NOT NULL AND imagen_url != ''
-            ORDER BY nombre
-            """
+
+    async def _query(con_imagen: bool, con_activo: bool) -> list[dict]:
+        where = ["(stock_status IS NULL OR stock_status <> 'outofstock')"]
+        if con_imagen:
+            where.append("imagen_url IS NOT NULL AND imagen_url != ''")
+        if con_activo:
+            where.append("activo = TRUE")
+        sql = (
+            "SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink "
+            "FROM productos"
         )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY nombre"
+        async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+            return [dict(r) for r in await conn.fetch(sql)]
 
-    candidatos: list[dict] = []
-    for r in rows:
-        p = dict(r)
-        if p["id"] in exclude_set:
-            continue
-        cat_func = _categoria_normalizada(p["nombre"], p["descripcion"], p["categoria"])
-        gen = _genero_normalizado(p["nombre"], p["descripcion"], p["categoria"])
-        if categoria_funcional and cat_func != categoria_funcional:
-            continue
-        if genero and gen != genero:
-            continue
-        p["_categoria_funcional"] = cat_func
-        p["_genero"] = gen
-        p["_score"] = _score_candidato(p, user_text)
-        candidatos.append(p)
+    def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
+        out: list[dict] = []
+        for r in rows:
+            p = dict(r)
+            if p["id"] in exclude_set:
+                continue
+            cat_func = _categoria_normalizada(p["nombre"], p["descripcion"], p["categoria"])
+            gen = _genero_normalizado(p["nombre"], p["descripcion"], p["categoria"])
+            if exige_cat and categoria_funcional and cat_func != categoria_funcional:
+                continue
+            if exige_gen and genero and gen != genero:
+                continue
+            p["_categoria_funcional"] = cat_func
+            p["_genero"] = gen
+            p["_score"] = _score_candidato(p, user_text)
+            out.append(p)
+        out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+        return out[:limit]
 
-    # Ordenar: score desc, luego nombre más corto (más específico) primero.
-    candidatos.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
-    return candidatos[:limit]
+    # Intento A: categoría + género + con imagen + activo
+    candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
+                          exige_cat=True, exige_gen=True)
+    if candidatos:
+        return candidatos
+
+    # Intento B: categoría (sin género) + con imagen + activo
+    candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
+                          exige_cat=True, exige_gen=False)
+    if candidatos:
+        log.info("get_productos_para_recomendar: resultado vía intento B (sin género) cat=%s", categoria_funcional)
+        return candidatos
+
+    # Intento C: categoría + género, sin exigir imagen
+    candidatos = _filtrar(await _query(con_imagen=False, con_activo=True),
+                          exige_cat=True, exige_gen=True)
+    if candidatos:
+        log.info("get_productos_para_recomendar: resultado vía intento C (sin exigir imagen) cat=%s género=%s", categoria_funcional, genero)
+        return candidatos
+
+    # Intento D: búsqueda ILIKE por sustantivo del user_text + con imagen.
+    # Captura productos que _categoria_normalizada etiqueta mal.
+    tokens = user_text and _extract_search_tokens(user_text)
+    if tokens:
+        for tok in tokens[:3]:
+            if len(tok) < 4:
+                continue
+            async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+                rows = await conn.fetch(
+                    """
+                    SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+                    FROM productos
+                    WHERE (stock_status IS NULL OR stock_status <> 'outofstock')
+                      AND imagen_url IS NOT NULL AND imagen_url != ''
+                      AND (nombre ILIKE '%' || $1 || '%' OR descripcion ILIKE '%' || $1 || '%')
+                    ORDER BY nombre
+                    LIMIT 20
+                    """,
+                    tok,
+                )
+            res = _filtrar([dict(r) for r in rows], exige_cat=False, exige_gen=False)
+            if res:
+                log.info("get_productos_para_recomendar: resultado vía intento D (ILIKE %r) %d productos", tok, len(res))
+                return res
+
+    if not candidatos:
+        log.warning("get_productos_para_recomendar: 0 candidatos tras todos los intentos cat=%s género=%s", categoria_funcional, genero)
+    return candidatos
 
 
 async def buscar_producto_especifico(user_text: str, limit: int = 3) -> list[dict]:

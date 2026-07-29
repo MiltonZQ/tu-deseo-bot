@@ -23,7 +23,10 @@ YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
 
 # ── IA / Modelos ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "openai/gpt-4.1-mini")  # chat conversacional GPT-4.1 mini (vía OpenRouter)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "openai/gpt-5.2")  # chat conversacional GPT-5.2 (vía OpenRouter)
+# Modelo de respaldo: si el principal falla (deprecation, caída del provider),
+# el bot reintenta automáticamente con este para no quedarse sin responder.
+OPENAI_MODEL_FALLBACK = os.getenv("OPENAI_MODEL_FALLBACK", "openai/gpt-4.1-mini").strip() or None
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # comprobantes
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
@@ -31,14 +34,14 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")  # notas de voz
 # "low" = control de costo y latencia; valores: low/medium/high o vacío para omitir.
 MODEL_REASONING_EFFORT = os.getenv("MODEL_REASONING_EFFORT", "low").strip().lower() or None
 # Excluir el razonamiento (chain-of-thought) de la respuesta para modelos "thinking"
-# como Gemini 3.x Flash. El pipeline determinístico ya hace el razonamiento en Python,
-# así que aquí solo se necesita la redacción final. Setear en true para Gemini 3.x.
-MODEL_REASONING_EXCLUDE = os.getenv("MODEL_REASONING_EXCLUDE", "false").strip().lower() in {
+# como GPT-5.2 o Gemini 3.x. El pipeline determinístico ya hace el razonamiento en
+# Python, así que aquí solo se necesita la redacción final.
+MODEL_REASONING_EXCLUDE = os.getenv("MODEL_REASONING_EXCLUDE", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
 # Máximo de tokens para la respuesta del LLM. Generoso para que el bot pueda redactar
 # saludo + 5 marcadores [FOTO:ID] + CTA sin cortarse, pero acotado para control de costo.
-MAX_REPLY_TOKENS = int(os.getenv("MAX_REPLY_TOKENS", "1200"))
+MAX_REPLY_TOKENS = int(os.getenv("MAX_REPLY_TOKENS", "2000"))
 
 # ── Base de datos ──
 DATABASE_URL = os.getenv("DATABASE_URL", "")
