@@ -256,7 +256,7 @@ _CATEGORIA_MARKER_RE = re.compile(r"\[CATEGORIA:\s*([^\]]+)\]", re.IGNORECASE)
 _FOTO_REQUEST_RE = re.compile(
     r"\b(foto[s]?|imagen(es)?|fotografia[s]?|muestr(a|ame|amelo|amelas)|"
     r"mand(a|ame|ala|amelas)|envi(a|ame|ala|amelas)|ver la[s]? (foto|imagen)|"
-    r"ver el producto|cada uno|todas las (foto|imagen))\b",
+    r"dame|las foto[s]?|puta[s]? foto[s]?|ver el producto|cada uno|todas las (foto|imagen))\b",
     re.IGNORECASE,
 )
 
@@ -405,7 +405,7 @@ async def _enviar_fotos_productos(
 _NOUN_KEYWORDS = [
     "suspensorio", "suspensor", "lenceria", "lencería", "body", "babydoll", "baby doll",
     "disfraz", "vibrador", "dildo", "succionador", "plug", "anal", "arnes", "arnés",
-    "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage"
+    "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage", "chimbo", "pene"
 ]
 
 
