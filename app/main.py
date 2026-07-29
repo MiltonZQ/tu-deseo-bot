@@ -362,6 +362,36 @@ def _resolver_candidatos_del_llm(
     return resueltos
 
 
+# Respuestas afirmativas/ambiguas que, cuando ya hay una categoría persistida,
+# SIEMPRE disparan mostrar fotos de esa categoría (rompe el bucle de preguntas
+# cuando el cliente responde "si", "ok", "dame", etc. a la pregunta de calificación).
+_RESPUESTAS_AFIRMATIVAS = {
+    "si", "sí", "ok", "okay", "claro", "dame", "ver", "muestrame", "muéstrame",
+    "muestramelos", "muéstramelos", "porfa", "por favor", "suena bien", "dale",
+    "bueno", "adelante", "esta bien", "está bien", "sip", "siii", "ajá", "aha",
+    "claro que si", "claro que sí", "genial", "perfecto", "excelente", "vamos",
+    "adelantar", "muestra", "mandame", "mándame", "enviame", "envíame", "fotos",
+    "foto", "imagenes", "imágenes", "verlos", "verlas", "cuales", "cuáles",
+    "opciones", "catalogo", "catálogo",
+}
+
+
+def _es_respuesta_afirmativa(user_text: str) -> bool:
+    """True si el mensaje es una respuesta corta afirmativa/ambigua que debe
+    disparar mostrar la categoría persistida (no re-clasificar)."""
+    t = catalog._normalizar_texto(user_text).strip().strip(".,!?¿¡")
+    if not t:
+        return False
+    # Coincidencia exacta o el mensaje contiene una afirmativa clave.
+    if t in _RESPUESTAS_AFIRMATIVAS:
+        return True
+    # "dame los rojos", "ver los sencillos", etc. → contiene verbo afirmativo.
+    for af in ("dame", "muestrame", "muéstrame", "mandame", "mándame", "enviame", "envíame"):
+        if af in t:
+            return True
+    return False
+
+
 async def _recuperar_candidatos(
     user_text: str, history: list[dict], estado: dict | None,
 ) -> tuple[list[dict], dict]:
@@ -371,6 +401,11 @@ async def _recuperar_candidatos(
     Devuelve (candidatos, info_clasificacion):
       - candidatos: lista de productos confirmados (vacía si hay que calificar).
       - info_clasificacion: dict con la clasificación resultante + estado a guardar.
+
+    Enfoque híbrido anti-bucle: si ya hay una categoría persistida (el bot ya
+    preguntó en el turno anterior), cualquier respuesta que NO introduzca una
+    categoría NUEVA y distinta dispara mostrar fotos de esa categoría. Así
+    "si", "ok", "dame", "los rojos" muestran productos en vez de re-preguntar.
     """
     clasif = catalog.clasificar_intencion_cliente(user_text, history)
 
@@ -379,30 +414,47 @@ async def _recuperar_candidatos(
     cat_func = clasif["categoria_funcional"]
     genero = clasif["genero"]
     intencion = clasif["intencion"]
+    estado_tiene_cat = bool(estado and estado.get("categoria_funcional"))
+
     if estado:
         if not cat_func and estado.get("categoria_funcional"):
             cat_func = estado["categoria_funcional"]
             intencion = intencion or estado.get("categoria_busqueda")
         if not genero and estado.get("genero"):
             genero = estado["genero"]
-        # Si ya estaba calificado, mantener calificado.
-        if estado.get("calificado"):
-            clasif["calificado"] = True
 
     # Detectar cambio radical de tema: si la nueva intención es distinta y clara
     # respecto a la persistida, reiniciar el estado para no mezclar productos.
     reset_state = False
-    if (estado and estado.get("categoria_funcional")
-            and clasif["categoria_funcional"]
-            and clasif["categoria_funcional"] != estado.get("categoria_funcional")
-            and clasif["intencion"]):
+    nueva_cat_clara = bool(clasif["categoria_funcional"] and clasif["intencion"])
+    if (estado_tiene_cat and nueva_cat_clara
+            and clasif["categoria_funcional"] != estado.get("categoria_funcional")):
         log.info("Cambio de tema detectado: %s -> %s para este wa_id",
                  estado.get("categoria_funcional"), clasif["categoria_funcional"])
         reset_state = True
         estado = None  # ignorar el estado viejo para la recuperación
+        estado_tiene_cat = False
 
-    # ¿Hay que mostrar fotos? Sí si: ya calificado, o pide fotos explícitamente.
-    debe_mostrar = bool(clasif["calificado"] or clasif["pide_fotos"])
+    # ── REGLA HÍBRIDA ANTI-BUCLE ──
+    # Si ya hay categoría persistida (el bot preguntó en el turno anterior) y el
+    # cliente responde sin introducir una categoría nueva/distinta, mostrar fotos
+    # de esa categoría. Esto cubre respuestas afirmativas ("si","ok","dame") y
+    # atributos ("rojos","sencillo") que antes caían en re-pregunta infinita.
+    mostrar_por_estado = False
+    if estado_tiene_cat and not reset_state:
+        afirmativa = _es_respuesta_afirmativa(user_text)
+        # Mostrar si: ya estaba calificado, o es afirmativa, o pide fotos, o el
+        # cliente aclara género/subtipo sobre la misma categoría.
+        if (estado.get("calificado") or afirmativa or clasif["pide_fotos"]):
+            mostrar_por_estado = True
+            clasif["calificado"] = True
+        elif nueva_cat_clara and clasif["categoria_funcional"] == estado.get("categoria_funcional"):
+            # Mismo tema con más detalle (ej: ya en lencería, ahora dice "body").
+            mostrar_por_estado = True
+            clasif["calificado"] = True
+
+    # ¿Hay que mostrar fotos? Sí si: ya calificado, pide fotos, o regla híbrida.
+    debe_mostrar = bool(clasif["calificado"] or clasif["pide_fotos"] or mostrar_por_estado)
 
     candidatos: list[dict] = []
     if debe_mostrar and cat_func:
@@ -675,13 +727,18 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
 
     # Persistir estado de conversación: registrar categoría/género/calificación
     # y los productos efectivamente mostrados.
+    # IMPORTANTE: si el bot acaba de calificar (tiene categoría pero no mostró
+    # fotos), marcamos calificado=True para que el SIGUIENTE turno sepa que ya
+    # preguntó y debe mostrar fotos ante cualquier respuesta del cliente. Esto
+    # rompe el bucle de re-preguntas infinitas ("si" → vuelve a preguntar).
     if info["categoria_funcional"] or enviados_ids:
+        recien_califico = bool(info["categoria_funcional"] and not enviados_ids)
         await db.upsert_conversation_state(
             wa_id,
             categoria_busqueda=info["intencion"],
             categoria_funcional=info["categoria_funcional"],
             genero=info["genero"],
-            calificado=info["calificado"] or bool(enviados_ids),
+            calificado=info["calificado"] or bool(enviados_ids) or recien_califico,
             add_productos_mostrados=enviados_ids,
         )
 
