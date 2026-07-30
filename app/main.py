@@ -520,7 +520,7 @@ async def _recuperar_candidatos(
     categoría NUEVA y distinta dispara mostrar fotos de esa categoría. Así
     "si", "ok", "dame", "los rojos" muestran productos en vez de re-preguntar.
     """
-    clasif = catalog.clasificar_intencion_cliente(user_text, history)
+    clasif = await catalog.clasificar_intencion_cliente(user_text, history)
 
     # Fusionar con estado previo (el estado recalifica categoría/género si el
     # nuevo mensaje los aclara; si no, conserva lo persistido).

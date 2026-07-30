@@ -275,3 +275,103 @@ async def summarize_conversation(history: list[dict], lead: dict | None = None) 
     ]
     resp = await _get_client().chat.completions.create(**_model_kwargs(messages))
     return resp.choices[0].message.content or "Sin resumen disponible."
+
+
+# ── Clasificador de intención por LLM (respaldo del determinístico) ──────────
+#
+# Cuando el clasificador determinístico (listas de palabras) no reconoce la
+# categoría del mensaje del cliente (ej: "kits de sadomasoquismo", jerga nueva,
+# variantes no listadas), esta función hace una llamada BARATA al LLM para
+# clasificar la intención en una de las 11 categorías funcionales cerradas.
+#
+# Seguridad: el LLM SOLO puede devolver una de las 11 categorías o "ninguna".
+# No inventa categorías ni productos — la recuperación sigue siendo determinística.
+# Cache en memoria: mismo mensaje → misma respuesta (evita reclasificar).
+
+# Las 11 categorías funcionales con descripciones para guiar al LLM.
+_CATEGORIAS_LLM = {
+    "vibradores": "vibradores de clítoris, punto G, rabbit, tipo Hitachi, balas, control remoto, app",
+    "succionadores": "succionadores de clítoris (Satisfyer, Womanizer), air pulse",
+    "dildos": "dildos, consoladores, realistas, con ventosa, de vidrio, dobles",
+    "anal": "plugs anales, bolas anales, estimulación de próstata, dilatadores, arneses/strap-on",
+    "masturbadores": "masturbadores masculinos, huevos, vaginas artificiales, torsos",
+    "anillos-y-fundas": "anillos para pene (vibradores o no), fundas/extensores, bombas de vacío",
+    "pareja-y-bondage": "bondage, BDSM, kits de amarre, esposas, antifaz, fustas, látigos, velos, sadomasoquismo, juegos de pareja",
+    "lubricantes-y-cuidado": "lubricantes (base agua/silicona/sabores), estimulantes, retardantes, limpiadores de juguetes, aceites, cremas íntimas",
+    "lenceria": "lencería (body, baby doll, disfraz), suspensorios, pecheras, conjuntos masculinos, arneses de lencería",
+    "juegos-y-accesorios": "juegos de mesa eróticos, dados, cartas, accesorios varios",
+}
+
+_CLASIFICADOR_PROMPT = (
+    "Eres un clasificador de intención para un sex shop por WhatsApp. "
+    "Dado el mensaje del cliente, responde SOLO con un JSON compacto indicando qué busca.\n\n"
+    "Categorías posibles (usa EXACTAMENTE la clave, minúsculas):\n"
+    + "\n".join(f"- {k}: {v}" for k, v in _CATEGORIAS_LLM.items())
+    + "\n\nGéneros posibles: hombre, mujer, pareja, anal, o null si no se aclara.\n"
+    "Si el mensaje NO busca un producto del catálogo (saludo, pregunta de envío, "
+    "pago, queja, producto que no vendemos), devuelve categoria \"ninguna\".\n\n"
+    "Responde SOLO el JSON, sin texto extra. Formato:\n"
+    '{"categoria": "<clave o ninguna>", "genero": "<o null>"}'
+)
+
+# Cache simple en memoria: evita reclasificar el mismo mensaje en reintentos.
+_cache_clasif: dict[str, dict] = {}
+_CACHE_MAX = 200
+
+
+async def clasificar_intencion_llm(user_message: str) -> dict | None:
+    """Clasifica la intención del mensaje del cliente con una llamada LLM barata.
+
+    Devuelve {"categoria": <una de las 11 o "ninguna">, "genero": <o None>} o
+    None si el LLM falla/timed out. Es el RESPALDO del clasificador determinístico:
+    solo se llama cuando las listas de palabras no reconocen la categoría.
+
+    Restricción: el LLM solo puede elegir una de las 11 categorías — no inventa.
+    """
+    if not user_message or not user_message.strip():
+        return None
+    key = user_message.strip().lower()
+    if key in _cache_clasif:
+        return _cache_clasif[key]
+
+    messages = [
+        {"role": "system", "content": _CLASIFICADOR_PROMPT},
+        {"role": "user", "content": user_message},
+    ]
+    try:
+        # Llamada barata con timeout corto: si tarda, fallback al comportamiento actual.
+        resp = await _get_client().chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=messages,
+            max_tokens=60,   # JSON compacto, no necesita más
+            temperature=0.0,  # determinístico
+            timeout=4.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        # Extraer el JSON (el LLM a veces añade markdown ```json).
+        import json as _json
+        import re as _re
+        m = _re.search(r"\{[^{}]*\}", raw)
+        if not m:
+            return None
+        data = _json.loads(m.group(0))
+        cat = str(data.get("categoria", "")).strip().lower()
+        gen = data.get("genero")
+        if gen:
+            gen = str(gen).strip().lower()
+            if gen not in ("hombre", "mujer", "pareja", "anal"):
+                gen = None
+        # Validar que la categoría sea una de las 11 o "ninguna".
+        if cat != "ninguna" and cat not in _CATEGORIAS_LLM:
+            log.warning("LLM clasificó categoría inválida %r — descartada", cat)
+            return None
+        result = {"categoria": cat, "genero": gen}
+        # Guardar en cache.
+        if len(_cache_clasif) >= _CACHE_MAX:
+            _cache_clasif.pop(next(iter(_cache_clasif)))
+        _cache_clasif[key] = result
+        log.info("LLM clasificó %r -> %s", user_message[:40], result)
+        return result
+    except Exception as exc:
+        log.warning("Clasificador LLM falló (%s) — fallback a determinístico", type(exc).__name__)
+        return None

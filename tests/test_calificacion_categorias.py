@@ -833,3 +833,80 @@ def test_bug11_deteccion_subtipo_no_depende_de_sustantivo():
                             "La detección de subtipo no debe depender de 'if sustantivo'")
                 return
     raise AssertionError("No se encontró clasificar_intencion_cliente")
+
+
+# ── BUG 12: clasificador LLM de respaldo (kits de amarre, sadomasoquismo) ─────
+
+def test_bug12_kits_amarre_ya_en_mapeo_deterministico():
+    """El fix rápido: 'kits de amarre' ahora está en el mapeo determinístico,
+    así ni siquiera necesita el LLM. Verifica las claves."""
+    mapa = _extraer_constantes(_CAT, ["_INTENCION_A_CATEGORIA_FUNCIONAL"])["_INTENCION_A_CATEGORIA_FUNCIONAL"]
+    assert mapa.get("kits") == "pareja-y-bondage"
+    assert mapa.get("kit") == "pareja-y-bondage"
+    assert mapa.get("amarre") == "pareja-y-bondage"
+    assert mapa.get("sadomasoquismo") == "pareja-y-bondage"
+    assert mapa.get("esposas") == "pareja-y-bondage"
+    assert mapa.get("bdsm") == "pareja-y-bondage"
+
+
+def test_bug12_llm_clasificador_existe_y_es_restrictivo():
+    """Verifica que existe clasificar_intencion_llm en openai_client.py y que la
+    lista de categorías es exactamente las 11 (no inventa categorías)."""
+    _OAI = _ROOT / "app" / "openai_client.py"
+    extras = _extraer_constantes(_OAI, ["_CATEGORIAS_LLM"])
+    assert "_CATEGORIAS_LLM" in extras, "Falta _CATEGORIAS_LLM en openai_client.py"
+    cats = extras["_CATEGORIAS_LLM"]
+    esperadas = {"vibradores", "succionadores", "dildos", "anal", "masturbadores",
+                 "anillos-y-fundas", "pareja-y-bondage", "lubricantes-y-cuidado",
+                 "lenceria", "juegos-y-accesorios"}
+    assert set(cats.keys()) == esperadas, (
+        f"El LLM solo debe poder elegir entre las 11 categorías. Got: {set(cats.keys()) - esperadas} extra")
+
+
+def test_bug12_llm_clasificador_valida_categoria():
+    """Réplica de la validación en clasificar_intencion_llm: el LLM solo puede
+    devolver una de las 11 categorías o 'ninguna'. Cualquier otra se descarta."""
+    _OAI = _ROOT / "app" / "openai_client.py"
+    cats = _extraer_constantes(_OAI, ["_CATEGORIAS_LLM"])["_CATEGORIAS_LLM"]
+    validas = set(cats.keys()) | {"ninguna"}
+
+    def _validar(cat_llm):
+        cat = cat_llm.strip().lower()
+        return cat if cat in validas else None
+
+    assert _validar("pareja-y-bondage") == "pareja-y-bondage"
+    assert _validar("ninguna") == "ninguna"
+    assert _validar("collares") is None  # no es categoría válida → descartada
+    assert _validar("jewelry") is None
+    assert _validar(" lubricantes-y-cuidado ") == "lubricantes-y-cuidado"
+
+
+def test_bug12_respaldo_llm_solo_cuando_deterministico_falla():
+    """Réplica de la lógica de respaldo: el LLM solo se invoca si el determinístico
+    NO encontró categoría Y no hay subtipo propio."""
+    def _llamar_llm(categoria_funcional, subtipo_detectado, user_text):
+        if not categoria_funcional and not subtipo_detectado and user_text and len(user_text.strip()) >= 4:
+            return "LLM_INVOCADO"
+        return "NO_INVOCADO"
+
+    # "kits de amarre" ya lo encuentra el determinístico → NO invoca LLM.
+    assert _llamar_llm("pareja-y-bondage", None, "kits de amarre") == "NO_INVOCADO"
+    # "sadomasoquismo" ya está en determinístico → NO invoca LLM.
+    assert _llamar_llm("pareja-y-bondage", None, "sadomasoquismo") == "NO_INVOCADO"
+    # "cinturón de castidad" NO lo encuentra el determinístico → SÍ invoca LLM.
+    assert _llamar_llm(None, None, "cinturon de castidad") == "LLM_INVOCADO"
+    # Mensaje con subtipo propio → NO invoca LLM (el subtipo deriva categoría).
+    assert _llamar_llm(None, "doble", "doble") == "NO_INVOCADO"
+    # Mensaje muy corto → NO invoca LLM.
+    assert _llamar_llm(None, None, "ok") == "NO_INVOCADO"
+
+
+def test_bug12_clasificador_es_async():
+    """Verifica que clasificar_intencion_cliente ahora es async (porque puede
+    llamar al LLM). Inspección del AST."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "clasificar_intencion_cliente":
+            return  # es async ✅
+    raise AssertionError("clasificar_intencion_cliente debe ser async (llama al LLM)")

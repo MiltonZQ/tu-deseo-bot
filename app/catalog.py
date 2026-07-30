@@ -367,7 +367,7 @@ _REGLAS_CATEGORIA = [
     (("anillo", "anillos"), "anillos-vibradores"),
     # Bondage / BDSM / pareja
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
-      "kit ", "vendas", "mordaza"), "pareja-y-bondage"),
+      "kit", "vendas", "mordaza", "sadomaso", "sado", "cepo", "spreade"), "pareja-y-bondage"),
     # Lencería y disfraces
     (("suspensorio", "suspensor", "pechera", "body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
       "disfra", "pantuflas", "pezonera", "ligero", "encaje"), "lenceria"),
@@ -691,6 +691,23 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "conjuntos": "lenceria",
     "pechera": "lenceria",
     "bondage": "pareja-y-bondage",
+    "bdsm": "pareja-y-bondage",
+    "kit": "pareja-y-bondage",
+    "kits": "pareja-y-bondage",
+    "amarre": "pareja-y-bondage",
+    "amarres": "pareja-y-bondage",
+    "esposas": "pareja-y-bondage",
+    "esposa": "pareja-y-bondage",
+    "fustas": "pareja-y-bondage",
+    "fusta": "pareja-y-bondage",
+    "latigo": "pareja-y-bondage",
+    "látigo": "pareja-y-bondage",
+    "antifaz": "pareja-y-bondage",
+    "antifaces": "pareja-y-bondage",
+    "vendas": "pareja-y-bondage",
+    "mordaza": "pareja-y-bondage",
+    "sadomasoquismo": "pareja-y-bondage",
+    "sado": "pareja-y-bondage",
     "lubricante": "lubricantes-y-cuidado",
     "lubricantes": "lubricantes-y-cuidado",
     "aceite": "lubricantes-y-cuidado",
@@ -701,6 +718,8 @@ _NOUN_KEYWORDS = [
     "anillos vibradores", "anillo vibrador", "suspensorio", "suspensor", "lenceria", "lencería",
     "body", "babydoll", "baby doll", "disfraz", "vibrador", "dildo", "succionador", "plug", "anal",
     "arnes", "arnés", "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage", "chimbo", "pene",
+    "kit", "kits", "amarre", "amarres", "esposas", "esposa", "fustas", "fusta", "antifaz", "antifaces",
+    "vendas", "mordaza", "latigo", "látigo", "bdsm", "sado", "sadomasoquismo",
 ]
 
 # Detección de género en el MENSAJE DEL CLIENTE (no del producto).
@@ -843,7 +862,7 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
     return intencion, sustantivo
 
 
-def clasificar_intencion_cliente(user_text: str,
+async def clasificar_intencion_cliente(user_text: str,
                                  history: list[dict] | None = None) -> dict:
     """Clasifica la intención del cliente de forma determinística.
 
@@ -900,12 +919,12 @@ def clasificar_intencion_cliente(user_text: str,
 
     categoria_funcional = _INTENCION_A_CATEGORIA_FUNCIONAL.get(intencion) if intencion else None
 
-    # calificado: hay una intención clara Y (género o subtipo explícito o petición de fotos).
     # subtipo_detectado: CUÁL subtipo reconoció (ej: "doble", "ventosa", "realista"),
     # para usarlo como filtro de ranking (que el producto mostrado coincida con el
     # subtipo pedido). Antes solo se sabía SI había subtipo (bool), no cuál.
     # NOTA: la detección de subtipo NO depende de tener sustantivo: el cliente puede
     # responder solo "sabores" (subtipo de lubricantes) sin sustantivo de categoría.
+    # Se calcula aquí (antes del respaldo LLM) para que ese respaldo sepa si ya hay subtipo.
     norm_user = _normalizar_texto(user_text)
     subtipo_detectado = None
     for s in _SUBTIPO_KEYWORDS:
@@ -913,6 +932,25 @@ def clasificar_intencion_cliente(user_text: str,
             subtipo_detectado = s
             break
     tiene_subtipo = subtipo_detectado is not None
+
+    # RESPALDO LLM: si el clasificador determinístico (listas de palabras) no
+    # reconoció ninguna categoría, pero el mensaje parece buscar un producto
+    # (no es saludo/pago/queja), hacer una llamada BARATA al LLM que clasifica
+    # en una de las 11 categorías cerradas. Así cubrimos jerga/variantes no
+    # listadas (kits de sadomasoquismo, cinturón de castidad, etc.) sin mantener
+    # listas infinitas. El LLM solo puede elegir una de las 11 o "ninguna".
+    if not categoria_funcional and not subtipo_detectado and user_text and len(user_text.strip()) >= 4:
+        try:
+            from app import openai_client
+            res_llm = await openai_client.clasificar_intencion_llm(user_text)
+            if res_llm and res_llm.get("categoria") and res_llm["categoria"] != "ninguna":
+                categoria_funcional = res_llm["categoria"]
+                if not intencion:
+                    intencion = res_llm["categoria"]
+                if not genero and res_llm.get("genero"):
+                    genero = res_llm["genero"]
+        except Exception:
+            log.warning("Respaldo LLM de clasificación falló — se ignora")
 
     # DERIVACIÓN subtipo → categoría: si el cliente respondió SOLO un subtipo (ej:
     # "sabores", "doble") sin sustantivo de categoría, derivar la categoría del
