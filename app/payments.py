@@ -59,7 +59,14 @@ def _destinatario_clause() -> str:
 def _build_vision_prompt(monto_esperado: int | None) -> str:
     """Prompt para GPT-4o vision. Porteado del JSON de Lavadero, ampliado con extracción."""
     tz = config.bot_zoneinfo()
-    hoy = datetime.now(tz).strftime("%-d de %B de %Y")
+    # Formato NUMÉRICO (DD/MM/YYYY) e inmune al locale del contenedor. Antes se
+    # usaba "%-d de %B de %Y" que en el contenedor (locale C/inglés) generaba
+    # "30 de July de 2026" en inglés, y el modelo no lograba matchear la fecha de
+    # comprobantes reales (que vienen en DD/MM/YYYY o español) → valido=false por
+    # fecha aunque la fecha fuera correcta → escalada errónea a humano.
+    now = datetime.now(tz)
+    hoy_numerico = now.strftime("%d/%m/%Y")        # 30/07/2026
+    hoy_iso = now.strftime("%Y-%m-%d")              # 2026-07-30
     monto_txt = f"${monto_esperado:,} COP" if monto_esperado else "el monto del pedido"
 
     return f"""Analiza este comprobante de pago colombiano. Responde SOLO con JSON sin texto
@@ -71,7 +78,7 @@ adicional ni backticks, con esta estructura exacta:
 Criterios para valido=true (todos deben cumplirse):
 1) Es un comprobante de pago real ({config.ACCEPTED_BANKS} u otro banco colombiano).
 2) El monto consignado/transferido en la imagen coincide con {monto_txt} (ten en cuenta que en comprobantes colombianos 29.800 ó 29,800 pesos representa 29800 COP en total; no confundas separadores de miles con decimales).
-3) La fecha del comprobante es exactamente de hoy ({hoy}).
+3) La fecha del comprobante corresponde a HOY ({hoy_numerico} o {hoy_iso}). Acepta cualquier formato equivalente (DD/MM/YYYY, YYYY-MM-DD, "30 de julio", texto en español o numérico); lo importante es que sea la fecha de hoy, no el formato exacto.
 4) El destinatario contiene {_destinatario_clause()}.
 
 Solo marca valido=false si claramente ves que un dato es incorrecto o falta.
