@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS pedidos (
     ciudad TEXT,
     telefono_contacto TEXT,
     estado TEXT NOT NULL DEFAULT 'pendiente'
-        CHECK (estado IN ('pendiente','pagado','aprobado','despachado','entregado','cancelado')),
+        CHECK (estado IN ('pendiente','pagado','aprobado','despachado','entregado','cancelado','devuelto')),
     total INT NOT NULL DEFAULT 0,
     creado_por TEXT NOT NULL DEFAULT 'bot',
     notas TEXT,
@@ -197,7 +197,13 @@ async def close_pool() -> None:
 
 async def run_migrations() -> None:
     async with _pool.acquire() as conn:
-        await conn.execute(SCHEMA_SQL)
+        await conn.execute(
+            """
+            ALTER TABLE pedidos DROP CONSTRAINT IF EXISTS pedidos_estado_check;
+            ALTER TABLE pedidos ADD CONSTRAINT pedidos_estado_check
+                CHECK (estado IN ('pendiente','pagado','aprobado','despachado','entregado','cancelado','devuelto'));
+            """
+        )
         await conn.execute(
             "ALTER TABLE leads ADD COLUMN IF NOT EXISTS action_link_sent BOOLEAN NOT NULL DEFAULT FALSE"
         )

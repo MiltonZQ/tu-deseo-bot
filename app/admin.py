@@ -402,14 +402,15 @@ async def dashboard(request: Request):
 
 # ── Pedidos ──
 
-PEDIDO_ESTADOS = ["pendiente", "pagado", "aprobado", "despachado", "entregado", "cancelado"]
+PEDIDO_ESTADOS = ["pendiente", "pagado", "aprobado", "despachado", "entregado", "cancelado", "devuelto"]
 ESTADO_BADGE = {
-    "pendiente": '<span class="badge badge-muted">Pendiente</span>',
-    "pagado": '<span class="badge badge-blue">Pagado</span>',
-    "aprobado": '<span class="badge badge-green">Aprobado</span>',
-    "despachado": '<span class="badge badge-blue">Despachado</span>',
-    "entregado": '<span class="badge badge-green">Entregado</span>',
-    "cancelado": '<span class="badge badge-red">Cancelado</span>',
+    "pendiente": '<span class="badge badge-muted">⏳ Pendiente</span>',
+    "pagado": '<span class="badge badge-blue">💳 Pagado</span>',
+    "aprobado": '<span class="badge badge-green">✅ Aprobado</span>',
+    "despachado": '<span class="badge badge-blue">📦 Despachado</span>',
+    "entregado": '<span class="badge badge-green">🎉 Entregado</span>',
+    "cancelado": '<span class="badge badge-red">❌ Cancelado</span>',
+    "devuelto": '<span class="badge badge-gold">↩️ Devuelto</span>',
 }
 
 
@@ -428,7 +429,7 @@ async def pedidos_page(request: Request, estado: str = Query("")):
 
     rows = ""
     for p in pedidos:
-        opts = "".join(f'<option value="{e}" {"selected" if e==p["estado"] else ""}>{e}</option>' for e in PEDIDO_ESTADOS)
+        opts = "".join(f'<option value="{e}" {"selected" if e==p["estado"] else ""}>{e.capitalize()}</option>' for e in PEDIDO_ESTADOS)
         creado_badge = ' <span class="badge badge-muted">🤖 bot</span>' if p.get("creado_por") == "bot" else ""
         rows += f"""
         <div class="item">
@@ -557,7 +558,7 @@ async def pedido_detalle_page(request: Request, pedido_id: int):
     else:
         abonos_html = '<div class="card-title">💳 Comprobantes de pago</div><div class="empty">Sin comprobantes asociados aún.</div>'
 
-    opts = "".join(f'<option value="{e}" {"selected" if e==pedido.get("estado") else ""}>{e}</option>' for e in PEDIDO_ESTADOS)
+    opts = "".join(f'<option value="{e}" {"selected" if e==pedido.get("estado") else ""}>{e.capitalize()}</option>' for e in PEDIDO_ESTADOS)
 
     return _layout(f"""
     <div class="topbar">
@@ -567,8 +568,19 @@ async def pedido_detalle_page(request: Request, pedido_id: int):
     <div class="card">
       <div class="card-title">👤 Datos del cliente</div>
       {datos_html}
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <label style="margin-bottom:8px;font-weight:600">⚡ Cambio rápido de estado:</label>
+        <div class="tabs-scroll" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px">
+          <button class="btn-sm btn-blue" onclick="cambiarEstado({pedido_id}, 'pagado')">💳 Pagado</button>
+          <button class="btn-sm btn-green" onclick="cambiarEstado({pedido_id}, 'aprobado')">✅ Aprobado</button>
+          <button class="btn-sm btn-blue" onclick="cambiarEstado({pedido_id}, 'despachado')">📦 Despachado</button>
+          <button class="btn-sm btn-green" onclick="cambiarEstado({pedido_id}, 'entregado')">🎉 Entregado</button>
+          <button class="btn-sm btn-gold" onclick="cambiarEstado({pedido_id}, 'devuelto')">↩️ Devuelto</button>
+          <button class="btn-sm btn-red" onclick="cambiarEstado({pedido_id}, 'cancelado')">❌ Cancelado</button>
+        </div>
+      </div>
       <div class="item-actions" style="margin-top:12px">
-        <select class="sel" style="width:auto;padding:8px 12px" onchange="cambiarEstado({pedido_id}, this.value)">{opts}</select>
+        <select class="sel" style="width:auto;padding:8px 12px;margin:0" onchange="cambiarEstado({pedido_id}, this.value)">{opts}</select>
         <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(str(pedido.get('wa_id') or ''))}" target="_blank">💬 WhatsApp</a>
         <button class="btn-sm btn-red" onclick="eliminarPedidoDetalle({pedido_id})">🗑 Eliminar Pedido</button>
         <a class="btn-sm" style="text-decoration:none;background:#25131c;color:#9a8a93" href="/admin/pedidos">← Volver</a>
