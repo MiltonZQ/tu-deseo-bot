@@ -880,6 +880,19 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     await db.save_message(wa_id, "assistant", reply)
     await whatsapp_client.send_text(wa_id, reply)
 
+    # Enviar imagen de medios de pago si se creó el pedido o la respuesta contiene datos bancarios
+    es_mensaje_pago = any(w in reply for w in ("INFORMACIÓN DE PAGOS", "PIGELI GROUP SAS", "05400003434", "@pigeli06", "PAGO A CUENTA BANCARIA"))
+    if (pedido_creado_id or es_mensaje_pago) and config.PAYMENT_INFO_IMAGE_URL:
+        try:
+            await whatsapp_client.send_image(
+                to_wa_id=wa_id,
+                image_url=config.PAYMENT_INFO_IMAGE_URL,
+                caption="💳 Medios de pago autorizados — Tu Deseo",
+            )
+            log.info("Imagen de medios de pago enviada a %s", wa_id)
+        except Exception:
+            log.exception("Error enviando imagen de medios de pago a %s", wa_id)
+
     # Enviar fotos (candidatos ya validados por el pipeline).
     enviados_ids = await _enviar_fotos_productos(wa_id, final_productos)
 

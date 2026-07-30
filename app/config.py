@@ -6,9 +6,11 @@ Basado en la plantilla Demo chat Agentico (sin Cal.com) + vars de pago.
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ── WhatsApp (proveedor: yCloud por defecto, Meta soportado) ──
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", "")
@@ -83,10 +85,16 @@ ACCEPTED_BANKS = os.getenv(
     "Nequi, Bancolombia, Daviplata, Bre-B, PSE"
 )
 # Cuentas destino del negocio (para validar destinatario en el comprobante)
-PAYMENT_ACCOUNT_BANCOLOMBIA = os.getenv("PAYMENT_ACCOUNT_BANCOLOMBIA", "")
-PAYMENT_ACCOUNT_NEQUI = os.getenv("PAYMENT_ACCOUNT_NEQUI", "")
+PAYMENT_ACCOUNT_BANCOLOMBIA = os.getenv("PAYMENT_ACCOUNT_BANCOLOMBIA", "05400003434")
+PAYMENT_ACCOUNT_NEQUI = os.getenv("PAYMENT_ACCOUNT_NEQUI", "3232325543")
 PAYMENT_ACCOUNT_DAVIPLATA = os.getenv("PAYMENT_ACCOUNT_DAVIPLATA", "")
-PAYMENT_BRE_B_HANDLE = os.getenv("PAYMENT_BRE_B_HANDLE", "")
+PAYMENT_BRE_B_HANDLE = os.getenv("PAYMENT_BRE_B_HANDLE", "@pigeli06")
+PAYMENT_COMPANY_NAME = os.getenv("PAYMENT_COMPANY_NAME", "PIGELI GROUP SAS")
+PAYMENT_COMPANY_NIT = os.getenv("PAYMENT_COMPANY_NIT", "902036619")
+PAYMENT_INFO_IMAGE_URL = os.getenv(
+    "PAYMENT_INFO_IMAGE_URL",
+    "https://lh3.googleusercontent.com/d/1DltkRKg8y66sPmjxqyblQvJT4GobtQkd"
+)
 # Máx intentos de comprobante inválido antes de escalar a humano
 PAYMENT_MAX_ATTEMPTS = int(os.getenv("PAYMENT_MAX_ATTEMPTS", "2"))
 # Ventana de conteo de intentos (horas)

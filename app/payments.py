@@ -44,13 +44,13 @@ def _destinatario_clause() -> str:
     """Construye la cláusula de cuentas destino válidas para el prompt."""
     partes = []
     if config.PAYMENT_ACCOUNT_BANCOLOMBIA:
-        partes.append(f"cuenta ahorros {config.PAYMENT_ACCOUNT_BANCOLOMBIA} (Bancolombia)")
+        partes.append(f"cuenta ahorros {config.PAYMENT_ACCOUNT_BANCOLOMBIA} de Bancolombia a nombre de {config.PAYMENT_COMPANY_NAME} (NIT {config.PAYMENT_COMPANY_NIT})")
+    if config.PAYMENT_BRE_B_HANDLE:
+        partes.append(f"Llave/Bre-B/Transfiya {config.PAYMENT_BRE_B_HANDLE}")
     if config.PAYMENT_ACCOUNT_NEQUI:
         partes.append(f"Nequi {config.PAYMENT_ACCOUNT_NEQUI}")
     if config.PAYMENT_ACCOUNT_DAVIPLATA:
         partes.append(f"Daviplata {config.PAYMENT_ACCOUNT_DAVIPLATA}")
-    if config.PAYMENT_BRE_B_HANDLE:
-        partes.append(f"Bre-B {config.PAYMENT_BRE_B_HANDLE}")
     if not partes:
         return "(no hay cuentas destino configuradas — omitir validación de destinatario)"
     return " O ".join(partes)
