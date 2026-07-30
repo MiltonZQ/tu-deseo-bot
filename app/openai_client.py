@@ -139,6 +139,12 @@ async def complete(user_message: str, history: list[dict],
             estado_lines.append(f"- Género/uso: {estado['genero']}")
         if estado.get("calificado"):
             estado_lines.append("- Ya fue calificado (NO vuelvas a preguntar la categoría)")
+        if estado.get("categoria_agotada"):
+            estado_lines.append(
+                "- ⚠️ CATEGORÍA AGOTADA: ya le mostraste TODAS las opciones disponibles de esta "
+                "categoría. NO ofrezcas 'ver más diseños' ni prometas más fotos (no hay). En su "
+                "lugar, confirma si le gustó alguno de los vistos y sugiere categorías relacionadas."
+            )
         if estado.get("productos_mostrados"):
             estado_lines.append(
                 f"- Productos ya mostrados (IDs): {', '.join(str(i) for i in estado['productos_mostrados'][-10:])}"

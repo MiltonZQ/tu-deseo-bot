@@ -1101,18 +1101,23 @@ async def get_productos_para_recomendar(
     return candidatos
 
 
-async def buscar_producto_especifico(user_text: str, limit: int = 3) -> list[dict]:
+async def buscar_producto_especifico(user_text: str, limit: int = 3,
+                                     exclude_ids: list[int] | None = None) -> list[dict]:
     """Busca productos por nombre cuando el cliente pide algo específico (ej:
-    "tienen el Lovense Diamo?"). Usa coincidencia de tokens con score >= 0.5.
+    "tienen el Lovense Diamo?"). Usa coincidencia de tokens con score >= 1.0.
 
     Para el pipeline: cuando no hay intención de categoría clara pero el texto
     menciona un producto concreto, recupéralo para que el LLM lo muestre.
+
+    exclude_ids: IDs a excluir (productos ya mostrados, para no repetir fotos al
+    pedir "ver más"). Retrocompatible: si es None, no excluye nada.
     """
     if not user_text or len(user_text.strip()) < 3:
         return []
     tokens = _extract_search_tokens(user_text)
     if not tokens:
         return []
+    exclude_set = set(exclude_ids or [])
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
         rows = await conn.fetch(
             """
@@ -1126,6 +1131,8 @@ async def buscar_producto_especifico(user_text: str, limit: int = 3) -> list[dic
     scored = []
     for r in rows:
         p = dict(r)
+        if p["id"] in exclude_set:
+            continue
         score = _score_candidato(p, user_text)
         if score >= 1.0:  # al menos una coincidencia fuerte en el nombre
             p["_score"] = score

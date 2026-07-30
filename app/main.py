@@ -584,8 +584,8 @@ async def _recuperar_candidatos(
         log.info("Fase de venta detectada — fotos desactivadas este turno")
 
     candidatos: list[dict] = []
+    exclude = estado.get("productos_mostrados", []) if estado else []
     if debe_mostrar and cat_func:
-        exclude = estado.get("productos_mostrados", []) if estado else []
         # Excluir productos ya mostrados en la conversación para no repetir fotos
         candidatos = await catalog.get_productos_para_recomendar(
             categoria_funcional=cat_func,
@@ -596,7 +596,8 @@ async def _recuperar_candidatos(
         )
 
     # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,
-    # intentar recuperación por el sustantivo (fallback).
+    # intentar recuperación por el sustantivo (fallback). Se respeta la exclusión
+    # de productos ya mostrados para no repetir fotos al pedir "ver más".
     if not candidatos and clasif["pide_fotos"] and clasif["sustantivo"]:
         cat_func_fb = catalog._INTENCION_A_CATEGORIA_FUNCIONAL.get(
             clasif["sustantivo"],
@@ -605,7 +606,7 @@ async def _recuperar_candidatos(
         if cat_func_fb and cat_func_fb != "juegos-y-accesorios":
             candidatos = await catalog.get_productos_para_recomendar(
                 categoria_funcional=cat_func_fb, genero=genero,
-                user_text=user_text, limit=5,
+                user_text=user_text, exclude_ids=exclude, limit=5,
             )
             if candidatos:
                 cat_func = cat_func_fb
@@ -614,8 +615,10 @@ async def _recuperar_candidatos(
     # 1) por el texto del cliente (producto específico tipo "Lovense Diamo"), y
     # 2) si debe mostrar y hay un sustantivo/categoría, buscar por ese sustantivo.
     # NOTA: solo se ejecuta si debe_mostrar es True o la consulta es explícitamente un producto específico.
+    # Se respeta la exclusión de productos ya mostrados.
     if not candidatos and (debe_mostrar or clasif.get("es_especifico")):
-        especificos = await catalog.buscar_producto_especifico(user_text, limit=5)
+        especificos = await catalog.buscar_producto_especifico(
+            user_text, limit=5, exclude_ids=exclude)
         if especificos:
             candidatos = especificos
 
@@ -623,10 +626,19 @@ async def _recuperar_candidatos(
         # Último recurso: buscar por el sustantivo/intención detectada.
         termino = clasif["sustantivo"] or intencion or cat_func
         if termino:
-            especificos2 = await catalog.buscar_producto_especifico(termino, limit=5)
+            especificos2 = await catalog.buscar_producto_especifico(
+                termino, limit=5, exclude_ids=exclude)
             if especificos2:
                 candidatos = especificos2
                 log.info("Candidatos recuperados por término fallback %r: %d", termino, len(candidatos))
+
+    # Detectar CATEGORÍA AGOTADA: el cliente pidió "ver más" (pide_fotos y ya hay
+    # productos mostrados) pero no quedan candidatos nuevos tras la exclusión, y sí
+    # existe una categoría funcional. Esto señala al LLM que NO ofrezca "ver más
+    # diseños" (ya mostró todo) y en su lugar sugiera categorías relacionadas.
+    categoria_agotada = bool(
+        not candidatos and clasif["pide_fotos"] and bool(exclude) and cat_func
+    )
 
     info = {
         "intencion": intencion,
@@ -635,6 +647,7 @@ async def _recuperar_candidatos(
         "calificado": clasif["calificado"] or (debe_mostrar and bool(candidatos)),
         "pide_fotos": clasif["pide_fotos"],
         "reset_state": reset_state,
+        "categoria_agotada": categoria_agotada,
         # NUNCA mostrar fotos en el primer turno de una categoría general sin calificar.
         "debe_mostrar": debe_mostrar and bool(candidatos),
     }
@@ -807,6 +820,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             "categoria_funcional": info["categoria_funcional"],
             "genero": info["genero"],
             "calificado": info["calificado"],
+            "categoria_agotada": info.get("categoria_agotada", False),
             "productos_mostrados": (estado_previo or {}).get("productos_mostrados", []),
         },
         debe_mostrar_fotos=info["debe_mostrar"],

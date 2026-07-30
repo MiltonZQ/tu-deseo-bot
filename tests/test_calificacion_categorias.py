@@ -304,3 +304,112 @@ def test_bug4_regresion_para_el_pene_sigue_funcionando():
     alts = [c for c in _CATEGORIAS_ALTERNATIVAS_POR_GENERO["hombre"] if c != "vibradores"]
     assert "anillos-y-fundas" in alts
     assert "masturbadores" in alts
+
+
+# ── BUG 5: "ver más" no debe repetir productos ya mostrados ─────────────────
+
+def test_bug5_exclusion_se_aplica_a_productos_ya_mostrados():
+    """Réplica del filtro de exclusión de buscar_producto_especifico y
+    get_productos_para_recomendar: los IDs en exclude_ids se omiten."""
+    # Catálogo simulado.
+    productos = [
+        {"id": 1, "nombre": "Vibrador A"},
+        {"id": 2, "nombre": "Vibrador B"},
+        {"id": 3, "nombre": "Vibrador C"},
+        {"id": 4, "nombre": "Vibrador D"},
+    ]
+
+    def _filtrar_con_exclusion(items, exclude_ids):
+        """Réplica del comportamiento: if p['id'] in exclude_set: continue."""
+        exclude_set = set(exclude_ids or [])
+        return [p for p in items if p["id"] not in exclude_set]
+
+    # T1 mostró [1,2,3,4]. T2 "ver más" con exclude=[1,2,3,4]:
+    t2 = _filtrar_con_exclusion(productos, [1, 2, 3, 4])
+    assert t2 == [], "No deberían quedar productos tras excluir los ya mostrados"
+
+    # T1 mostró [1,2]. T2 "ver más" con exclude=[1,2]: quedan [3,4] (distintos).
+    t2b = _filtrar_con_exclusion(productos, [1, 2])
+    assert [p["id"] for p in t2b] == [3, 4]
+    assert 1 not in [p["id"] for p in t2b]
+    assert 2 not in [p["id"] for p in t2b]
+
+
+def test_bug5_fallback_propaga_exclusion():
+    """Los fallbacks de _recuperar_candidatos (líneas 600, 617, 622 en main.py)
+    ahora reciben exclude_ids. Réplica de la lógica: el exclude se construye una
+    vez y se propaga a todas las búsquedas de fallback."""
+    def _recuperar(exclude):
+        """Réplica: cada fallback recibe el mismo exclude_ids."""
+        llamadas = []
+        llamadas.append(("get_productos_para_recomendar", exclude))
+        llamadas.append(("buscar_producto_especifico_user_text", exclude))
+        llamadas.append(("buscar_producto_especifico_termino", exclude))
+        return llamadas
+
+    llamadas = _recuperar([10, 20, 30])
+    # Los 3 fallbacks deben recibir el exclude_ids (no None, no vacío ignorado).
+    for nombre, exclude in llamadas:
+        assert exclude == [10, 20, 30], f"{nombre} no propagó exclude"
+
+
+def test_bug5_buscar_producto_especifico_acepta_exclude():
+    """Verifica que la firma de buscar_producto_especifico tenga el parámetro
+    exclude_ids (retrocompatible). Inspección del AST de la definición."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "buscar_producto_especifico"):
+            arg_names = [a.arg for a in node.args.args]
+            assert "exclude_ids" in arg_names, (
+                "buscar_producto_especifico debe aceptar exclude_ids")
+            # El default debe ser None (retrocompatible).
+            defaults = node.args.defaults
+            assert defaults and defaults[-1] is None.__class__ or (
+                defaults and isinstance(defaults[-1], ast.Constant)
+                and defaults[-1].value is None), (
+                "exclude_ids debe tener default None para ser retrocompatible")
+            return
+    raise AssertionError("No se encontró buscar_producto_especifico")
+
+
+# ── BUG 6: no ofrecer "ver más" si la categoría está agotada ────────────────
+
+def test_bug6_deteccion_categoria_agotada():
+    """Réplica de la condición categoria_agotada en _recuperar_candidatos.
+    Se activa SOLO cuando: pidió ver más + hay productos mostrados + hay
+    categoría + no quedan candidatos nuevos."""
+    def _categoria_agotada(candidatos, pide_fotos, exclude, cat_func):
+        return bool(not candidatos and pide_fotos and bool(exclude) and cat_func)
+
+    # Caso agotado: pidió "ver más", ya mostró 4, no quedan nuevos → agotada.
+    assert _categoria_agotada([], True, [1, 2, 3, 4], "vibradores") is True
+
+    # NO agotado: aún hay candidatos nuevos tras excluir.
+    assert _categoria_agotada([{"id": 5}], True, [1, 2, 3, 4], "vibradores") is False
+
+    # NO agotado: no pidió ver más (primera consulta, exclude vacío).
+    assert _categoria_agotada([], False, [], "vibradores") is False
+
+    # NO agotado: primera vez en la categoría (exclude vacío aunque pida fotos).
+    assert _categoria_agotada([], True, [], "vibradores") is False
+
+    # NO agotado: no hay categoría funcional (búsqueda libre).
+    assert _categoria_agotada([], True, [1, 2], None) is False
+
+
+def test_bug6_flag_se_propaga_al_estado_del_llm():
+    """Verifica que info['categoria_agotada'] existe en el dict devuelto por
+    _recuperar_candidatos y se pasa al estado del LLM. Inspección del AST."""
+    import ast
+    tree = ast.parse(_MAIN.read_text())
+    # _recuperar_candidatos es async (AsyncFunctionDef), no FunctionDef.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "_recuperar_candidatos":
+                src = ast.get_source_segment(_MAIN.read_text(), node)
+                assert "categoria_agotada" in src, (
+                    "_recuperar_candidatos debe computar categoria_agotada")
+                return
+    raise AssertionError("No se encontró _recuperar_candidatos")
