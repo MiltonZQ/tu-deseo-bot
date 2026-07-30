@@ -1031,3 +1031,51 @@ def test_bug14_pago_no_crea_pedido_a_ciegas():
     # Sin productos → escalar (no crear a ciegas).
     accion2, _ = _decidir([], 0, 50000)
     assert accion2 == "escalar"
+
+
+# ── BUG 15: marcador estructurado [[PEDIDO_DATOS:...]] ────────────────────────
+
+def test_bug15_parser_marcador_datos_pedido():
+    """Réplica del parser de [[PEDIDO_DATOS:...]] en pedidos.py."""
+    import re
+    pat = re.compile(r"\[\[PEDIDO_DATOS:([^\]]+)\]\]", re.IGNORECASE | re.DOTALL)
+
+    def _parsear(reply):
+        m = pat.search(reply)
+        if not m:
+            return {}
+        datos = {}
+        for par in m.group(1).split("|"):
+            par = par.strip()
+            if "=" not in par:
+                continue
+            k, v = par.split("=", 1)
+            if v.strip():
+                datos[k.strip().lower()] = v.strip()
+        return datos
+
+    r = _parsear("Confirmo [[PEDIDO_DATOS:nombre=Juan Pérez|ciudad=Bogotá|direccion=Calle 123 #45|telefono=3232325543]]")
+    assert r["nombre"] == "Juan Pérez"
+    assert r["ciudad"] == "Bogotá"
+    assert r["direccion"] == "Calle 123 #45"
+    assert r["telefono"] == "3232325543"
+
+    # Sin marcador → vacío
+    assert _parsear("Hola") == {}
+
+    # Marcador con campos faltantes
+    r2 = _parsear("[[PEDIDO_DATOS:nombre=Ana|ciudad=Cali]]")
+    assert r2["nombre"] == "Ana"
+    assert "direccion" not in r2
+
+
+def test_bug15_parser_existe_en_pedidos():
+    """Verifica que el parser existe en pedidos.py."""
+    import ast
+    _PED = _ROOT / "app" / "pedidos.py"
+    tree = ast.parse(_PED.read_text())
+    found = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_parsear_datos_pedido":
+            found = True
+    assert found, "Debe existir _parsear_datos_pedido en pedidos.py"

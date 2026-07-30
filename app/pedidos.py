@@ -24,6 +24,41 @@ log = logging.getLogger("pedidos")
 # Marcador que el LLM emite al confirmar la venta (variantes tolerantes).
 _PEDIDO_MARKER_RE = re.compile(r"\[\[PEDIDO:?\s*(CERRADO|CONFIRMADO|FINALIZADO)?\s*\]\]", re.IGNORECASE)
 
+# Marcador estructurado con datos de envío que el LLM emite en el mensaje de
+# confirmación del pedido. Mucho más confiable que extraer del historial con regex.
+# Formato: [[PEDIDO_DATOS:nombre=Juan Pérez|ciudad=Bogotá|direccion=Calle 123|telefono=323...]]
+_PEDIDO_DATOS_RE = re.compile(r"\[\[PEDIDO_DATOS:([^\]]+)\]\]", re.IGNORECASE | re.DOTALL)
+
+
+def _parsear_datos_pedido(reply: str) -> dict:
+    """Extrae datos de envío del marcador [[PEDIDO_DATOS:...]] si está presente.
+
+    Devuelve un dict con las claves nombre/ciudad/direccion/telefono (las que
+    encuentre). Si no hay marcador, devuelve dict vacío {}.
+    """
+    m = _PEDIDO_DATOS_RE.search(reply)
+    if not m:
+        return {}
+    contenido = m.group(1)
+    datos: dict = {}
+    for par in contenido.split("|"):
+        par = par.strip()
+        if "=" not in par:
+            continue
+        clave, valor = par.split("=", 1)
+        clave = clave.strip().lower()
+        valor = valor.strip()
+        if valor:
+            datos[clave] = valor
+    return datos
+
+
+def _limpiar_marker_datos(reply: str) -> str:
+    """Elimina el marcador [[PEDIDO_DATOS:...]] del texto visible al cliente."""
+    clean = _PEDIDO_DATOS_RE.sub("", reply)
+    return re.sub(r"[ \t]{2,}", " ", clean).strip()
+
+
 # Patrones para extraer datos de envío del historial reciente.
 _NOMBRE_RE = re.compile(
     r"(?:me\s+llamo|mi\s+nombre\s+es|soy|yo\s+soy|nombre:?)\s+"
@@ -211,11 +246,21 @@ async def maybe_create_pedido(
                  wa_id, existente["id"], existente["estado"])
         return reply_limpio, existente["id"]
 
-    # Extraer datos de envío del historial.
-    nombre = _extraer_nombre(history)
-    ciudad = _extraer_ciudad(history)
-    direccion = _extraer_direccion(history)
-    telefono = _extraer_telefono(history, wa_id)
+    # Extraer datos de envío. PRIORIDAD: marcador estructurado [[PEDIDO_DATOS:...]]
+    # (mucho más confiable que regex del historial). Fallback al regex si no hay.
+    datos_estructurados = _parsear_datos_pedido(reply)
+    if datos_estructurados:
+        nombre = datos_estructurados.get("nombre")
+        ciudad = datos_estructurados.get("ciudad")
+        direccion = datos_estructurados.get("direccion")
+        telefono = datos_estructurados.get("telefono") or wa_id
+        reply_limpio = _limpiar_marker_datos(reply_limpio)
+        log.info("Datos de envío extraídos del marcador estructurado para %s", wa_id)
+    else:
+        nombre = _extraer_nombre(history)
+        ciudad = _extraer_ciudad(history)
+        direccion = _extraer_direccion(history)
+        telefono = _extraer_telefono(history, wa_id)
 
     # Resolver productos y total del catálogo. Priorizar los IDs persistidos en
     # conversation_state (productos_mostrados) porque los marcadores [FOTO:ID] se
