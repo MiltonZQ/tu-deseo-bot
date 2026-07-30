@@ -648,13 +648,23 @@ async def conversaciones_page(request: Request, wa_id: str = Query("")):
         cls = "active" if t["wa_id"] == selected else ""
         nombre = html.escape(t.get("nombre") or t["wa_id"])
         last = html.escape((t.get("last_content") or "")[:60])
+        is_paused = bool(t.get("bot_paused"))
+        pause_badge = ' <span class="badge badge-red">PAUSADO</span>' if is_paused else ""
+
+        btn_pause_item = (
+            f'<button class="btn-sm btn-green" onclick="toggleBot(\'{t["wa_id"]}\', false)">▶ Reanudar</button>'
+            if is_paused else
+            f'<button class="btn-sm btn-red" onclick="toggleBot(\'{t["wa_id"]}\', true)">⏸ Pausar</button>'
+        )
+
         list_html += f"""
         <div class="item {cls}">
           <a style="text-decoration:none;display:block" href="/admin/conversaciones?wa_id={t['wa_id']}">
-            <div class="item-title">{nombre}</div>
+            <div class="item-title">{nombre} {pause_badge}</div>
             <div class="item-meta">{last}</div>
           </a>
-          <div style="margin-top:8px;display:flex;justify-content:flex-end">
+          <div style="margin-top:8px;display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap">
+            {btn_pause_item}
             <a class="btn-sm btn-gold" style="text-decoration:none" href="/admin/conversaciones?wa_id={t['wa_id']}">💬 Ver Chat</a>
           </div>
         </div>"""
