@@ -618,3 +618,47 @@ def test_bug8_estado_vacio_diagnostica_problema_upstream():
     assert ya == set(), "Estado vacío = no hay nada que filtrar"
     assert len(filtrados) == 2  # pasan (el filtro es inocente; el bug es upstream)
     # El log 'ya_mostrados=0' en producción revela que el estado no persistió.
+
+
+# ── BUG 9 (raíz): $$ en db.py rompía la persistencia del estado ──────────────
+
+def test_bug9_sql_upsert_no_tiene_dollar_dollar_malformado():
+    """CAUSA RAÍZ de TODOS los bugs de 'ver más': en db.py upsert_conversation_state,
+    el placeholder se escribía como $${idx} (dos $). Postgres interpreta $$ como
+    inicio de 'dollar-quoted string', rompiendo el SQL con 'unterminated
+    dollar-quoted string'. Así NUNCA se persistían los productos mostrados y el
+    filtro final siempre los veía vacíos → repetición infinita.
+
+    Este test replica la construcción del SET y verifica que el SQL generado tenga
+    ${idx} (un solo $), no $$${idx}."""
+    # Réplica de la construcción del SET para add_productos_mostrados (db.py:515).
+    def _build_set(idx):
+        return f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(productos_mostrados || ${idx}::bigint[]))"
+
+    # Simula el caso real: con add_productos_mostrados, idx empieza tras 4 campos = 5.
+    sql_fragment = _build_set(idx=5)
+    # NO debe contener '$$' (que activaría dollar-quoting en Postgres).
+    assert "$$" not in sql_fragment, (
+        f"El SQL contiene '$$' (dollar-quoting): {sql_fragment!r}")
+    # Sí debe tener el placeholder $5 bien formado.
+    assert "$5::bigint[]" in sql_fragment
+
+
+def test_bug9_el_codigo_real_no_tiene_dollar_dollar():
+    """Verifica en el fuente real de db.py que NO quede ningún $$ malformado en la
+    función upsert_conversation_state (regresión del bug raíz)."""
+    import ast
+    _DB = _ROOT / "app" / "db.py"
+    tree = ast.parse(_DB.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "upsert_conversation_state":
+                src = ast.get_source_segment(_DB.read_text(), node)
+                # Extraer la línea del SET de productos_mostrados.
+                for line in src.splitlines():
+                    if "productos_mostrados = ARRAY" in line:
+                        assert "$$" not in line, (
+                            f"Queda $$ malformado en db.py: {line.strip()!r}")
+                        assert "$" in line, "Debe tener placeholder $N"
+                return
+    raise AssertionError("No se encontró upsert_conversation_state")

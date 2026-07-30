@@ -512,8 +512,12 @@ async def upsert_conversation_state(
             idx += 1
         if add_productos_mostrados:
             # Añadir a los existentes con UNION (sin duplicados).
+            # OJO: usar ${idx} (un solo $) como placeholder de asyncpg. Escribir
+            # $$ activa el 'dollar-quoted string' de Postgres y rompe el SQL con
+            # 'unterminated dollar-quoted string', lo que hace que NUNCA se persistan
+            # los productos mostrados (causa raíz del bug de repetir fotos en 'ver más').
             sets.append(
-                f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(productos_mostrados || $${idx}::bigint[]))"
+                f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(productos_mostrados || ${idx}::bigint[]))"
             )
             params.append(list(add_productos_mostrados))
             idx += 1
