@@ -330,6 +330,9 @@ async def get_productos_en_texto(text: str, limit: int = 3) -> list[dict]:
 # re-sincronizaciones de WooCommerce sin degradarse.
 
 CATEGORIAS_FUNCIONALES = [
+    "anillos-vibradores",
+    "fundas-pene",
+    "bombas-pene",
     "vibradores",
     "succionadores",
     "dildos",
@@ -351,12 +354,20 @@ _REGLAS_CATEGORIA = [
     (("lubricant", "lubric", "estimulant", "retardant", "spray", "vela ", "aceite ",
       "friction", "estrechant", "booster", "serum", "crema "), "lubricantes-y-cuidado"),
     # Succionadores de clítoris (antes que vibradores genéricos)
-    (("succionador", "suction", "air pulse", "succión de clítoris", "succio"), "succionadores"),
-    # Bondage / BDSM / pareja — ANTES que lencería para que antifaz/esposas/bondage
-    # no caigan en lencería por tener cat_origen="Lencería" en WooCommerce.
+    (("succionador", "suction", "air pulse", "succión de clítoris", "succio", "pro 2", "satisfyer pro"), "succionadores"),
+    # Bombas de vacío para el pene (separado de anillos)
+    (("bomba para", "bomba pene", "bomba automatic", "bomba automática", "bomba de vacio", "bomba vacio", "hefesto"), "bombas-pene"),
+    # Anillos vibradores y eróticos para él/pareja
+    (("anillo vibrador", "anillos vibradores", "anillo vibrante", "anillos vibrantes",
+      "flexring", "satisfyer bull", "diamo", "candil", "frodo", "optimus", "anillo peneano", "anillos peneanos"), "anillos-vibradores"),
+    # Fundas para el pene (sin vibración o extensores)
+    (("funda para el pene", "funda pene", "extensor pene", "engrosador"), "fundas-pene"),
+    # Anillos genéricos
+    (("anillo", "anillos"), "anillos-vibradores"),
+    # Bondage / BDSM / pareja
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
       "kit ", "vendas", "mordaza"), "pareja-y-bondage"),
-    # Lencería y disfraces (incluye suspensorios masculinos, pecheras y lencería erótica de hombre)
+    # Lencería y disfraces
     (("suspensorio", "suspensor", "pechera", "body ", "baby doll", "babydoll", "conjunto ", "lencería", "lenceria",
       "disfra", "pantuflas", "pezonera", "ligero", "encaje"), "lenceria"),
     # Anal: plugs, bolas anales, estimuladores de próstata, dilatadores, arneses
@@ -364,11 +375,10 @@ _REGLAS_CATEGORIA = [
       "arnés", "strap on", "strap-on", "cola ", "entrenamiento anal"), "anal"),
     # Masturbadores masculinos
     (("masturbador", "huevo masturb", "vagina "), "masturbadores"),
-    # Dildos / consoladores (realistas, con ventosa, dobles)
+    # Dildos / consoladores
     (("dildo", "consolador", "realista", "ventosa"), "dildos"),
-    # Anillos y fundas para pene (incluye bombas de vacío)
-    (("anillo", "funda", "bomba para", "bomba pene", "bomba automatic",
-      "bomba automática", "potenciador"), "anillos-y-fundas"),
+    # Funda secundaria
+    (("funda", "fundas"), "fundas-pene"),
     # Vibradores (rabbit, bala, huevo vibr, tipo hitachi, panty vibr, app)
     (("vibrador", "vibr ", "rabbit", "bala vibr", "huevo vibr", "hitachi", "panty vibr",
       "con app", "control remoto", "con vibrac"), "vibradores"),
@@ -388,12 +398,7 @@ def _normalizar_texto(texto: str | None) -> str:
 
 def _categoria_normalizada(nombre: str, descripcion: str | None = "",
                            cat_origen: str | None = "") -> str:
-    """Clasifica un producto en una categoría funcional mediante reglas de matching.
-
-    Evalúa nombre + descripción + categoría origen contra _REGLAS_CATEGORIA.
-    Devuelve la primera categoría funcional que coincida, o 'juegos-y-accesorios'
-    como fallback (cajón de sastre explícito para lo no clasificable).
-    """
+    """Clasifica un producto en una categoría funcional mediante reglas de matching."""
     haystack = _normalizar_texto(f"{nombre or ''} {descripcion or ''} {cat_origen or ''}")
     if not haystack.strip():
         return "juegos-y-accesorios"
@@ -401,7 +406,6 @@ def _categoria_normalizada(nombre: str, descripcion: str | None = "",
         for clave in claves:
             if clave in haystack:
                 return cat_funcional
-    # Mapeo por categoría origen para casos sin palabra clave en el nombre
     cat_o = _normalizar_texto(cat_origen)
     if "bondage" in cat_o:
         return "pareja-y-bondage"
@@ -413,30 +417,22 @@ def _categoria_normalizada(nombre: str, descripcion: str | None = "",
 
 
 # ── Capa de género/uso (para quién es el producto) ──
-#
-# La tabla productos NO tiene columna de género. Se infiere en runtime por reglas
-# sobre nombre + descripción + categoría origen, igual que _categoria_normalizada.
-# Esto es lo que permite enviar anillos para pene (hombre) y no vibradores de
-# clítoris (mujer) cuando el cliente dice "para él / chimbo / pene".
-
-# (palabras clave, género) — orden importa: se evalúa de arriba a abajo y la
-# primera coincidencia gana. Van de lo más específico a lo más general.
+# Orden prioritario: Succionadores/Mujer van PRIMERO para evitar que productos femeninos caigan en hombre.
 _REGLAS_GENERO = [
+    # MUJER: succionadores, clítoris, punto G, rabbit, baby doll, pezonera
+    (("clitoris", "clítoris", "clitorial", "punto g", "succionador", "suction", "air pulse",
+      "rabbit", "panty vibr", "pezonera", "baby doll", "babydoll", "estimulacion clitor", "pro 2", "satisfyer pro"), "mujer"),
     # HOMBRE: anillos/fundas para pene, masturbadores, próstata, bombas, lencería masculina
     (("anillo", "funda", "bomba pene", "bomba para", "bomba automatic", "bomba automática",
       "prostat", "próstata", "masturbador", "suspensorio", "suspensor", "pechera",
       "potenciador", "lovense diamo", "flexring", "candil", "frodo", "optimus", "diamo",
       "pene"), "hombre"),
-    # PAREJA: juguetes de uso compartido (We-Vibe Chorus, doble estimulación, arnés con dildo)
+    # PAREJA: juguetes de uso compartido
     (("pareja", "we vibe", "we-vibe", "chorus", "doble estimulacion", "doble estimulación",
       "rabbit para pare", "arnes con dildo", "strap on", "strap-on"), "pareja"),
-    # ANAL: plugs, bolas anales, dilatadores (puede ser para él o ella; se marca anal)
+    # ANAL: plugs, bolas anales, dilatadores
     (("plug", "bolas anal", "dilatador", "entrenamiento anal", "culo", "estimulacion anal",
       "estimulación anal"), "anal"),
-    # MUJER: clítoris, punto G (no próstata), succionadores, rabbit, panty, body, baby doll
-    (("clitoris", "clítoris", "clitorial", "punto g", "succionador", "suction", "air pulse",
-      "rabbit", "panty vibr", "pezonera", "baby doll", "babydoll", "body ",
-      "estimulacion clitor", "estimulación clitor"), "mujer"),
 ]
 
 
@@ -892,11 +888,32 @@ async def get_productos_para_recomendar(
         async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
             return [dict(r) for r in await conn.fetch(sql)]
 
+    def _pasa_filtro_negativo(p: dict) -> bool:
+        norm_text = _normalizar_texto(f"{p.get('nombre', '')} {p.get('descripcion', '')}")
+        usr_text = _normalizar_texto(user_text)
+        # Si busca anillos vibradores
+        if categoria_funcional in ("anillos-vibradores", "anillos-y-fundas") or "anillo" in usr_text:
+            if "bomba" in norm_text and "anillo" not in norm_text:
+                return False
+            if any(w in norm_text for w in ("succionador", "air pulse", "pro 2", "satisfyer pro")):
+                return False
+        # Si el género del cliente es hombre (para él / pene)
+        if genero == "hombre":
+            if any(w in norm_text for w in ("succionador", "air pulse", "para ella", "estimulacion clitor", "baby doll")):
+                return False
+        # Si busca bombas de pene
+        if categoria_funcional == "bombas-pene":
+            if any(w in norm_text for w in ("succionador", "baby doll")):
+                return False
+        return True
+
     def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
         out: list[dict] = []
         for r in rows:
             p = dict(r)
             if p["id"] in exclude_set:
+                continue
+            if not _pasa_filtro_negativo(p):
                 continue
             cat_func = _categoria_normalizada(p["nombre"], p["descripcion"], p["categoria"])
             gen = _genero_normalizado(p["nombre"], p["descripcion"], p["categoria"])
