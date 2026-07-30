@@ -689,6 +689,7 @@ import re as _re_mod
 _FOTO_REQUEST_RE = _re_mod.compile(
     r"\b(foto[s]?|imagen(es)?|fotografia[s]?|muestr(a|ame|amelo|amelas)|"
     r"mand(a|ame|ala|amelas)|envi(a|ame|ala|amelas)|ver la[s]? (foto|imagen)|"
+    r"ver (mas|más)|(mas|más) opciones|otra[s]? opciones|dejame ver|déjame ver|"
     r"dame|las foto[s]?|puta[s]? foto[s]?|ver el producto|cada uno|todas las (foto|imagen))\b",
     _re_mod.IGNORECASE,
 )

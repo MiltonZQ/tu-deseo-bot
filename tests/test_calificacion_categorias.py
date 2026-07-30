@@ -152,3 +152,13 @@ def test_mapa_preguntas_cubre_todas_las_categorias_amplias():
     }
     faltantes = categorias_esperadas - set(_PREGUNTAS_CALIFICACION)
     assert not faltantes, f"Faltan preguntas para: {faltantes}"
+
+
+def test_foto_request_re_ver_mas_opciones():
+    """Verifica que _FOTO_REQUEST_RE detecte frases como 'Dejame ver mas opciones'."""
+    foto_re = _extraer_constantes(_CAT, ["_FOTO_REQUEST_RE"])["_FOTO_REQUEST_RE"]
+    assert foto_re.search("Dejame ver mas opciones")
+    assert foto_re.search("quiero ver mas")
+    assert foto_re.search("muestrame mas")
+    assert foto_re.search("otras opciones")
+    assert foto_re.search("dame mas diseños")

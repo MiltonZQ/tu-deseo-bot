@@ -586,24 +586,14 @@ async def _recuperar_candidatos(
     candidatos: list[dict] = []
     if debe_mostrar and cat_func:
         exclude = estado.get("productos_mostrados", []) if estado else []
-        # Si pide "ver más", excluir los ya mostrados; si es nueva consulta, no excluir.
-        pide_mas = clasif["pide_fotos"] and any(
-            w in catalog._normalizar_texto(user_text)
-            for w in ("mas", "más", "otro", "otra", "otros", "otras", "diseño", "diseños", "opciones")
-        )
+        # Excluir productos ya mostrados en la conversación para no repetir fotos
         candidatos = await catalog.get_productos_para_recomendar(
             categoria_funcional=cat_func,
             genero=genero,
             user_text=user_text,
-            exclude_ids=exclude if pide_mas else None,
+            exclude_ids=exclude,
             limit=5,
         )
-        # Si pedir "más" dejó la lista vacía (ya mostró todo), reintentar sin excluir.
-        if pide_mas and not candidatos:
-            candidatos = await catalog.get_productos_para_recomendar(
-                categoria_funcional=cat_func, genero=genero,
-                user_text=user_text, exclude_ids=None, limit=5,
-            )
 
     # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,
     # intentar recuperación por el sustantivo (fallback).
