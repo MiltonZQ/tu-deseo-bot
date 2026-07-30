@@ -912,8 +912,8 @@ async def pedidos_por_dia(days: int = 7) -> list[dict]:
         rows = await conn.fetch(
             """
             SELECT created_at::date AS dia,
-                   COUNT(*) FILTER (WHERE estado <> 'cancelado') AS pedidos,
-                   COUNT(*) FILTER (WHERE estado = 'cancelado') AS cancelados
+                   COUNT(*) FILTER (WHERE estado NOT IN ('cancelado', 'devuelto')) AS pedidos,
+                   COUNT(*) FILTER (WHERE estado IN ('cancelado', 'devuelto')) AS cancelados
             FROM pedidos
             WHERE created_at::date >= CURRENT_DATE - $1::int
             GROUP BY created_at::date
@@ -934,7 +934,7 @@ async def productos_top(days: int = 30, limit: int = 10) -> list[dict]:
             FROM pedidos_items pi
             JOIN pedidos p ON p.id = pi.pedido_id
             WHERE p.created_at::date >= CURRENT_DATE - $1::int
-              AND p.estado <> 'cancelado'
+              AND p.estado NOT IN ('cancelado', 'devuelto')
             GROUP BY pi.nombre_snapshot
             ORDER BY total DESC
             LIMIT $2
