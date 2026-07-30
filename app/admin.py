@@ -852,15 +852,41 @@ async def escalados_page(request: Request, status: str = Query("")):
           <div class="item-actions">
             <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(e.get('wa_id') or '')}" target="_blank">💬 WhatsApp</a>
             <a class="btn-sm btn-gold" style="text-decoration:none" href="/admin/escalados/{e['id']}">Ver detalle</a>
+            <button class="btn-sm btn-red" onclick="eliminar({e['id']})">🗑 Eliminar</button>
           </div>
         </div>"""
 
+    btn_limpiar = f'<button class="btn-sm btn-red" onclick="limpiarTodos()">🗑 Limpiar todos ({len(esc)})</button>' if esc else ''
+
     return _layout(f"""
-    <div class="topbar"><h1>🚨 Escalados</h1></div>
+    <div class="topbar">
+      <h1>🚨 Escalados</h1>
+      {btn_limpiar}
+    </div>
     <div class="card">
       <div class="card-title">Conversaciones escaladas ({len(esc)})</div>
       {rows if rows else '<div class="empty">No hay escalados activos 🎉</div>'}
     </div>
+    <script>
+    async function eliminar(id) {{
+      if(!confirm('¿Estás seguro de eliminar este escalado?')) return;
+      try {{
+        var r = await fetch('/admin/escalados/' + id + '/delete', {{method:'POST'}});
+        var d = await r.json();
+        if(d.ok) {{ toast('Escalado eliminado 🗑️', true); setTimeout(function(){{location.reload()}}, 500); }}
+        else toast('Error al eliminar', false);
+      }} catch(e) {{ toast('Error de conexión', false); }}
+    }}
+    async function limpiarTodos() {{
+      if(!confirm('¿Estás seguro de eliminar TODOS los escalados de la base de datos?')) return;
+      try {{
+        var r = await fetch('/admin/escalados/clear', {{method:'POST'}});
+        var d = await r.json();
+        if(d.ok) {{ toast('Se eliminaron ' + d.deleted + ' escalados 🗑️', true); setTimeout(function(){{location.reload()}}, 500); }}
+        else toast('Error al limpiar escalados', false);
+      }} catch(e) {{ toast('Error de conexión', false); }}
+    }}
+    </script>
     """, "escalados")
 
 
@@ -883,6 +909,7 @@ async def escalado_detalle(request: Request, eid: int):
       <div class="item-actions" style="margin-top:10px">
         <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(e.get('wa_id') or '')}" target="_blank">💬 WhatsApp</a>
         <button class="btn-sm btn-green" onclick="resolver({e['id']})">✓ Resolver</button>
+        <button class="btn-sm btn-red" onclick="eliminar({e['id']})">🗑 Eliminar</button>
       </div>
     </div>
     <script>
@@ -891,8 +918,31 @@ async def escalado_detalle(request: Request, eid: int):
       var d = await r.json();
       if(d.ok) {{ toast('Marcado como resuelto', true); setTimeout(function(){{location.href='/admin/escalados'}}, 600); }}
     }}
+    async function eliminar(id) {{
+      if(!confirm('¿Estás seguro de eliminar este escalado?')) return;
+      try {{
+        var r = await fetch('/admin/escalados/' + id + '/delete', {{method:'POST'}});
+        var d = await r.json();
+        if(d.ok) {{ toast('Escalado eliminado 🗑️', true); setTimeout(function(){{location.href='/admin/escalados'}}, 600); }}
+        else toast('Error al eliminar', false);
+      }} catch(e) {{ toast('Error de conexión', false); }}
+    }}
     </script>
     """, "escalados")
+
+
+@router.post("/escalados/clear", response_class=JSONResponse)
+async def escalados_clear(request: Request):
+    _require_login(request)
+    deleted = await db.clear_all_escalations()
+    return {"ok": True, "deleted": deleted}
+
+
+@router.post("/escalados/{eid}/delete", response_class=JSONResponse)
+async def escalado_delete(request: Request, eid: int):
+    _require_login(request)
+    ok = await db.delete_escalation(eid)
+    return {"ok": ok}
 
 
 @router.post("/escalados/{eid}/update", response_class=JSONResponse)

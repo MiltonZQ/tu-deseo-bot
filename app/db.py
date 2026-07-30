@@ -652,6 +652,21 @@ async def escalation_counts() -> dict:
     return {r["status"]: r["n"] for r in rows}
 
 
+async def delete_escalation(escalation_id: int) -> bool:
+    """Elimina una escalación por ID."""
+    async with _pool.acquire() as conn:
+        res = await conn.execute("DELETE FROM escalations WHERE id = $1", escalation_id)
+        return res.endswith("1") or res.endswith("ROW")
+
+
+async def clear_all_escalations() -> int:
+    """Elimina todos los escalados de la base de datos."""
+    async with _pool.acquire() as conn:
+        res = await conn.execute("DELETE FROM escalations")
+        return int(res.split()[-1]) if res else 0
+
+
+
 # ── Bot pause/resume ──
 
 async def is_bot_paused(wa_id: str) -> bool:
@@ -884,6 +899,7 @@ async def clear_all_conversations() -> dict[str, int]:
             "conversation_state": await conn.execute("DELETE FROM conversation_state"),
             "processed_messages": await conn.execute("DELETE FROM processed_messages"),
             "pending_follow_ups": await conn.execute("DELETE FROM pending_follow_ups"),
+            "escalations": await conn.execute("DELETE FROM escalations"),
         }
     return {
         key: int(value.split()[-1]) if value else 0
