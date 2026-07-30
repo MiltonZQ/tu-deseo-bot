@@ -516,8 +516,12 @@ async def upsert_conversation_state(
             # $$ activa el 'dollar-quoted string' de Postgres y rompe el SQL con
             # 'unterminated dollar-quoted string', lo que hace que NUNCA se persistan
             # los productos mostrados (causa raíz del bug de repetir fotos en 'ver más').
+            # IMPORTANTE: calificar la columna como conversation_state.productos_mostrados
+            # para evitar AmbiguousColumnError (en ON CONFLICT, Postgres no sabe si
+            # refiere a la fila existente o a EXCLUDED). Sin esto, la persistencia falla
+            # y productos_mostrados nunca se guarda → se repiten fotos.
             sets.append(
-                f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(productos_mostrados || ${idx}::bigint[]))"
+                f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(conversation_state.productos_mostrados || ${idx}::bigint[]))"
             )
             params.append(list(add_productos_mostrados))
             idx += 1
