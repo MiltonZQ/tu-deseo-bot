@@ -428,6 +428,17 @@ _ALIASES_TYPO = {
     "arne": "arnes", "arnse": "arnes", "arnes": "arnes", "harnez": "arnes",
     # masturbador
     "masturb": "masturbador", "masturbador": "masturbador",
+    # Marcas (typos comunes → forma correcta)
+    "lovence": "lovense", "lobense": "lovense", "lovns": "lovense", "lovene": "lovense",
+    "lovense": "lovense",
+    "satisfier": "satisfyer", "satifyer": "satisfyer", "satisfier": "satisfyer",
+    "satisfyr": "satisfyer", "satisfayer": "satisfyer", "satisfyer": "satisfyer",
+    "tengue": "tenga", "tenga": "tenga", "tenega": "tenga",
+    "wevibe": "we vibe", "we-vibe": "we vibe", "we vibe": "we vibe",
+    "wevay": "we vibe", "webe": "we vibe",
+    "womanicer": "womanizer", "wumanizer": "womanizer", "womanizer": "womanizer",
+    "lelo": "lelo", "lello": "lelo",
+    "camtoys": "camtoyz", "cam toy": "camtoyz", "camtoy": "camtoyz", "camtoyz": "camtoyz",
 }
 
 _ALIASES_TYPO_RE = re.compile(
@@ -980,6 +991,23 @@ async def clasificar_intencion_cliente(user_text: str,
 
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
 
+    # ES_ESPECÍFICO: el cliente pide un producto concreto por marca/modelo (Lovense
+    # Lush, Satisfyer Pro 2, Tenga Egg, We-Vibe Chorus...). En ese caso hay que
+    # buscarlo por nombre y mostrarlo DIRECTO, sin pasar por la calificación de
+    # categoría (que genera la pregunta genérica innecesaria). El user_text ya viene
+    # corregido de typos (_corregir_typos), así que "lovence"→"lovense" matchea.
+    _MARCAS_CONOCIDAS = (
+        "lovense", "satisfyer", "tenga", "we vibe", "wevibe", "chorus",
+        "womanizer", "lelo", "fun factory", "pipedream", "california dreaming",
+        "camtoyz", "lerot", "optimus",
+        "lush", "hush", "diamo", "max", "nova", "ambu", "oski", "ferri",
+        "gush", "pro 2", "pro 3",
+    )
+    es_especifico = any(marca in norm_user for marca in _MARCAS_CONOCIDAS)
+    if es_especifico:
+        # Producto específico → mostrar directo (no preguntar calificación).
+        calificado = True
+
     return {
         "intencion": intencion,
         "categoria_funcional": categoria_funcional,
@@ -988,6 +1016,7 @@ async def clasificar_intencion_cliente(user_text: str,
         "pide_fotos": pide_fotos,
         "sustantivo": sustantivo,
         "subtipo_detectado": subtipo_detectado,
+        "es_especifico": es_especifico,
     }
 
 

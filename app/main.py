@@ -590,7 +590,18 @@ async def _recuperar_candidatos(
 
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
-    if debe_mostrar and cat_func:
+
+    # Si el cliente pidió un PRODUCTO ESPECÍFICO por marca/modelo (Lovense Lush,
+    # Satisfyer Pro 2), buscar por NOMBRE primero (más preciso que categoría).
+    # Así "Lovense Lush" muestra Lovense, no vibradores genéricos al azar.
+    if clasif.get("es_especifico") and debe_mostrar:
+        especificos = await catalog.buscar_producto_especifico(
+            user_text, limit=5, exclude_ids=exclude)
+        if especificos:
+            candidatos = especificos
+            log.info("Producto específico encontrado por nombre: %d", len(candidatos))
+
+    if not candidatos and debe_mostrar and cat_func:
         # Excluir productos ya mostrados en la conversación para no repetir fotos.
         # Pasar el subtipo detectado para priorizar productos que lo cumplan
         # (exactitud: "doble" → dildos dobles primero, "ventosa" → con ventosa).
