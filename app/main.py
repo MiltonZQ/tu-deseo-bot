@@ -871,6 +871,12 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     foto_ids, reply = _extraer_marcadores_foto(reply)
     _, reply = _extraer_marcadores_categoria(reply)
 
+    # Limpiar el marcador [[PEDIDO_DATOS:...]] del texto visible. Es un marcador
+    # INTERNO (datos estructurados para crear el pedido) y jamás debe verse en el
+    # chat. Se limpia aquí SIEMPRE, antes de enviar, sin importar el flujo.
+    reply = re.sub(r"\[\[PEDIDO_DATOS:[^\]]*\]\]", "", reply).strip()
+    reply = re.sub(r"[ \t]{2,}", " ", reply)
+
     # VALIDAR candidatos: los [FOTO:ID] del LLM deben estar en la lista de
     # candidatos confirmados. Esto elimina alucinaciones (ej: Antifaz/Esposas
     # cuando el cliente pidió anillo). Si el LLM no emitió marcadores válidos
