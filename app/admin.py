@@ -77,6 +77,7 @@ BASE_CSS = f"""
     color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     min-height: 100vh;
+    overflow-x: hidden;
   }}
   a {{ color: var(--gold); text-decoration: none; }}
   button, input, select {{ font: inherit; }}
@@ -114,12 +115,13 @@ BASE_CSS = f"""
   .hamburger {{
     display: none;
     position: fixed; top: 12px; left: 12px; z-index: 200;
-    width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--panel); color: #fff; font-size: 18px; cursor: pointer;
+    width: 40px; height: 40px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: #fff; font-size: 20px; cursor: pointer;
     align-items: center; justify-content: center;
+    box-shadow: var(--shadow);
   }}
   .overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 99; }}
-  .main {{ padding: 24px 28px 40px; min-width: 0; }}
+  .main {{ padding: 24px 28px 40px; min-width: 0; width: 100%; }}
   .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 8px; }}
   h1 {{ font-size: 22px; color: #fff; }}
   .sub {{ color: var(--muted); font-size: 13px; }}
@@ -129,23 +131,23 @@ BASE_CSS = f"""
   .kpi-num {{ font-size: 28px; font-weight: 700; color: var(--gold); }}
   .kpi-label {{ font-size: 12px; color: var(--muted); margin-top: 4px; }}
 
-  .card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 14px; }}
-  .card-title {{ font-size: 14px; color: var(--gold); font-weight: 600; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; justify-content: space-between; }}
-  .chart-box {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }}
+  .card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 14px; min-width: 0; }}
+  .card-title {{ font-size: 14px; color: var(--gold); font-weight: 600; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; justify-content: space-between; flex-wrap: wrap; }}
+  .chart-box {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; min-width: 0; }}
   .empty {{ color: #555; text-align: center; padding: 24px 0; font-size: 13px; }}
 
-  .item {{ background: #160b11; border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 8px; }}
+  .item {{ background: #160b11; border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 8px; min-width: 0; }}
   .item-row {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }}
-  .item-title {{ font-size: 14px; color: #fff; font-weight: 600; }}
-  .item-meta {{ font-size: 12px; color: var(--muted); margin-top: 3px; }}
-  .item-actions {{ display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }}
+  .item-title {{ font-size: 14px; color: #fff; font-weight: 600; word-break: break-word; }}
+  .item-meta {{ font-size: 12px; color: var(--muted); margin-top: 3px; word-break: break-word; }}
+  .item-actions {{ display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }}
 
-  .btn {{ padding: 8px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; }}
+  .btn {{ padding: 8px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }}
   .btn-gold {{ background: var(--gold); color: #fff; }}
   .btn-red {{ background: var(--red); color: #fff; }}
   .btn-green {{ background: var(--green); color: #fff; }}
   .btn-wa {{ background: var(--wa); color: #fff; }}
-  .btn-sm {{ padding: 5px 10px; font-size: 11px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; }}
+  .btn-sm {{ padding: 6px 12px; font-size: 12px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }}
 
   .badge {{ font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; display: inline-block; }}
   .badge-gold {{ background: var(--gold); color: #fff; }}
@@ -158,10 +160,18 @@ BASE_CSS = f"""
   .sel {{ width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #331e29; background: #160b11; color: #fff; font-size: 14px; margin-bottom: 8px; appearance: none; }}
   label {{ font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }}
 
-  .login-box {{ max-width: 380px; margin: 80px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }}
+  .tabs-scroll {{ display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 12px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }}
+  .tabs-scroll::-webkit-scrollbar {{ display: none; }}
+
+  .chat-layout {{ display: grid; grid-template-columns: 320px 1fr; gap: 14px; position: relative; }}
+  .chat-list-card {{ max-height: calc(100vh - 140px); overflow-y: auto; }}
+  .chat-view-card {{ max-height: calc(100vh - 140px); display: flex; flex-direction: column; overflow: hidden; }}
+  .chat-messages {{ flex: 1; overflow-y: auto; padding-right: 4px; max-height: calc(100vh - 220px); }}
+
+  .login-box {{ max-width: 380px; margin: 60px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; width: 90%; }}
   .login-box h1 {{ text-align: center; margin-bottom: 20px; }}
 
-  .chat-bubble {{ padding: 10px 14px; border-radius: 12px; margin: 6px 0; max-width: 85%; font-size: 13px; line-height: 1.5; }}
+  .chat-bubble {{ padding: 10px 14px; border-radius: 12px; margin: 6px 0; max-width: 88%; font-size: 13px; line-height: 1.5; word-break: break-word; }}
   .chat-bot {{ background: #241326; color: #ddd; align-self: flex-start; }}
   .chat-user {{ background: var(--gold); color: #fff; align-self: flex-end; margin-left: auto; }}
 
@@ -169,7 +179,7 @@ BASE_CSS = f"""
   .search-box .inp {{ margin-bottom: 0; padding-right: 36px; }}
   .search-clear {{ position: absolute; right: 10px; top: 10px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }}
 
-  .toast-wrap {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999; }}
+  .toast-wrap {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999; width: 90%; max-width: 400px; text-align: center; }}
   .toast {{ padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; display: none; }}
   .toast.ok {{ background: #1b5e20; color: #a5d6a7; border: 1px solid #2e7d32; display: block; }}
   .toast.err {{ background: #b71c1c; color: #ffcdd2; border: 1px solid #c62828; display: block; }}
@@ -180,8 +190,20 @@ BASE_CSS = f"""
     .side.open {{ transform: translateX(0); }}
     .hamburger {{ display: flex; }}
     .overlay.open {{ display: block; }}
-    .main {{ padding: 56px 12px 24px; }}
-    .kpis {{ grid-template-columns: repeat(2, 1fr); }}
+    .main {{ padding: 56px 12px 24px; min-width: 0; width: 100%; }}
+    .kpis {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+    .kpi-card {{ padding: 12px; }}
+    .kpi-num {{ font-size: 24px; }}
+    .inp, .sel {{ font-size: 16px; }}
+    
+    .item-actions {{ width: 100%; justify-content: flex-start; }}
+    .item-actions .btn-sm, .item-actions .sel {{ flex: 1 1 auto; text-align: center; justify-content: center; }}
+
+    /* Conversaciones en Móvil */
+    .chat-layout {{ grid-template-columns: 1fr; }}
+    .chat-view-card {{ display: none; }}
+    .chat-layout.has-selected .chat-list-card {{ display: none; }}
+    .chat-layout.has-selected .chat-view-card {{ display: flex; max-height: calc(100vh - 100px); }}
   }}
 </style>
 """
@@ -400,9 +422,9 @@ async def pedidos_page(request: Request, estado: str = Query("")):
         pedidos = []
 
     tabs = "".join(
-        f'<a class="btn-sm {"btn-gold" if (estado or "")==e else ""}" style="{"color:#fff" if estado==e else "background:#25131c;color:#9a8a93"}" href="/admin/pedidos?estado={e}">{e}</a>'
+        f'<a class="btn-sm {"btn-gold" if (estado or "")==e else ""}" style="{"color:#fff" if estado==e else "background:#25131c;color:#9a8a93"};white-space:nowrap" href="/admin/pedidos?estado={e}">{e.capitalize()}</a>'
         for e in PEDIDO_ESTADOS
-    ) + f'<a class="btn-sm {"btn-gold" if estado=="" else ""}" style="{"color:#fff" if estado=="" else "background:#25131c;color:#9a8a93"}" href="/admin/pedidos">Todos</a>'
+    ) + f'<a class="btn-sm {"btn-gold" if estado=="" else ""}" style="{"color:#fff" if estado=="" else "background:#25131c;color:#9a8a93"};white-space:nowrap" href="/admin/pedidos">Todos</a>'
 
     rows = ""
     for p in pedidos:
@@ -421,14 +443,14 @@ async def pedidos_page(request: Request, estado: str = Query("")):
           <div class="item-actions">
             <a class="btn-sm btn-gold" style="text-decoration:none" href="/admin/pedidos/{p['id']}">👁 Detalle</a>
             <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(str(p.get('wa_id') or ''))}" target="_blank">💬 WhatsApp</a>
-            <select class="sel" style="width:auto;margin:0;padding:5px 10px;font-size:11px" onchange="cambiarEstado({p['id']}, this.value)">{opts}</select>
+            <select class="sel" style="width:auto;margin:0;padding:5px 10px;font-size:12px" onchange="cambiarEstado({p['id']}, this.value)">{opts}</select>
           </div>
         </div>"""
 
     return _layout(f"""
     <div class="topbar"><h1>🛍 Pedidos</h1><span class="sub">{len(pedidos)} registros</span></div>
     <div class="card">
-      <div class="item-actions" style="margin-bottom:12px">{tabs}</div>
+      <div class="tabs-scroll" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:12px">{tabs}</div>
       {rows if rows else '<div class="empty">Sin pedidos</div>'}
     </div>
     <script>
@@ -545,7 +567,7 @@ async def pedido_detalle_page(request: Request, pedido_id: int):
     """, "pedidos")
 
 
-# ── Conversaciones (chat-view porteado de Demo Agentico) ──
+# ── Conversaciones (chat-view master-detail responsive) ──
 
 @router.get("/conversaciones", response_class=HTMLResponse)
 async def conversaciones_page(request: Request, wa_id: str = Query("")):
@@ -555,7 +577,10 @@ async def conversaciones_page(request: Request, wa_id: str = Query("")):
     except Exception:
         threads = []
 
+    has_explicit = bool(wa_id)
     selected = wa_id or (threads[0]["wa_id"] if threads else "")
+    has_selected_class = "has-selected" if has_explicit else ""
+
     messages = []
     lead = None
     if selected:
@@ -570,8 +595,17 @@ async def conversaciones_page(request: Request, wa_id: str = Query("")):
     for t in threads:
         cls = "active" if t["wa_id"] == selected else ""
         nombre = html.escape(t.get("nombre") or t["wa_id"])
-        last = html.escape((t.get("last_content") or "")[:50])
-        list_html += f'<a class="item {cls}" style="text-decoration:none;display:block" href="/admin/conversaciones?wa_id={t["wa_id"]}"><div class="item-title">{nombre}</div><div class="item-meta">{last}</div></a>'
+        last = html.escape((t.get("last_content") or "")[:60])
+        list_html += f"""
+        <div class="item {cls}">
+          <a style="text-decoration:none;display:block" href="/admin/conversaciones?wa_id={t['wa_id']}">
+            <div class="item-title">{nombre}</div>
+            <div class="item-meta">{last}</div>
+          </a>
+          <div style="margin-top:8px;display:flex;justify-content:flex-end">
+            <a class="btn-sm btn-gold" style="text-decoration:none" href="/admin/conversaciones?wa_id={t['wa_id']}">💬 Ver Chat</a>
+          </div>
+        </div>"""
 
     # Chat derecho
     bubbles = ""
@@ -590,22 +624,40 @@ async def conversaciones_page(request: Request, wa_id: str = Query("")):
     pausa_badge = '<span class="badge badge-red">BOT PAUSADO</span>' if paused else ""
 
     return _layout(f"""
-    <div class="topbar"><h1>💬 Conversaciones</h1></div>
-    <div style="display:grid;grid-template-columns:300px 1fr;gap:14px">
-      <div class="card" style="max-height:70vh;overflow-y:auto">{list_html or '<div class="empty">Sin conversaciones</div>'}</div>
-      <div class="card">
-        {f'''<div class="item-row" style="align-items:center;margin-bottom:8px">
-          <div><div class="item-title">{html.escape(selected)} {pausa_badge}</div>
-          <div class="item-meta">{html.escape(lead.get('nombre') or '') if lead else ''}</div></div>
+    <div class="topbar"><h1>💬 Conversaciones</h1><span class="sub">{len(threads)} hilos</span></div>
+    <div class="chat-layout {has_selected_class}" id="chat-layout">
+      <div class="card chat-list-card">
+        <div class="card-title">📱 Contactos recientes</div>
+        {list_html or '<div class="empty">Sin conversaciones</div>'}
+      </div>
+      <div class="card chat-view-card">
+        {f'''
+        <div class="card-title" style="flex-wrap:wrap;gap:8px">
+          <div>
+            <a class="btn-sm" style="background:#25131c;color:#9a8a93;text-decoration:none;margin-right:6px" href="/admin/conversaciones" onclick="closeMobileChat(event)">← Volver a lista</a>
+            <strong>{html.escape(selected)}</strong> {pausa_badge}
+            <div class="item-meta">{html.escape(lead.get('nombre') or '') if lead else ''}</div>
+          </div>
           <div class="item-actions">
             <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(selected)}" target="_blank">💬 WhatsApp</a>
             {pause_btn}
           </div>
         </div>
-        <div style="max-height:60vh;overflow-y:auto">{bubbles or '<div class="empty">Sin mensajes</div>'}</div>''' if selected else '<div class="empty">Selecciona una conversación</div>'}
+        <div class="chat-messages">{bubbles or '<div class="empty">Sin mensajes en este hilo</div>'}</div>
+        ''' if selected else '<div class="empty">Selecciona una conversación o presiona "Ver Chat"</div>'}
       </div>
     </div>
     <script>
+    function closeMobileChat(e) {{
+      var layout = document.getElementById('chat-layout');
+      if (layout) {{
+        layout.classList.remove('has-selected');
+        if (history.pushState) {{
+          history.pushState(null, '', '/admin/conversaciones');
+        }}
+        e.preventDefault();
+      }}
+    }}
     async function toggleBot(wa, pause) {{
       try {{
         var r = await fetch('/admin/contacts/' + encodeURIComponent(wa) + '/' + (pause ? 'pause' : 'resume'), {{method:'POST'}});
@@ -615,7 +667,6 @@ async def conversaciones_page(request: Request, wa_id: str = Query("")):
       }} catch(e) {{ toast('Error de conexión', false); }}
     }}
     </script>
-    <style>@media (max-width:780px){{.shell + .main div[style*="grid-template-columns:300px"]{{grid-template-columns:1fr!important}}}}</style>
     """, "conversaciones")
 
 
