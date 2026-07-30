@@ -760,6 +760,7 @@ _SUBTIPO_KEYWORDS = (
     "rabbit", "punto g", "clitor", "clitori", "hitachi", "bala", "huevo vibr",
     # Anal
     "prostat", "próstata", "cola", "primera vez", "vibracion", "vibración",
+    "ducha", "enema",
     # Lubricantes
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
@@ -799,6 +800,7 @@ _SUBTIPO_A_CATEGORIA = {
     "bala": "vibradores", "huevo vibr": "vibradores",
     # Anal
     "prostat": "anal", "próstata": "anal", "primera vez": "anal",
+    "ducha": "anal", "enema": "anal",
     # Lencería
     "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
     "body": "lenceria", "disfraz": "lenceria", "suspensorio": "lenceria",
