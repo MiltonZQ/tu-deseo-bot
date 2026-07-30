@@ -444,6 +444,7 @@ async def pedidos_page(request: Request, estado: str = Query("")):
             <a class="btn-sm btn-gold" style="text-decoration:none" href="/admin/pedidos/{p['id']}">👁 Detalle</a>
             <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(str(p.get('wa_id') or ''))}" target="_blank">💬 WhatsApp</a>
             <select class="sel" style="width:auto;margin:0;padding:5px 10px;font-size:12px" onchange="cambiarEstado({p['id']}, this.value)">{opts}</select>
+            <button class="btn-sm btn-red" onclick="eliminarPedido({p['id']}, this)">🗑 Eliminar</button>
           </div>
         </div>"""
 
@@ -462,6 +463,24 @@ async def pedidos_page(request: Request, estado: str = Query("")):
         else toast(d.error || 'Error', false);
       }} catch(e) {{ toast('Error de conexión', false); }}
     }}
+    async function eliminarPedido(id, btn) {{
+      if(!confirm('¿Seguro que deseas eliminar el pedido #' + id + '? Esta acción no se puede deshacer.')) return;
+      btn.disabled = true;
+      try {{
+        var r = await fetch('/admin/pedidos/' + id + '/delete', {{method:'POST'}});
+        var d = await r.json();
+        if(d.ok) {{
+          toast('Pedido #' + id + ' eliminado', true);
+          setTimeout(function(){{ location.reload(); }}, 500);
+        }} else {{
+          toast(d.error || 'Error al eliminar', false);
+          btn.disabled = false;
+        }}
+      }} catch(e) {{
+        toast('Error de conexión', false);
+        btn.disabled = false;
+      }}
+    }}
     </script>
     """, "pedidos")
 
@@ -475,6 +494,13 @@ async def pedido_estado_endpoint(request: Request, pedido_id: int):
         return {"ok": False, "error": "estado inválido"}
     await db.update_pedido_estado(pedido_id, estado)
     return {"ok": True}
+
+
+@router.post("/pedidos/{pedido_id}/delete", response_class=JSONResponse)
+async def pedido_delete_endpoint(request: Request, pedido_id: int):
+    _require_login(request)
+    ok = await db.delete_pedido(pedido_id)
+    return {"ok": ok}
 
 
 @router.get("/pedidos/{pedido_id}", response_class=HTMLResponse)
@@ -544,6 +570,7 @@ async def pedido_detalle_page(request: Request, pedido_id: int):
       <div class="item-actions" style="margin-top:12px">
         <select class="sel" style="width:auto;padding:8px 12px" onchange="cambiarEstado({pedido_id}, this.value)">{opts}</select>
         <a class="btn-sm btn-wa" style="text-decoration:none" href="{_wa_link(str(pedido.get('wa_id') or ''))}" target="_blank">💬 WhatsApp</a>
+        <button class="btn-sm btn-red" onclick="eliminarPedidoDetalle({pedido_id})">🗑 Eliminar Pedido</button>
         <a class="btn-sm" style="text-decoration:none;background:#25131c;color:#9a8a93" href="/admin/pedidos">← Volver</a>
       </div>
     </div>
@@ -561,6 +588,19 @@ async def pedido_detalle_page(request: Request, pedido_id: int):
         var d = await r.json();
         if(d.ok) {{ toast('Estado actualizado a ' + estado, true); setTimeout(function(){{location.reload();}}, 600); }}
         else toast(d.error || 'Error', false);
+      }} catch(e) {{ toast('Error de conexión', false); }}
+    }}
+    async function eliminarPedidoDetalle(id) {{
+      if(!confirm('¿Seguro que deseas eliminar el pedido #' + id + '? Esta acción no se puede deshacer.')) return;
+      try {{
+        var r = await fetch('/admin/pedidos/' + id + '/delete', {{method:'POST'}});
+        var d = await r.json();
+        if(d.ok) {{
+          toast('Pedido eliminado', true);
+          setTimeout(function(){{ location.href = '/admin/pedidos'; }}, 500);
+        }} else {{
+          toast(d.error || 'Error al eliminar', false);
+        }}
       }} catch(e) {{ toast('Error de conexión', false); }}
     }}
     </script>

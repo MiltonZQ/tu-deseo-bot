@@ -981,6 +981,12 @@ async def update_pedido_estado(pedido_id: int, estado: str) -> None:
         )
 
 
+async def delete_pedido(pedido_id: int) -> bool:
+    async with _pool.acquire() as conn:
+        res = await conn.execute("DELETE FROM pedidos WHERE id = $1", pedido_id)
+        return res.endswith("1") or res.endswith("ROW")
+
+
 async def get_pedido(pedido_id: int) -> dict | None:
     async with _pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM pedidos WHERE id = $1", pedido_id)
