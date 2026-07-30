@@ -142,25 +142,47 @@ async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], 
         })
         total += precio
 
-    # 1) PRIORIDAD: productos en los últimos mensajes del CLIENTE (role=user).
-    #    Ahí está su confirmación real de qué quiere comprar.
-    user_msgs = [m for m in history if m.get("role") == "user"]
-    for msg in user_msgs[-3:]:  # últimos 3 mensajes del cliente
+    # 0) PRIORIDAD MÁXIMA: IDs de los marcadores [FOTO:ID] en los últimos mensajes
+    #    del ASISTENTE. El bot muestra productos al cliente con marcadores [FOTO:123]
+    #    que contienen los IDs EXACTOS del catálogo. Es la fuente más confiable de
+    #    qué productos vio/compró el cliente (mejor que coincidencia de nombres).
+    #    Regex tolerante a espacios (igual que _FOTO_MARKER_RE en main.py).
+    _foto_id_re = re.compile(r"\[\s*FOTO:\s*(\d+)\s*\]", re.IGNORECASE)
+    asistente_msgs = [m for m in history if m.get("role") == "assistant"]
+    for msg in asistente_msgs[-3:]:  # últimos 3 mensajes del bot
         contenido = msg.get("content", "")
         if not contenido:
             continue
-        for p in await catalog.get_productos_en_texto(contenido, limit=5):
-            _agregar(p)
+        for m_fid in _foto_id_re.finditer(contenido):
+            pid = int(m_fid.group(1))
+            if pid in seen_ids:
+                continue
+            p = await catalog.get_producto_by_id(pid)
+            if p:
+                _agregar(p)
             if len(items) >= 8:
                 break
         if len(items) >= 8:
             break
 
-    # 2) FALLBACK: si el cliente no mencionó productos claros en sus últimos mensajes,
-    #    tomar el ÚLTIMO mensaje del asistente (donde el bot usualmente reconfirma
-    #    la compra concreta), no todo el historial.
+    # 1) Si los marcadores no dieron productos, buscar por nombres en los últimos
+    #    mensajes del CLIENTE (su confirmación real de compra).
     if not items:
-        asistente_msgs = [m for m in history if m.get("role") == "assistant"]
+        user_msgs = [m for m in history if m.get("role") == "user"]
+        for msg in user_msgs[-3:]:  # últimos 3 mensajes del cliente
+            contenido = msg.get("content", "")
+            if not contenido:
+                continue
+            for p in await catalog.get_productos_en_texto(contenido, limit=5):
+                _agregar(p)
+                if len(items) >= 8:
+                    break
+            if len(items) >= 8:
+                break
+
+    # 2) FALLBACK: si nada matcheó, tomar el ÚLTIMO mensaje del asistente y buscar
+    #    productos por nombre.
+    if not items:
         if asistente_msgs:
             ultimo = asistente_msgs[-1].get("content", "")
             if ultimo:

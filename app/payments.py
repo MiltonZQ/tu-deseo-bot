@@ -264,48 +264,75 @@ async def handle_inbound_image(
         if pedido_id:
             await db.update_pedido_estado(pedido_id, "pagado")
         else:
-            # Si no había un pedido pendiente previo, crear el pedido automáticamente en estado 'pagado'
+            # Si no había un pedido pendiente previo, resolver los productos del
+            # catálogo (vía marcadores [FOTO:ID] del historial) para crear el pedido
+            # con el TOTAL REAL del catálogo, no con el monto que diga el comprobante.
+            # Si no se pueden resolver productos, ESCALAR a humano (no aceptar a ciegas
+            # cualquier monto) — era el bug "cualquier valor pasa en el 2do intento".
             try:
                 from app import pedidos
                 nombre = pedidos._extraer_nombre(history)
                 ciudad = pedidos._extraer_ciudad(history)
                 direccion = pedidos._extraer_direccion(history)
                 telefono = pedidos._extraer_telefono(history, wa_id)
-                items, _ = await pedidos._resolver_productos_y_total(history)
-                monto_pagado = result.get("monto") or 0
+                items, total_catalogo = await pedidos._resolver_productos_y_total(history)
 
-                pedido_id = await db.create_pedido({
-                    "wa_id": wa_id,
-                    "nombre_cliente": nombre,
-                    "direccion_envio": direccion,
-                    "ciudad": ciudad,
-                    "telefono_contacto": telefono,
-                    "estado": "pagado",
-                    "total": monto_pagado,
-                    "creado_por": "bot",
-                    "notas": f"Pago verificado automáticamente por bot (Banco: {result.get('banco') or 'S/N'}, Ref: {result.get('referencia') or 'S/N'})",
-                })
-                if abono_id:
-                    await db.update_abono_pedido_id(abono_id, pedido_id)
-                for item in items:
-                    try:
-                        await db.add_pedido_item(
-                            pedido_id=pedido_id,
-                            producto_id=item["producto_id"],
-                            nombre_snapshot=item["nombre"],
-                            cantidad=item["cantidad"],
-                            precio_unitario=item["precio_unitario"],
-                        )
-                    except Exception:
-                        pass
+                if items and total_catalogo > 0:
+                    # Productos resueltos: crear pedido con total del catálogo (confiable).
+                    pedido_id = await db.create_pedido({
+                        "wa_id": wa_id,
+                        "nombre_cliente": nombre,
+                        "direccion_envio": direccion,
+                        "ciudad": ciudad,
+                        "telefono_contacto": telefono,
+                        "estado": "pagado",
+                        "total": total_catalogo,
+                        "creado_por": "bot",
+                        "notas": f"Pago verificado por bot (Banco: {result.get('banco') or 'S/N'}, Ref: {result.get('referencia') or 'S/N'}). Total catálogo=${total_catalogo:,}, comprobante=${result.get('monto') or 0:,}.",
+                    })
+                    if abono_id:
+                        await db.update_abono_pedido_id(abono_id, pedido_id)
+                    for item in items:
+                        try:
+                            await db.add_pedido_item(
+                                pedido_id=pedido_id,
+                                producto_id=item["producto_id"],
+                                nombre_snapshot=item["nombre"],
+                                cantidad=item["cantidad"],
+                                precio_unitario=item["precio_unitario"],
+                            )
+                        except Exception:
+                            log.warning("Error insertando item %s en pedido: %s", item.get("nombre"), "")
+                else:
+                    # No se pudieron resolver productos → escalar a humano. No crear
+                    # pedido a ciegas con monto del comprobante (riesgo de aceptar
+                    # cualquier monto sin validar contra el catálogo).
+                    log.warning("Pago verificado de %s sin productos resueltos — escalando a humano", wa_id)
+                    await db.set_bot_paused(wa_id, True, reason="pago_sin_productos")
+                    await db.create_escalation({
+                        "wa_id": wa_id,
+                        "customer_name": nombre or wa_id,
+                        "reason": "pago_sin_productos",
+                        "reason_detail": f"Pago verificado pero no se detectaron productos en el chat. Monto comprobante: ${result.get('monto') or 0:,}",
+                        "issue_summary": "Pago verificado sin pedido previo ni productos detectables",
+                    })
             except Exception:
-                log.exception("Error creando pedido automático tras pago verificado de %s", wa_id)
+                log.exception("Error procesando pago verificado de %s", wa_id)
 
-        await whatsapp_client.send_text(
-            wa_id,
-            "✅ ¡Pago verificado! Gracias. Nuestro equipo confirmará el despacho en breve. 🎉",
-        )
-        log.info("Comprobante VÁLIDO para %s (pedido %s)", wa_id, pedido_id)
+        # Mensaje al cliente: si se escaló (sin productos), mensaje de revisión;
+        # si el pedido se creó/pagó, confirmación normal.
+        if pedido_id:
+            await whatsapp_client.send_text(
+                wa_id,
+                "✅ ¡Pago verificado! Gracias. Nuestro equipo confirmará el despacho en breve. 🎉",
+            )
+            log.info("Comprobante VÁLIDO para %s (pedido %s)", wa_id, pedido_id)
+        else:
+            await whatsapp_client.send_text(
+                wa_id,
+                "✅ Recibimos tu comprobante. Nuestro equipo lo revisará y confirmará tu pedido en breve. 🙌",
+            )
+            log.info("Comprobante VÁLIDO para %s pero escalado (sin pedido)", wa_id)
         return True
 
     # inválido → ¿agotó intentos?

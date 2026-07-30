@@ -973,3 +973,61 @@ def test_bug13_blindaje_muestra_si_hay_productos():
     # No hay estado previo → no aplica (primera consulta).
     r3 = _blindaje_simulado(True, False, False, [], "pareja-y-bondage")
     assert r3 == "no_aplica"
+
+
+# ── BUG 14: resolver productos con [FOTO:ID] + pago no acepta monto a ciegas ───
+
+def test_bug14_resolver_parsea_marcadores_foto_id():
+    """Réplica del parseo de [FOTO:ID] en _resolver_productos_y_total. Los IDs
+    de los marcadores son la fuente más confiable de qué productos vio el cliente."""
+    import re
+    foto_id_re = re.compile(r"\[\s*FOTO:\s*(\d+)\s*\]", re.IGNORECASE)
+
+    def _extraer_ids(texto_asistente):
+        return [int(m.group(1)) for m in foto_id_re.finditer(texto_asistente)]
+
+    # Caso del bug: marcadores con espacios.
+    ids = _extraer_ids("Mira estas opciones 👇 [ FOTO:64209 ] [ FOTO:64512 ] ¿Te gustó?")
+    assert ids == [64209, 64512]
+    # Formato normal.
+    ids2 = _extraer_ids("[FOTO:100] [FOTO:200]")
+    assert ids2 == [100, 200]
+    # Sin marcadores → vacío.
+    ids3 = _extraer_ids("Hola, ¿cómo estás?")
+    assert ids3 == []
+
+
+def test_bug14_resolver_marcadores_es_prioridad():
+    """Verifica que el código real prioriza los marcadores [FOTO:ID] en el resolver."""
+    import ast
+    _PED = _ROOT / "app" / "pedidos.py"
+    tree = ast.parse(_PED.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "_resolver_productos_y_total":
+                src = ast.get_source_segment(_PED.read_text(), node)
+                assert "FOTO" in src, "El resolver debe parsear marcadores [FOTO:ID]"
+                # Debe estar ANTES del fallback por nombres (prioridad).
+                foto_pos = src.index("FOTO")
+                nombre_pos = src.index("get_productos_en_texto")
+                assert foto_pos < nombre_pos, "Marcadores [FOTO:ID] deben ir antes del fallback por nombres"
+                return
+    raise AssertionError("No se encontró _resolver_productos_y_total")
+
+
+def test_bug14_pago_no_crea_pedido_a_ciegas():
+    """Réplica de la lógica: si no hay pedido previo y no se resuelven productos,
+    ESCALAR a humano (no crear pedido con monto del comprobante a ciegas)."""
+    def _decidir(items_resueltos, total_catalogo, monto_comprobante):
+        if items_resueltos and total_catalogo > 0:
+            return ("crear_pedido", total_catalogo)
+        return ("escalar", None)
+
+    # Productos resueltos → crear con total del catálogo (no del comprobante).
+    accion, total = _decidir([{"id": 1}], 50000, 999999)
+    assert accion == "crear_pedido"
+    assert total == 50000  # total del catálogo, no 999999 del comprobante
+
+    # Sin productos → escalar (no crear a ciegas).
+    accion2, _ = _decidir([], 0, 50000)
+    assert accion2 == "escalar"
