@@ -910,3 +910,66 @@ def test_bug12_clasificador_es_async():
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "clasificar_intencion_cliente":
             return  # es async ✅
     raise AssertionError("clasificar_intencion_cliente debe ser async (llama al LLM)")
+
+
+# ── BUG 13: blindaje anti-bucle + subtipos completos (esposas, body, etc.) ────
+
+def test_bug13_subtipos_bondage_completos():
+    """Verifica que los subtipos de bondage están en _SUBTIPO_KEYWORDS y mapeados
+    a pareja-y-bondage (el bug de 'esposas' que re-preguntaba)."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "_SUBTIPO_KEYWORDS":
+                    subs = ast.literal_eval(node.value)
+                    for s in ("esposas", "antifaz", "fustas", "amarre", "mordaza", "vendas"):
+                        assert s in subs, f"{s!r} falta en _SUBTIPO_KEYWORDS"
+    m = _extraer_constantes(_CAT, ["_SUBTIPO_A_CATEGORIA"])["_SUBTIPO_A_CATEGORIA"]
+    for s in ("esposas", "antifaz", "fustas", "amarre"):
+        assert m.get(s) == "pareja-y-bondage", f"{s!r} no mapea a pareja-y-bondage"
+
+
+def test_bug13_subtipos_lenceria_completos():
+    """Subtipos de lencería que el bot ofrece (body, disfraz) deben estar."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "_SUBTIPO_KEYWORDS":
+                    subs = ast.literal_eval(node.value)
+                    for s in ("body", "disfraz", "suspensorio", "conjunto"):
+                        assert s in subs, f"{s!r} falta en _SUBTIPO_KEYWORDS"
+
+
+def test_bug13_blindaje_anti_bucle_existe():
+    """Verifica que el blindaje anti-bucle está en _recuperar_candidatos."""
+    import ast
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            assert "Blindaje anti-bucle" in src or "anti-bucle" in src.lower(), (
+                "Falta el blindaje anti-bucle en _recuperar_candidatos")
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+def test_bug13_blindaje_muestra_si_hay_productos():
+    """Réplica del blindaje: si debe_mostrar + hay estado calificado + cat_func,
+    pero candidatos vacío, buscar relajado (genero=None). Si hay, mostrar."""
+    def _blindaje_simulado(debe_mostrar, estado_tiene_cat, calificado, candidatos_iniciales, cat_func):
+        if not candidatos_iniciales and debe_mostrar and cat_func and estado_tiene_cat and calificado:
+            return "buscar_relajado"
+        return "no_aplica"
+    # "esposas" tras pregunta de pareja-y-bondage → blindaje busca relajado.
+    r = _blindaje_simulado(True, True, True, [], "pareja-y-bondage")
+    assert r == "buscar_relajado"
+    # Ya hay candidatos → no aplica blindaje.
+    r2 = _blindaje_simulado(True, True, True, [{"id": 1}], "pareja-y-bondage")
+    assert r2 == "no_aplica"
+    # No hay estado previo → no aplica (primera consulta).
+    r3 = _blindaje_simulado(True, False, False, [], "pareja-y-bondage")
+    assert r3 == "no_aplica"

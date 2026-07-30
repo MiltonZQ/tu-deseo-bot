@@ -598,6 +598,23 @@ async def _recuperar_candidatos(
             subtipo=clasif.get("subtipo_detectado"),
         )
 
+    # BLINDAJE ANTI-BUCLE: si el cliente está respondiendo a una pregunta de
+    # calificación (estado.calificado=True, debe_mostrar=True) PERO no se
+    # encontraron candidatos (género/subtipo restrictivo no matchea nada),
+    # buscar productos de la categoría RELAJADO AL MÁXIMO (sin género, sin
+    # subtipo). Garantiza que cualquier respuesta a una calificación muestre
+    # productos en vez de re-preguntar infinitamente. Si aun así no hay (categoría
+    # realmente vacía), el bot derivará honestamente — nunca re-pregunta lo mismo.
+    if not candidatos and debe_mostrar and cat_func and estado_tiene_cat and estado.get("calificado"):
+        log.info("Blindaje anti-bucle: buscando %s relajado (género=%s→None)", cat_func, genero)
+        candidatos = await catalog.get_productos_para_recomendar(
+            categoria_funcional=cat_func,
+            genero=None,  # relajar género
+            user_text=user_text,
+            exclude_ids=exclude,
+            limit=5,
+        )
+
     # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,
     # intentar recuperación por el sustantivo (fallback). Se respeta la exclusión
     # de productos ya mostrados para no repetir fotos al pedir "ver más".

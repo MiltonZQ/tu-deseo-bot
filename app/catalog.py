@@ -748,7 +748,7 @@ _SUBTIPO_KEYWORDS = (
     # Vibradores
     "rabbit", "punto g", "clitor", "clitori", "hitachi", "bala", "huevo vibr",
     # Anal
-    "prostat", "próstata", "cola", "primera vez",
+    "prostat", "próstata", "cola", "primera vez", "vibracion", "vibración",
     # Lubricantes
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
@@ -757,7 +757,13 @@ _SUBTIPO_KEYWORDS = (
     # "anillo vibrador" se cubre porque "anillo" es categoría y el género/contexto
     # determina el subtipo en la regla híbrida.)
     # Lencería
-    "arnes", "arnés", "liguero", "pechera", "encaje",
+    "arnes", "arnés", "liguero", "pechera", "encaje", "body", "disfraz",
+    "suspensorio", "conjunto",
+    # Bondage / BDSM (pareja-y-bondage)
+    "esposas", "esposa", "antifaz", "antifaces", "fustas", "fusta",
+    "latigo", "látigo", "amarre", "amarres", "mordaza", "vendas",
+    # Succionadores
+    "doble estimulacion", "doble estimulación",
     # Generales de control
     "con app", "control remoto", "recargable", "inalambrico", "inalámbrico",
     "sencillo", "simple",
@@ -784,6 +790,15 @@ _SUBTIPO_A_CATEGORIA = {
     "prostat": "anal", "próstata": "anal", "primera vez": "anal",
     # Lencería
     "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
+    "body": "lenceria", "disfraz": "lenceria", "suspensorio": "lenceria",
+    "conjunto": "lenceria",
+    # Bondage / BDSM
+    "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
+    "antifaz": "pareja-y-bondage", "antifaces": "pareja-y-bondage",
+    "fustas": "pareja-y-bondage", "fusta": "pareja-y-bondage",
+    "latigo": "pareja-y-bondage", "látigo": "pareja-y-bondage",
+    "amarre": "pareja-y-bondage", "amarres": "pareja-y-bondage",
+    "mordaza": "pareja-y-bondage", "vendas": "pareja-y-bondage",
 }
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
 # juguetes con calentamiento. "cola" puede ser plug anal o lencería. "clitor"/
