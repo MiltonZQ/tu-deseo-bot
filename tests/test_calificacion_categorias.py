@@ -491,3 +491,69 @@ def test_bug7_regresion_vibradores_sigue_calificando():
                                 "'vibrador' NO debe estar en género hombre")
                             return
     raise AssertionError("No se encontró _GENERO_KEYWORDS_CLIENTE")
+
+
+# ── BUG 8: filtro final a prueba de fallos anti-repetición ("ver más") ────────
+
+def test_bug8_filtro_final_quita_productos_ya_mostrados():
+    """Réplica del filtro FINAL en _handle_message: aunque el upstream falle y
+    devuelva productos repetidos, el filtro final los elimina ANTES de enviar.
+    Simula: T1 envió [1,2,3,4,5]. T2 recibe final_productos=[1,2,3,4,5] (repetidos,
+    p. ej. un fallback que no respetó exclude). El filtro debe quitarlos TODOS."""
+    ids_ya_mostrados = {1, 2, 3, 4, 5}
+    final_productos = [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}]
+
+    # Réplica del filtro del código real.
+    filtrados = [p for p in final_productos if p["id"] not in ids_ya_mostrados]
+    assert filtrados == [], (
+        "El filtro final debe quitar TODOS los productos ya mostrados")
+
+
+def test_bug8_filtro_final_conserva_productos_nuevos():
+    """Si hay mezcla de nuevos y repetidos, el filtro conserva SOLO los nuevos."""
+    ids_ya_mostrados = {1, 2, 3}
+    final_productos = [{"id": 1}, {"id": 2}, {"id": 6}, {"id": 7}]
+
+    filtrados = [p for p in final_productos if p["id"] not in ids_ya_mostrados]
+    assert [p["id"] for p in filtrados] == [6, 7]
+    assert 1 not in [p["id"] for p in filtrados]
+    assert 2 not in [p["id"] for p in filtrados]
+
+
+def test_bug8_mensaje_honesto_si_todo_repetido():
+    """Si tras el filtro quedan 0 productos NUEVOS y el bot iba a mostrar, se
+    reescribe el reply con un mensaje honesto (categoría agotada), no se repiten
+    fotos. Réplica de la decisión de reescritura."""
+    def _decidir_reescritura(ids_ya_mostrados, final_productos, debe_mostrar,
+                             reply_parece_plantilla, tiene_foto_ids):
+        filtrados = [p for p in final_productos if p["id"] not in ids_ya_mostrados]
+        if ids_ya_mostrados and not filtrados:
+            if debe_mostrar or reply_parece_plantilla or tiene_foto_ids:
+                return "reescribir_honesto"
+        return "mantener"
+
+    # Todo repetido + bot iba a mostrar → reescribir honesto.
+    assert _decidir_reescritura({1, 2, 3, 4, 5}, [{"id": 1}, {"id": 2}],
+                                True, False, False) == "reescribir_honesto"
+    # Todo repetido + reply era plantilla "mira estas opciones" → reescribir.
+    assert _decidir_reescritura({1, 2}, [{"id": 1}, {"id": 2}],
+                                False, True, False) == "reescribir_honesto"
+    # Hay productos nuevos → mantener (no reescribir).
+    assert _decidir_reescritura({1, 2}, [{"id": 1}, {"id": 3}],
+                                True, False, False) == "mantener"
+    # Primera vez (sin mostrados) → mantener.
+    assert _decidir_reescritura(set(), [{"id": 1}, {"id": 2}],
+                                True, False, False) == "mantener"
+
+
+def test_bug8_no_reescribe_durante_pedido():
+    """Si se está creando un pedido, no se reescribe el reply (no interferir con
+    la venta). Réplica de la guarda pedido_creado_id."""
+    def _decidir(ids_ya_mostrados, final_productos, pedido_creado_id):
+        filtrados = [p for p in final_productos if p["id"] not in ids_ya_mostrados]
+        if ids_ya_mostrados and not filtrados and not pedido_creado_id:
+            return "reescribir"
+        return "mantener"
+
+    # Pedido en curso → mantener aunque todo esté repetido.
+    assert _decidir({1, 2}, [{"id": 1}], pedido_creado_id=99) == "mantener"

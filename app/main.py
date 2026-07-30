@@ -878,6 +878,50 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             )
             reply = pregunta
 
+    # DEFENSA A PRUEBA DE FALLOS — filtro FINAL de productos ya mostrados.
+    # Aunque la exclusión se propaga por todos los caminos de _recuperar_candidatos,
+    # este es el PUNTO ÚNICO de garantía: nunca se envía una foto de un producto
+    # que ya se mostró en un turno anterior. Cubre todos los caminos (query
+    # principal, fallbacks, Intento E-bis, etc.) sin depender de que cada uno
+    # respete exclude_ids. Es la red definitiva anti-repetición ("ver más").
+    ids_ya_mostrados = set((estado_previo or {}).get("productos_mostrados", []))
+    if ids_ya_mostrados and final_productos:
+        ids_a_enviar = [p["id"] for p in final_productos]
+        repetidos = [pid for pid in ids_a_enviar if pid in ids_ya_mostrados]
+        if repetidos:
+            log.warning(
+                "Filtro final: %d producto(s) ya mostrados detectados y removidos "
+                "antes de enviar a %s (upstream no respetó exclude): %s",
+                len(repetidos), wa_id, repetidos,
+            )
+            final_productos = [p for p in final_productos if p["id"] not in ids_ya_mostrados]
+
+    # Si tras el filtro final no quedan productos NUEVOS que enviar (todo ya fue
+    # mostrado) y el bot iba a mostrar fotos (debe_mostrar) o ya redactó una
+    # plantilla de "mostrar productos", reescribimos el reply con un mensaje
+    # honesto: la categoría está agotada. Así el cliente nunca recibe la misma
+    # foto repetida ni un "mira estas opciones" sin fotos nuevas.
+    if ids_ya_mostrados and not final_productos and not pedido_creado_id:
+        if info["debe_mostrar"] or _OFRECE_PRODUCTOS_RE.search(reply) or foto_ids:
+            log.warning(
+                "Categoría agotada para %s (cat=%s): todos los candidatos ya fueron "
+                "mostrados — reescribiendo reply con mensaje honesto",
+                wa_id, info["categoria_funcional"],
+            )
+            cat_nombres = {
+                "vibradores": "vibradores", "dildos": "dildos", "anal": "juguetes anales",
+                "masturbadores": "masturbadores", "anillos-y-fundas": "anillos y fundas",
+                "lubricantes-y-cuidado": "lubricantes", "lenceria": "lencería",
+                "succionadores": "succionadores", "pareja-y-bondage": "productos de pareja",
+                "juegos-y-accesorios": "accesorios",
+            }
+            nombre_cat = cat_nombres.get(info["categoria_funcional"], "ese producto")
+            reply = (
+                f"Te mostré todas las opciones de {nombre_cat} que tenemos disponibles "
+                f"😊 ¿Te gustó alguno de los que viste, o te interesa que te ayude con "
+                f"otro tipo de producto? Tenemos vibradores, lencería, lubricantes y más."
+            )
+
     # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
     # (con datos de envío del historial y total calculado del catálogo).
     reply, pedido_creado_id = await pedidos.maybe_create_pedido(
@@ -903,7 +947,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         except Exception:
             log.exception("Error enviando imagen de medios de pago a %s", wa_id)
 
-    # Enviar fotos (candidatos ya validados por el pipeline).
+    # Enviar fotos (candidatos ya validados + filtrados por el filtro final).
     enviados_ids = await _enviar_fotos_productos(wa_id, final_productos)
 
     # GARANTÍA ESTRUCTURAL "nunca prometer sin enviar": si el sistema decidió
