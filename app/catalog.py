@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -394,6 +395,59 @@ def _normalizar_texto(texto: str | None) -> str:
     import unicodedata
     norm = unicodedata.normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode()
     return norm
+
+
+# Alias de typos comunes del cliente → forma correcta. Aplicado al user_text
+# ANTES de clasificar, para que mensajes como "anl" (anal), "mjer" (mujer),
+# "dldo" (dildo) se clasifiquen bien sin matching difuso genérico (que causaría
+# falsos positivos en mensajes cortos). Conservador: solo sustantivos de producto.
+# Se aplica por PALABRA completa (límites de palabra) para no romper palabras
+# largas que contengan la secuencia (ej: no tocar "analógico").
+_ALIASES_TYPO = {
+    # anal
+    "anl": "anal", "naal": "anal", "anla": "anal", "anall": "anal", "aanl": "anal",
+    "anall": "anal", "anaal": "anal",
+    # mujer
+    "mjer": "mujer", "mjeres": "mujeres", "mujer": "mujer",
+    # dildo
+    "dldo": "dildo", "didlo": "dildo", "dildos": "dildo", "dilbo": "dildo",
+    # vibrador
+    "vibradro": "vibrador", "vibbrador": "vibrador", "vibradr": "vibrador",
+    "vibador": "vibrador", "vibrador": "vibrador",
+    # lubricante
+    "lubrciante": "lubricante", "lubricatne": "lubricante", "lubricante": "lubricante",
+    "lubrikante": "lubricante",
+    # succionador
+    "succiondor": "succionador", "succionadpr": "succionador",
+    "succionador": "succionador", "succion": "succionador",
+    # plug
+    "plgu": "plug", "plugg": "plug",
+    # consolador
+    "consoladr": "consolador", "consolador": "consolador",
+    # arnés
+    "arne": "arnes", "arnse": "arnes", "arnes": "arnes", "harnez": "arnes",
+    # masturbador
+    "masturb": "masturbador", "masturbador": "masturbador",
+}
+
+_ALIASES_TYPO_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _ALIASES_TYPO if k) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _corregir_typos(texto: str | None) -> str:
+    """Reemplaza typos comunes del cliente por su forma correcta (por palabra).
+
+    Conservador: solo alias explícitos de sustantivos de producto/género, con
+    límites de palabra. No usa matching difuso genérico (evita falsos positivos
+    en mensajes cortos tipo "si", "ok"). Se aplica al user_text antes de clasificar.
+    """
+    if not texto:
+        return texto or ""
+    def _reemp(m: re.Match) -> str:
+        return _ALIASES_TYPO[m.group(0).lower()]
+    return _ALIASES_TYPO_RE.sub(_reemp, texto)
 
 
 def _categoria_normalizada(nombre: str, descripcion: str | None = "",
@@ -780,6 +834,10 @@ def clasificar_intencion_cliente(user_text: str,
             "calificado": False, "pide_fotos": False, "sustantivo": None,
         }
 
+    # Corregir typos comunes del cliente (anl→anal, mjer→mujer, dldo→dildo...)
+    # antes de clasificar. Conservador: solo alias explícitos por palabra completa.
+    user_text = _corregir_typos(user_text)
+
     intencion, sustantivo = _intencion_desde_texto(user_text)
     genero = _genero_desde_texto_cliente(user_text)
     pide_fotos = bool(_FOTO_REQUEST_RE.search(user_text))
@@ -961,7 +1019,20 @@ async def get_productos_para_recomendar(
     # alternativas de ese género, siempre filtrando por género. Esto resuelve el
     # bug donde el cliente aclaraba "para el pene" y el bot no enviaba ninguna
     # foto porque no había vibradores de hombre.
+    # BONUS DE COMBINACIÓN: si el cliente pidió una combinación tipo "vibrador
+    # anal" (categoría original vibradores + género anal), los productos de la
+    # categoría alternativa que TAMBIÉN cumplan la categoría original (un plug
+    # anal que vibra) suben al tope. Así no se diluyen los pocos productos que
+    # combinan ambas intenciones entre muchos que solo cumplen el género.
     if categoria_funcional and genero:
+        # Tokens significativos de la categoría original para el bonus de combinación.
+        cat_original_tokens = {
+            "vibradores": ("vibr", "vibrador", "vibrator"),
+            "dildos": ("dildo", "consolador"),
+            "masturbadores": ("masturb",),
+            "succionadores": ("succion", "suction"),
+            "lubricantes-y-cuidado": ("lubric",),
+        }.get(categoria_funcional, ())
         alt_cats = [c for c in _CATEGORIAS_ALTERNATIVAS_POR_GENERO.get(genero, [])
                     if c != categoria_funcional]
         for alt_cat in alt_cats:
@@ -980,6 +1051,14 @@ async def get_productos_para_recomendar(
                     p["_categoria_funcional"] = alt_cat
                     p["_genero"] = genero
                     p["_score"] = _score_candidato(p, user_text)
+                    # BONUS DE COMBINACIÓN: el producto cumple AMBAS intenciones
+                    # (ej: plug anal que también vibra). Prioridad máxima: estos
+                    # productos van antes que los que solo cumplen el género.
+                    if cat_original_tokens:
+                        nombre_desc = _normalizar_texto(
+                            f"{p.get('nombre','')} {p.get('descripcion','')}")
+                        if any(tok in nombre_desc for tok in cat_original_tokens):
+                            p["_score"] += 10.0
                     res.append(p)
                 if res:
                     res.sort(key=lambda p: (-p["_score"], len(p["nombre"])))

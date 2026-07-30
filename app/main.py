@@ -886,6 +886,40 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # Enviar fotos (candidatos ya validados por el pipeline).
     enviados_ids = await _enviar_fotos_productos(wa_id, final_productos)
 
+    # GARANTÍA ESTRUCTURAL "nunca prometer sin enviar": si el sistema decidió
+    # mostrar fotos (debe_mostrar=True) pero al final NO se envió ninguna
+    # (candidatos sin imagen_url, categoría vacía, typo, LLM rebelde), no podemos
+    # dejar al cliente con un texto que promete opciones que nunca llegaron.
+    # Enviamos un mensaje de recuperación honesto y, si aplica, la pregunta de
+    # calificación de la categoría. Esto es la red final: cubre TODAS las causas
+    # de "0 fotos" y evita el estado roto ("ofrece pero no envía nada").
+    if info["debe_mostrar"] and not enviados_ids and not pedido_creado_id:
+        log.warning(
+            "Bot prometió fotos a %s pero se enviaron 0 (cat=%s, género=%s) — "
+            "recuperando con mensaje honesto",
+            wa_id, info["categoria_funcional"], info["genero"],
+        )
+        cat_nombres = {
+            "vibradores": "vibradores", "dildos": "dildos", "anal": "juguetes anales",
+            "masturbadores": "masturbadores", "anillos-y-fundas": "anillos y fundas",
+            "lubricantes-y-cuidado": "lubricantes", "lenceria": "lencería",
+            "succionadores": "succionadores", "pareja-y-bondage": "productos de pareja",
+            "juegos-y-accesorios": "accesorios",
+        }
+        nombre_cat = cat_nombres.get(info["categoria_funcional"], "ese producto")
+        # Si toca calificar (género sin aclarar), mejor enviar la pregunta; si no,
+        # mensaje honesto de derivación (no perder la venta: el equipo confirma).
+        if info["genero"] is None and info["categoria_funcional"] in _PREGUNTAS_CALIFICACION:
+            recuperacion = _PREGUNTAS_CALIFICACION[info["categoria_funcional"]]
+        else:
+            recuperacion = (
+                f"Te cuento que estoy confirmando con el equipo cuáles opciones de "
+                f"{nombre_cat} tenemos disponibles ahora mismo 😊 Dame un segundo y te "
+                f"envío las fotos. ¿O prefieres que te ayude con algo más mientras tanto?"
+            )
+        await db.save_message(wa_id, "assistant", recuperacion)
+        await whatsapp_client.send_text(wa_id, recuperacion)
+
     # Persistir estado de conversación: registrar categoría/género/calificación
     # y los productos efectivamente mostrados.
     # IMPORTANTE: si el bot acaba de calificar (tiene categoría pero no mostró
