@@ -762,3 +762,74 @@ def test_bug10_get_productos_para_recomendar_acepta_subtipo():
                     "get_productos_para_recomendar debe aceptar subtipo")
                 return
     raise AssertionError("No se encontró get_productos_para_recomendar")
+
+
+# ── BUG 11: subtipo suelto deriva categoría (sabores → lubricantes, no dildos) ─
+
+def test_bug11_mapeo_subtipo_a_categoria_existe():
+    """Verifica que existe el mapeo _SUBTIPO_A_CATEGORIA en catalog.py."""
+    extras = _extraer_constantes(_CAT, ["_SUBTIPO_A_CATEGORIA"])
+    assert "_SUBTIPO_A_CATEGORIA" in extras, "Falta _SUBTIPO_A_CATEGORIA en catalog.py"
+    m = extras["_SUBTIPO_A_CATEGORIA"]
+    assert m.get("sabores") == "lubricantes-y-cuidado"
+    assert m.get("doble") == "dildos"
+    assert m.get("ventosa") == "dildos"
+    assert m.get("rabbit") == "vibradores"
+    assert m.get("prostat") == "anal"
+
+
+def test_bug11_subtipo_suelto_deriva_categoria_lubricantes():
+    """Réplica de la derivación: 'sabores' solo (sin sustantivo de categoría)
+    debe derivar a lubricantes-y-cuidado, NO quedar como None (que antes hacía
+    heredar 'dildos' del contexto)."""
+    extras = _extraer_constantes(_CAT, ["_SUBTIPO_A_CATEGORIA"])
+    m = extras["_SUBTIPO_A_CATEGORIA"]
+
+    # Réplica de la lógica de derivación en clasificar_intencion_cliente.
+    def _derivar(subtipo_detectado, categoria_funcional):
+        if subtipo_detectado and not categoria_funcional:
+            return m.get(subtipo_detectado, categoria_funcional)
+        return categoria_funcional
+
+    # "sabores" sin categoría → deriva a lubricantes.
+    assert _derivar("sabores", None) == "lubricantes-y-cuidado"
+    # "doble" sin categoría → deriva a dildos.
+    assert _derivar("doble", None) == "dildos"
+    # Si ya hay categoría (el cliente dijo "lubricante con sabores") → se conserva.
+    assert _derivar("sabores", "lubricantes-y-cuidado") == "lubricantes-y-cuidado"
+
+
+def test_bug11_subtipo_ambiguo_no_deriva():
+    """Subtipos ambiguos (calor, frío, cola, clitor) NO están en el mapeo fijo
+    porque pueden pertenecer a varias categorías. Verifica que NO estén en
+    _SUBTIPO_A_CATEGORIA (se dejan al contexto)."""
+    extras = _extraer_constantes(_CAT, ["_SUBTIPO_A_CATEGORIA"])
+    m = extras["_SUBTIPO_A_CATEGORIA"]
+    for ambiguo in ("calor", "caliente", "frío", "frio", "cola", "clitor", "clitori"):
+        assert ambiguo not in m, (
+            f"{ambiguo!r} es ambiguo y NO debe estar en _SUBTIPO_A_CATEGORIA")
+
+
+def test_bug11_deteccion_subtipo_no_depende_de_sustantivo():
+    """La detección de subtipo ya NO requiere tener un sustantivo de categoría.
+    'sabores' (que no es sustantivo en _NOUN_KEYWORDS) debe igual detectarse como
+    subtipo. Verifica que el código de detección no tenga 'if sustantivo' antes
+    del bucle de _SUBTIPO_KEYWORDS."""
+    src = _CAT.read_text()
+    # Buscar el bloque donde se calcula subtipo_detectado.
+    import ast
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "clasificar_intencion_cliente":
+                fn_src = ast.get_source_segment(src, node)
+                # La línea de 'for s in _SUBTIPO_KEYWORDS' NO debe estar precedida
+                # inmediatamente por 'if sustantivo:'.
+                lines = fn_src.splitlines()
+                for i, line in enumerate(lines):
+                    if "for s in _SUBTIPO_KEYWORDS" in line and "subtipo_detectado" in lines[i-2]:
+                        # El bucle de detección no está dentro de un 'if sustantivo'.
+                        assert "if sustantivo" not in lines[i-1], (
+                            "La detección de subtipo no debe depender de 'if sustantivo'")
+                return
+    raise AssertionError("No se encontró clasificar_intencion_cliente")

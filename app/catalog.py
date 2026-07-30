@@ -744,6 +744,34 @@ _SUBTIPO_KEYWORDS = (
     "sencillo", "simple",
 )
 
+# Mapeo subtipo → categoría funcional. Cuando el cliente responde SOLO un subtipo
+# (ej: "sabores", "doble", "ventosa") sin sustantivo de categoría, el sistema antes
+# heredaba la categoría del turno anterior (dildos) y mostraba productos espurios.
+# Con este mapeo, el sistema sabe que "sabores" → lubricantes, "doble" → dildos,
+# "rabbit" → vibradores, y deriva la categoría correcta (cambio de tema legítimo).
+# Subtipos NO ambiguos (seguros de mapear siempre):
+_SUBTIPO_A_CATEGORIA = {
+    # Lubricantes (subtipos específicos, poco ambiguos)
+    "sabores": "lubricantes-y-cuidado", "sabor": "lubricantes-y-cuidado",
+    "base de agua": "lubricantes-y-cuidado", "silicona": "lubricantes-y-cuidado",
+    "desensibiliz": "lubricantes-y-cuidado",
+    # Dildos
+    "realista": "dildos", "ventosa": "dildos", "vidrio": "dildos",
+    "cristal": "dildos", "doble": "dildos",
+    # Vibradores
+    "rabbit": "vibradores", "punto g": "vibradores", "hitachi": "vibradores",
+    "bala": "vibradores", "huevo vibr": "vibradores",
+    # Anal
+    "prostat": "anal", "próstata": "anal", "primera vez": "anal",
+    # Lencería
+    "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
+}
+# Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
+# juguetes con calentamiento. "cola" puede ser plug anal o lencería. "clitor"/
+# "clitori" suelen ser vibradores pero también succionadores. Estos NO se mapean
+# a una categoría fija; se dejan al contexto (si el estado previo era lubricantes,
+# "calor" sigue siendo lubricantes; si era vibradores, sigue vibradores).
+
 # Petición explícita de fotos por parte del cliente.
 import re as _re_mod
 _FOTO_REQUEST_RE = _re_mod.compile(
@@ -876,14 +904,27 @@ def clasificar_intencion_cliente(user_text: str,
     # subtipo_detectado: CUÁL subtipo reconoció (ej: "doble", "ventosa", "realista"),
     # para usarlo como filtro de ranking (que el producto mostrado coincida con el
     # subtipo pedido). Antes solo se sabía SI había subtipo (bool), no cuál.
+    # NOTA: la detección de subtipo NO depende de tener sustantivo: el cliente puede
+    # responder solo "sabores" (subtipo de lubricantes) sin sustantivo de categoría.
     norm_user = _normalizar_texto(user_text)
     subtipo_detectado = None
-    if sustantivo:
-        for s in _SUBTIPO_KEYWORDS:
-            if s in norm_user:
-                subtipo_detectado = s
-                break
+    for s in _SUBTIPO_KEYWORDS:
+        if s in norm_user:
+            subtipo_detectado = s
+            break
     tiene_subtipo = subtipo_detectado is not None
+
+    # DERIVACIÓN subtipo → categoría: si el cliente respondió SOLO un subtipo (ej:
+    # "sabores", "doble") sin sustantivo de categoría, derivar la categoría del
+    # subtipo. Así "sabores" → lubricantes (no hereda "dildos" del turno anterior)
+    # y se reconoce como cambio de tema legítimo (reset del estado).
+    if subtipo_detectado and not categoria_funcional:
+        cat_derivada = _SUBTIPO_A_CATEGORIA.get(subtipo_detectado)
+        if cat_derivada:
+            categoria_funcional = cat_derivada
+            if not intencion:
+                intencion = subtipo_detectado
+
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
 
     return {
