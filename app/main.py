@@ -257,10 +257,15 @@ async def _maybe_handle_payment_image(wa_id: str, msg: dict, history: list[dict]
 
 # Marcador de foto: [FOTO:123] (ID numérico) o [FOTO:Nombre del Producto].
 # El LLM lo emite cuando quiere que se envíe la foto de un producto.
-_FOTO_MARKER_RE = re.compile(r"\[FOTO:\s*([^\]]+)\]", re.IGNORECASE)
+# TOLERANTE A ESPACIOS: el LLM a veces escribe "[ FOTO:64209 ]" con espacios
+# dentro de los corchetes. Si la regex no matchea, el marcador NO se extrae ni
+# se limpia → se envía crudo al cliente (bug reportado) y los IDs no se resuelven
+# (se fuerzan productos del pipeline, a veces equivocados). Por eso el patrón
+# permite espacios opcionales tras [ y antes de ].
+_FOTO_MARKER_RE = re.compile(r"\[\s*FOTO:\s*([^\]]+?)\s*\]", re.IGNORECASE)
 
 # Marcador de categoría: [CATEGORIA:Punto G] → envía fotos de esa subcategoría.
-_CATEGORIA_MARKER_RE = re.compile(r"\[CATEGORIA:\s*([^\]]+)\]", re.IGNORECASE)
+_CATEGORIA_MARKER_RE = re.compile(r"\[\s*CATEGORIA:\s*([^\]]+?)\s*\]", re.IGNORECASE)
 
 
 def _extraer_marcadores_foto(reply: str) -> tuple[list[str], str]:
