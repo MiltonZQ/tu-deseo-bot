@@ -319,20 +319,31 @@ async def handle_inbound_image(
             except Exception:
                 log.exception("Error procesando pago verificado de %s", wa_id)
 
-        # Mensaje al cliente: si se escaló (sin productos), mensaje de revisión;
-        # si el pedido se creó/pagó, confirmación normal.
-        if pedido_id:
-            await whatsapp_client.send_text(
-                wa_id,
-                "✅ ¡Pago verificado! Gracias. Nuestro equipo confirmará el despacho en breve. 🎉",
-            )
-            log.info("Comprobante VÁLIDO para %s (pedido %s)", wa_id, pedido_id)
-        else:
-            await whatsapp_client.send_text(
-                wa_id,
-                "✅ Recibimos tu comprobante. Nuestro equipo lo revisará y confirmará tu pedido en breve. 🙌",
-            )
-            log.info("Comprobante VÁLIDO para %s pero escalado (sin pedido)", wa_id)
+        # Mensaje al cliente: SIEMPRE tras pago verificado, avisar y decir que un
+        # asesor gestionará la entrega. Luego ESCALAR y PAUSAR el bot para que no
+        # responda más en este chat (el asesor coordina la entrega sin interrupciones).
+        await whatsapp_client.send_text(
+            wa_id,
+            "✅ ¡Tu pago ha sido verificado correctamente! 🎉\n\n"
+            "En un momento se comunicará un asesor contigo para gestionar la entrega "
+            "de tu producto. 📦🙌",
+        )
+        # Escalar al equipo humano y pausar el bot en este chat.
+        from app import pedidos as _ped
+        _nombre = ""
+        try:
+            _nombre = _ped._extraer_nombre(history) or ""
+        except Exception:
+            pass
+        await db.set_bot_paused(wa_id, True, motivo="Pago verificado — asesor gestiona entrega")
+        await db.create_escalation({
+            "wa_id": wa_id,
+            "customer_name": _nombre or wa_id,
+            "reason": "pago_verificado",
+            "reason_detail": f"Pago verificado (Banco: {result.get('banco') or 'S/N'}, Ref: {result.get('referencia') or 'S/N'}, Monto: ${result.get('monto') or 0:,}). Pedido #{pedido_id or 'auto'}. El asesor debe coordinar la entrega.",
+            "issue_summary": f"Pago verificado — coordinar entrega (pedido #{pedido_id or 'auto'})",
+        })
+        log.info("Comprobante VÁLIDO para %s (pedido %s) — escalado a humano, bot pausado", wa_id, pedido_id)
         return True
 
     # inválido → ¿agotó intentos?
