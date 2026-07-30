@@ -457,6 +457,22 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
     return "unisex"
 
 
+# Mapeo de categoría funcional → categorías alternativas a probar cuando la
+# intersección (categoría + género) da 0 resultados. Es el caso real de un
+# cliente que pregunta por "vibradores" y luego aclara "para el pene": los
+# productos de pene/hombre casi nunca son categoría funcional "vibradores", sino
+# "anillos-y-fundas" o "masturbadores". Sin este mapeo, "vibradores" ∩ "hombre"
+# = vacío y el bot respondía "Mira estas opciones…" sin enviar ninguna foto.
+# Las categorías alternativas SE FILTRAN SIEMPRE por el género del cliente, así
+# que no mezclan productos de mujer cuando el cliente pidió hombre.
+_CATEGORIAS_ALTERNATIVAS_POR_GENERO = {
+    "hombre": ["anillos-y-fundas", "masturbadores", "anal"],
+    "anal": ["anal", "anillos-y-fundas"],
+    "pareja": ["pareja-y-bondage", "vibradores", "anillos-y-fundas"],
+    "mujer": ["vibradores", "succionadores", "dildos", "lenceria"],
+}
+
+
 async def get_producto_by_id(producto_id: int) -> dict | None:
     """Devuelve un producto por su ID (para resolver marcadores [FOTO:ID] del LLM)."""
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
@@ -911,6 +927,38 @@ async def get_productos_para_recomendar(
     if candidatos:
         log.info("get_productos_para_recomendar: intento D (sin imagen ni activo) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
         return candidatos
+
+    # Intento E-bis: RELAJAR LA CATEGORÍA por género. Cuando la intersección
+    # (categoría + género) es vacía (ej: "vibradores" + "hombre" — los productos
+    # de pene son anillos/fundas, no vibradores), probar las categorías
+    # alternativas de ese género, siempre filtrando por género. Esto resuelve el
+    # bug donde el cliente aclaraba "para el pene" y el bot no enviaba ninguna
+    # foto porque no había vibradores de hombre.
+    if categoria_funcional and genero:
+        alt_cats = [c for c in _CATEGORIAS_ALTERNATIVAS_POR_GENERO.get(genero, [])
+                    if c != categoria_funcional]
+        for alt_cat in alt_cats:
+            for con_img, con_act in [(True, True), (True, False), (False, True), (False, False)]:
+                rows = await _query(con_imagen=con_img, con_activo=con_act)
+                # Filtrar por la categoría alternativa + el género del cliente.
+                res = []
+                for r in rows:
+                    p = dict(r)
+                    if p["id"] in exclude_set:
+                        continue
+                    if _categoria_normalizada(p["nombre"], p["descripcion"], p["categoria"]) != alt_cat:
+                        continue
+                    if _genero_normalizado(p["nombre"], p["descripcion"], p["categoria"]) != genero:
+                        continue
+                    p["_categoria_funcional"] = alt_cat
+                    p["_genero"] = genero
+                    p["_score"] = _score_candidato(p, user_text)
+                    res.append(p)
+                if res:
+                    res.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+                    log.info("get_productos_para_recomendar: intento E-bis (relaja categoría %s→%s, género=%s) → %d",
+                             categoria_funcional, alt_cat, genero, len(res))
+                    return res[:limit]
 
     # Intento E: búsqueda ILIKE por sustantivo del user_text + género (con imagen).
     # Último recurso: captura productos que _categoria_normalizada etiqueta mal.

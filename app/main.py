@@ -280,6 +280,69 @@ def _extraer_marcadores_categoria(reply: str) -> tuple[list[str], str]:
     return cats, clean
 
 
+# Preguntas de calificación deterministas por categoría funcional. Son la RED DE
+# SEGURIDAD cuando el LLM, en un turno de calificación (debe_mostrar=False), incumple
+# su contrato y escribe la plantilla "Mira estas opciones…" sin marcadores [FOTO:ID]
+# (lo que dejaba al cliente con un mensaje que promete fotos pero no envía nada).
+# Fuente: prompts/system.md (árboles de asesoría por categoría).
+_PREGUNTAS_CALIFICACION = {
+    "masturbadores": (
+        "¡Claro que sí! Para mostrarte lo ideal, cuéntame: ¿buscas un **anillo vibrador** "
+        "(para pareja/erección), un **masturbador/huevo** (placer personal), o una **funda "
+        "para pene** (grosor/textura)? 😊"
+    ),
+    "anillos-y-fundas": (
+        "¡Claro que sí! Para mostrarte lo ideal, cuéntame: ¿buscas un **anillo vibrador** "
+        "(para pareja/erección), un **masturbador/huevo** (placer personal), o una **funda "
+        "para pene** (grosor/textura)? 😊"
+    ),
+    "dildos": (
+        "¡Claro que sí! Para mostrarte lo ideal, cuéntame: ¿buscas un dildo **realista** "
+        "(textura piel), **con ventosa** (para superficie), de **vidrio/cristal**, o **doble**? 😊"
+    ),
+    "vibradores": (
+        "¡Claro que sí! Para recomendarte lo ideal, cuéntame: ¿buscas estimulación para "
+        "**ella** (clítoris/punto G), para **él** (pene/anillos vibradores), **anal/próstata**, "
+        "o **en pareja**? 😊"
+    ),
+    "lubricantes-y-cuidado": (
+        "¡Claro que sí! Para recomendarte el ideal, cuéntame: ¿lo buscas a **base de agua** "
+        "(seguro con juguetes), de **silicona** (duradero), **anal desensibilizante**, o con "
+        "**sabores/sensaciones** (calor/frío)? 😊"
+    ),
+    "anal": (
+        "¡Claro que sí! Para recomendarte lo ideal, cuéntame: ¿es para **primera vez** "
+        "(plug pequeño/cónico), estimulación de **próstata** (para él), o con **vibración/"
+        "control remoto**? 😊"
+    ),
+    "lenceria": (
+        "¡Claro que sí! Para mostrarte las opciones ideales, cuéntame: ¿buscas lencería para "
+        "**ella** (body, baby doll, disfraz) o para **él** (suspensorio, pechera, conjunto "
+        "masculino)? 😊"
+    ),
+    "succionadores": (
+        "¡Claro que sí! Para recomendarte el ideal, cuéntame: ¿es para **primera vez** "
+        "(suave/succión sutil), buscas **doble estimulación** (con vibración), o con **control "
+        "por App**? 😊"
+    ),
+    "pareja-y-bondage": (
+        "¡Claro que sí! Para recomendarte lo ideal, cuéntame: ¿buscas **kits de amarre**, "
+        "**esposas**, **antifaces**, o **fustas/látigos**? 😊"
+    ),
+}
+
+# Frases que delatan que el LLM escribió una plantilla de "mostrar productos" cuando
+# NO debía (estaba en turno de calificación). Si el reply trae alguna de estas frases
+# pero NO trae marcadores [FOTO:ID] válidos, es una contradicción a corregir.
+_OFRECE_PRODUCTOS_RE = re.compile(
+    r"(mira estas opciones|estas opciones disponibles|te muestro|te las muestro|"
+    r"para ti tengo|para ti 👇|que tenemos disponibles|nuestras mejores opciones|"
+    r"opciones de (anillos|vibradores|dildos|lubricantes|lenceria|lencería)|"
+    r"de anillos y vibradores|de anillos|estás son|estas son|aquí tienes)",
+    re.IGNORECASE,
+)
+
+
 async def _enviar_fotos_productos(
     wa_id: str,
     candidatos: list[dict],
@@ -756,6 +819,25 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # Extraer marcadores de foto [FOTO:ID] y limpiarlos del texto visible.
     foto_ids, reply = _extraer_marcadores_foto(reply)
     _, reply = _extraer_marcadores_categoria(reply)
+
+    # RED DE SEGURIDAD — turno de calificación: si el sistema decidió NO mostrar
+    # fotos (debe_mostrar=False) porque toca calificar, pero el LLM incumplió y
+    # escribió una plantilla de "mostrar productos" ("Mira estas opciones…") SIN
+    # marcadores [FOTO:ID], corregimos reemplazando por la pregunta determinista
+    # de esa categoría. Sin esto, el cliente recibe un texto que promete fotos y
+    # no llega nada (Bug: "no clasifica, no envía nada").
+    if (not info["debe_mostrar"]
+            and info["categoria_funcional"]
+            and not foto_ids
+            and _OFRECE_PRODUCTOS_RE.search(reply)):
+        pregunta = _PREGUNTAS_CALIFICACION.get(info["categoria_funcional"])
+        if pregunta:
+            log.info(
+                "LLM omitió la pregunta de calificación para '%s' (escribió plantilla sin "
+                "fotos) — pregunta determinista inyectada",
+                info["categoria_funcional"],
+            )
+            reply = pregunta
 
     # VALIDAR candidatos: los [FOTO:ID] del LLM deben estar en la lista de
     # candidatos confirmados. Esto elimina alucinaciones (ej: Antifaz/Esposas
