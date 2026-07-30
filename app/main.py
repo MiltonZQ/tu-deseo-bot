@@ -668,6 +668,34 @@ async def _recuperar_candidatos(
                 candidatos = especificos2
                 log.info("Candidatos recuperados por término fallback %r: %d", termino, len(candidatos))
 
+    # BÚSQUEDA POR TEXTO LIBRE EN TODA LA DB: cuando no hay categoría clara
+    # (cat_func=None) y los fallbacks anteriores no dieron nada, pero el mensaje
+    # del cliente PARECE buscar un producto (no es saludo/pago/queja), buscar
+    # directamente en la DB por texto libre (ILIKE). Así "multiorgasmo", "Sen",
+    # "Elixir" o cualquier término que esté en el nombre de un producto se encuentra.
+    # Sin esto, el sistema no busca y el LLM escribe "Para ti tengo esto 👇" sin fotos.
+    if not candidatos and not cat_func and not _es_fase_venta(user_text, history):
+        # Heurística: el mensaje tiene tokens significativos (≥4 letras) que no son
+        # saludos ni preguntas generales → probablemente busca un producto.
+        tokens_significativos = [t for t in user_text.lower().split()
+                                 if len(t) >= 4 and t not in (
+                                     "hola", "buenas", "buenos", "gracias", "dias",
+                                     "tardes", "noches", "donde", "cuanto", "cuantos",
+                                     "como", "esta", "quiero", "tener", "tienen",
+                                     "necesito", "puedo", "puede", "hacer", "tener",
+                                 )]
+        if tokens_significativos:
+            log.info("Búsqueda por texto libre (sin categoría) para %r", user_text[:60])
+            encontrados = await catalog.buscar_producto_especifico(
+                user_text, limit=5, exclude_ids=exclude)
+            if encontrados:
+                candidatos = encontrados
+                # Marcar como específico para que se muestre directo.
+                cat_func = "juegos-y-accesorios"  # categoría genérica para que debe_mostrar=True
+                debe_mostrar = True
+                clasif["calificado"] = True
+                log.info("Texto libre encontró %d productos para %r", len(candidatos), user_text[:60])
+
     # Detectar CATEGORÍA AGOTADA: el cliente pidió "ver más" (pide_fotos y ya hay
     # productos mostrados) pero no quedan candidatos nuevos tras la exclusión, y sí
     # existe una categoría funcional. Esto señala al LLM que NO ofrezca "ver más

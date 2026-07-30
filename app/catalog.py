@@ -1002,6 +1002,12 @@ async def clasificar_intencion_cliente(user_text: str,
         "camtoyz", "lerot", "optimus",
         "lush", "hush", "diamo", "max", "nova", "ambu", "oski", "ferri",
         "gush", "pro 2", "pro 3",
+        # Marcas de cosmética/lubricantes/estimulantes del catálogo
+        "sen ", "sen intimo", "elixir", "blix", "hot production", "hot ",
+        "joy division", "joydivision", "system jo", "swiss navy", "pjur",
+        "doc johnson", "troc", "basix", "icicles", "spanish fly",
+        # Términos de productos que están en nombres del catálogo
+        "multiorgasmo", "orgasmo", "estimulante", "retardante", "afrodisiaco",
     )
     es_especifico = any(marca in norm_user for marca in _MARCAS_CONOCIDAS)
     if es_especifico:
