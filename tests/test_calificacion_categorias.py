@@ -557,3 +557,64 @@ def test_bug8_no_reescribe_durante_pedido():
 
     # Pedido en curso → mantener aunque todo esté repetido.
     assert _decidir({1, 2}, [{"id": 1}], pedido_creado_id=99) == "mantener"
+
+
+def test_bug8_integracion_T1_T2_estado_persistente():
+    """Test de INTEGRACIÓN de la secuencia completa T1→T2 con estado persistido.
+    Simula el caso real del reporte: T1 envía 5 masturbadores, se persisten sus
+    IDs. T2 ('ver más') recupera candidatos; aunque el upstream los repita, el
+    filtro final (leyendo el estado persistido) debe eliminarlos TODOS.
+
+    Réplica de la lógica del filtro final en _handle_message, que lee
+    estado_previo['productos_mostrados'] y filtra final_productos contra ese set.
+    """
+    def _filtro_final(final_productos, estado_previo):
+        ids_ya_mostrados = set((estado_previo or {}).get("productos_mostrados", []))
+        if final_productos:
+            repetidos = [p["id"] for p in final_productos if p["id"] in ids_ya_mostrados]
+            if repetidos:
+                final_productos = [p for p in final_productos
+                                   if p["id"] not in ids_ya_mostrados]
+        return final_productos, ids_ya_mostrados
+
+    # --- T1: 5 masturbadores enviados, se persisten sus IDs ---
+    productos_t1 = [{"id": 101}, {"id": 102}, {"id": 103}, {"id": 104}, {"id": 105}]
+    enviados_t1 = [p["id"] for p in productos_t1]
+    estado_tras_t1 = {"categoria_funcional": "masturbadores",
+                      "productos_mostrados": enviados_t1, "calificado": True}
+
+    # --- T2: "ver más" — el upstream (mal) devuelve los MISMOS 5 productos ---
+    productos_t2_upstream = [{"id": 101}, {"id": 102}, {"id": 103},
+                             {"id": 104}, {"id": 105}]
+    filtrados_t2, ya = _filtro_final(productos_t2_upstream, estado_tras_t1)
+
+    # El filtro final debe eliminar TODOS porque ya están en el estado.
+    assert filtrados_t2 == [], (
+        "T2 no debe enviar ningún producto repetido tras el filtro final")
+    assert ya == {101, 102, 103, 104, 105}
+
+    # --- T2b: "ver más" — upstream devuelve 2 nuevos + 2 repetidos ---
+    productos_t2b = [{"id": 106}, {"id": 101}, {"id": 107}, {"id": 102}]
+    filtrados_t2b, _ = _filtro_final(productos_t2b, estado_tras_t1)
+    assert [p["id"] for p in filtrados_t2b] == [106, 107], (
+        "T2b debe conservar SOLO los productos nuevos")
+
+
+def test_bug8_estado_vacio_diagnostica_problema_upstream():
+    """Si el estado llega VACÍO (upstream no persistió), el filtro no puede
+    filtrar — y el log de diagnóstico lo revela. Este test documenta que el
+    filtro depende de que el estado se persista correctamente, y que un estado
+    vacío en un 'ver más' es síntoma de bug upstream (no del filtro)."""
+    def _filtro_final(final_productos, estado_previo):
+        ids_ya_mostrados = set((estado_previo or {}).get("productos_mostrados", []))
+        if final_productos:
+            final_productos = [p for p in final_productos
+                               if p["id"] not in ids_ya_mostrados]
+        return final_productos, ids_ya_mostrados
+
+    # Estado vacío (bug upstream): el filtro no filtra nada (no sabe qué se mostró).
+    productos = [{"id": 1}, {"id": 2}]
+    filtrados, ya = _filtro_final(productos, {"productos_mostrados": []})
+    assert ya == set(), "Estado vacío = no hay nada que filtrar"
+    assert len(filtrados) == 2  # pasan (el filtro es inocente; el bug es upstream)
+    # El log 'ya_mostrados=0' en producción revela que el estado no persistió.

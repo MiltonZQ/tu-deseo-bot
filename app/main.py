@@ -885,13 +885,20 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # principal, fallbacks, Intento E-bis, etc.) sin depender de que cada uno
     # respete exclude_ids. Es la red definitiva anti-repetición ("ver más").
     ids_ya_mostrados = set((estado_previo or {}).get("productos_mostrados", []))
-    if ids_ya_mostrados and final_productos:
+    if final_productos:
         ids_a_enviar = [p["id"] for p in final_productos]
         repetidos = [pid for pid in ids_a_enviar if pid in ids_ya_mostrados]
+        # Log de diagnóstico SIEMPRE: confirma cuántos ya mostrados había y cuántos
+        # se van a enviar. Si los ya-mostrados llegan vacíos en un "ver más", indica
+        # que el estado no se persistió (problema upstream), no del filtro.
+        log.info(
+            "Filtro final [%s]: ya_mostrados=%d (%s), candidatos=%d, repetidos=%d",
+            wa_id, len(ids_ya_mostrados), sorted(ids_ya_mostrados)[:8],
+            len(final_productos), len(repetidos),
+        )
         if repetidos:
             log.warning(
-                "Filtro final: %d producto(s) ya mostrados detectados y removidos "
-                "antes de enviar a %s (upstream no respetó exclude): %s",
+                "Filtro final: %d producto(s) repetidos removidos antes de enviar a %s: %s",
                 len(repetidos), wa_id, repetidos,
             )
             final_productos = [p for p in final_productos if p["id"] not in ids_ya_mostrados]
