@@ -867,9 +867,17 @@ async def crm_page(request: Request, status: str = Query("")):
     """, "crm")
 
 
+@router.post("/reset-conversations")
+async def reset_conversations_admin(request: Request):
+    _require_login(request)
+    deleted = await db.clear_all_conversations()
+    return JSONResponse({"ok": True, "deleted": deleted})
+
+
 # ── Root / redirect ──
 
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
 async def admin_root():
     return RedirectResponse("/admin/dashboard", status_code=302)
+

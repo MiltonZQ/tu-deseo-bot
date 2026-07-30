@@ -860,6 +860,23 @@ async def clear_contact_data(wa_ids: list[str]) -> dict[str, int]:
     }
 
 
+async def clear_all_conversations() -> dict[str, int]:
+    """Elimina todo el historial conversacional y estados de la base de datos para todos los números."""
+    async with _pool.acquire() as conn:
+        results = {
+            "conversations": await conn.execute("DELETE FROM conversations"),
+            "conversaciones": await conn.execute("DELETE FROM conversaciones"),
+            "conversation_summaries": await conn.execute("DELETE FROM conversation_summaries"),
+            "conversation_state": await conn.execute("DELETE FROM conversation_state"),
+            "processed_messages": await conn.execute("DELETE FROM processed_messages"),
+            "pending_follow_ups": await conn.execute("DELETE FROM pending_follow_ups"),
+        }
+    return {
+        key: int(value.split()[-1]) if value else 0
+        for key, value in results.items()
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Panel de gestión (porteado/adaptado de belux-panel + Tu Deseo)
 # ═══════════════════════════════════════════════════════════════════════

@@ -163,6 +163,17 @@ async def reset_contact_memory(
     return {"cleared_wa_ids": [wa_id], "deleted": deleted}
 
 
+@app.post("/maintenance/reset-all-conversations")
+async def reset_all_conversations(
+    x_reload_token: str = Header(None),
+):
+    if not config.RELOAD_TOKEN or x_reload_token != config.RELOAD_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    deleted = await db.clear_all_conversations()
+    return {"status": "ok", "deleted": deleted}
+
+
+
 async def _process_message_safe(payload: dict) -> None:
     try:
         await _process_message(payload)
