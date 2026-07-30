@@ -835,29 +835,13 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     foto_ids, reply = _extraer_marcadores_foto(reply)
     _, reply = _extraer_marcadores_categoria(reply)
 
-    # RED DE SEGURIDAD — turno de calificación: si el sistema decidió NO mostrar
-    # fotos (debe_mostrar=False) porque toca calificar, pero el LLM incumplió y
-    # escribió una plantilla de "mostrar productos" ("Mira estas opciones…") SIN
-    # marcadores [FOTO:ID], corregimos reemplazando por la pregunta determinista
-    # de esa categoría. Sin esto, el cliente recibe un texto que promete fotos y
-    # no llega nada (Bug: "no clasifica, no envía nada").
-    if (not info["debe_mostrar"]
-            and info["categoria_funcional"]
-            and not foto_ids
-            and _OFRECE_PRODUCTOS_RE.search(reply)):
-        pregunta = _PREGUNTAS_CALIFICACION.get(info["categoria_funcional"])
-        if pregunta:
-            log.info(
-                "LLM omitió la pregunta de calificación para '%s' (escribió plantilla sin "
-                "fotos) — pregunta determinista inyectada",
-                info["categoria_funcional"],
-            )
-            reply = pregunta
-
     # VALIDAR candidatos: los [FOTO:ID] del LLM deben estar en la lista de
     # candidatos confirmados. Esto elimina alucinaciones (ej: Antifaz/Esposas
     # cuando el cliente pidió anillo). Si el LLM no emitió marcadores válidos
     # pero teníamos candidatos, se inyectan los del sistema.
+    # IMPORTANTE: se calcula ANTES de la guardia de calificación para que esa
+    # guardia sepa cuántos productos se enviarán REALMENTE (no solo si el LLM
+    # puso marcadores brutos, que pueden ser IDs alucinados y descartarse aquí).
     if info["debe_mostrar"] and candidatos:
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
         if len(final_productos) < 2:
@@ -871,6 +855,28 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # No debía mostrar fotos: el LLM solo califica. Si por error emitió
         # marcadores, validarlos igualmente contra candidatos (vacío = nada).
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
+
+    # RED DE SEGURIDAD — turno de calificación: si el sistema decidió NO mostrar
+    # fotos (debe_mostrar=False) porque toca calificar, pero el LLM incumplió y
+    # escribió una plantilla de "mostrar productos" ("Mira estas opciones…") SIN
+    # fotos que se vayan a enviar realmente, corregimos reemplazando por la
+    # pregunta determinista de esa categoría. Se evalúa sobre final_productos
+    # (marcadores válidos) — no sobre foto_ids brutos — para cerrar el hueco del
+    # marcador [FOTO] espurio (el LLM puede alucinar [FOTO:999] sin candidatos;
+    # al resolver contra candidatos vacíos final_productos queda vacío y la
+    # guardia SÍ dispara, evitando el estado roto "ofrece pero no envía nada").
+    if (not info["debe_mostrar"]
+            and info["categoria_funcional"]
+            and not final_productos
+            and _OFRECE_PRODUCTOS_RE.search(reply)):
+        pregunta = _PREGUNTAS_CALIFICACION.get(info["categoria_funcional"])
+        if pregunta:
+            log.info(
+                "LLM omitió la pregunta de calificación para '%s' (escribió plantilla sin "
+                "fotos válidas) — pregunta determinista inyectada",
+                info["categoria_funcional"],
+            )
+            reply = pregunta
 
     # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
     # (con datos de envío del historial y total calculado del catálogo).

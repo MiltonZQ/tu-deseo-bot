@@ -708,7 +708,8 @@ _NOUN_KEYWORDS = [
 _GENERO_KEYWORDS_CLIENTE = [
     (("chimbo", "pene", "para el", "para él", "para mi pene", "hombre", "masculino",
       "prostata", "próstata", "miembro", "verga", "gallo", "pito",
-      "anillos vibradores", "anillo vibrador", "anillos de pene", "anillo de pene"), "hombre"),
+      "anillos vibradores", "anillo vibrador", "anillos de pene", "anillo de pene",
+      "masturbador", "masturbadores", "huevo masturb"), "hombre"),
     (("pareja", "en pareja", "los dos", "mi novia", "mi esposa", "mi novio", "mi esposo",
       "we vibe", "chorus"), "pareja"),
     (("anal", "el culo", "por atras", "por atrás", "cola", "recto"), "anal"),

@@ -55,11 +55,18 @@ _OFRECE_PRODUCTOS_RE = re.compile(
 )
 
 
-def _aplicar_guardia(reply: str, debe_mostrar: bool, categoria_funcional: str) -> str:
-    """Réplica del bloque de guardia insertado en _handle_message (main.py)."""
-    foto_ids = [m.group(1) for m in _FOTO_MARKER_RE.finditer(reply)]
+def _aplicar_guardia(reply: str, debe_mostrar: bool, categoria_funcional: str,
+                     final_productos: list | None = None) -> str:
+    """Réplica del bloque de guardia de _handle_message (main.py).
+
+    La guardia evalúa final_productos (marcadores [FOTO:ID] resueltos contra
+    candidatos válidos), NO foto_ids brutos, para cerrar el hueco del marcador
+    espurio (LLM alucina [FOTO:999] sin candidatos → final_productos vacío →
+    la guardia dispara igual).
+    """
     reply = _FOTO_MARKER_RE.sub("", reply).strip()
-    if (not debe_mostrar and categoria_funcional and not foto_ids
+    fp = final_productos if final_productos is not None else []
+    if (not debe_mostrar and categoria_funcional and not fp
             and _OFRECE_PRODUCTOS_RE.search(reply)):
         pregunta = _PREGUNTAS_CALIFICACION.get(categoria_funcional)
         if pregunta:
@@ -413,3 +420,74 @@ def test_bug6_flag_se_propaga_al_estado_del_llm():
                     "_recuperar_candidatos debe computar categoria_agotada")
                 return
     raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+# ── BUG 7: masturbadores muestran fotos directo + hueco del marcador espurio ─
+
+def test_bug7_masturbador_califica_genero_hombre():
+    """'masturbador' debe detectarse como género=hombre en el mensaje del cliente,
+    para que 'tienen masturbadores' muestre fotos directo (sin pregunta de subtipo).
+    Verifica que la palabra esté en _GENERO_KEYWORDS_CLIENTE rama 'hombre'."""
+    # Extraer la lista de keywords de hombre inspeccionando el AST.
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "_GENERO_KEYWORDS_CLIENTE":
+                    pares = ast.literal_eval(node.value)
+                    for claves, genero in pares:
+                        if genero == "hombre":
+                            assert "masturbador" in claves, (
+                                "'masturbador' debe estar en género hombre")
+                            assert "masturbadores" in claves, (
+                                "'masturbadores' debe estar en género hombre")
+                            return
+    raise AssertionError("No se encontró _GENERO_KEYWORDS_CLIENTE")
+
+
+def test_bug7_hueco_marcador_espurio_cerrado():
+    """El caso reportado: el LLM escribe 'Para ti tengo esto 👇' con un marcador
+    [FOTO:999] ESPURIO (sin candidatos). Antes, foto_ids no vacío hacía que la
+    guardia NO disparara. Ahora evalúa final_productos (vacío tras resolver contra
+    candidatos vacíos) → la guardia SÍ dispara."""
+    reply = ("Para ti tengo esto 👇 ¿Te gustó alguno o deseas ver más diseños? "
+             "[FOTO:999]")
+    # final_productos vacío: el [FOTO:999] se descarta al validar contra candidatos=[].
+    out = _aplicar_guardia(reply, debe_mostrar=False,
+                           categoria_funcional="masturbadores",
+                           final_productos=[])
+    assert "para ti tengo" not in out.lower(), (
+        "La guardia debe disparar aunque el LLM ponga [FOTO] espurio")
+    assert "anillo vibrador" in out or "masturbador/huevo" in out
+
+
+def test_bug7_guardia_no_dispara_cuando_hay_fotos_validas():
+    """Si final_productos NO está vacío (hay fotos válidas), la guardia no
+    debe disparar (el bot sí va a enviar fotos)."""
+    reply = "Para ti tengo esto 👇 [FOTO:10] [FOTO:11]"
+    out = _aplicar_guardia(reply, debe_mostrar=True,
+                           categoria_funcional="masturbadores",
+                           final_productos=[{"id": 10}, {"id": 11}])
+    # No se reemplaza (hay fotos reales), solo se limpian los marcadores del texto.
+    assert "para ti tengo" in out.lower()
+
+
+def test_bug7_regresion_vibradores_sigue_calificando():
+    """Regresión: 'vibradores' sin género sigue calificando (2-pasos intacto).
+    'vibrador' NO debe estar en género hombre (a diferencia de masturbador)."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "_GENERO_KEYWORDS_CLIENTE":
+                    pares = ast.literal_eval(node.value)
+                    for claves, genero in pares:
+                        if genero == "hombre":
+                            # 'vibrador' no debe forzar género hombre (rompería
+                            # el 2-pasos de vibradores, que son mayormente mujer).
+                            assert "vibrador" not in claves, (
+                                "'vibrador' NO debe estar en género hombre")
+                            return
+    raise AssertionError("No se encontró _GENERO_KEYWORDS_CLIENTE")
