@@ -149,6 +149,12 @@ async def complete(user_message: str, history: list[dict],
             estado_lines.append(
                 f"- Productos ya mostrados (IDs): {', '.join(str(i) for i in estado['productos_mostrados'][-10:])}"
             )
+        if estado.get("productos_con_precios"):
+            estado_lines.append(
+                "- Productos mostrados CON PRECIOS EXACTOS del catálogo (USA ESTOS precios "
+                "en el resumen de confirmación del pedido, NO los inventes ni los confundas):\n"
+                + estado["productos_con_precios"]
+            )
         if estado_lines:
             estado_block = "\n\n## Estado de la conversación\n" + "\n".join(estado_lines) + "\n"
 

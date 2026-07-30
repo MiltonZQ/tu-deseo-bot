@@ -847,6 +847,21 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     if info["reset_state"] and estado_previo:
         await db.upsert_conversation_state(wa_id, reset=True)
 
+    # Resolver los IDs de productos_mostrados a nombres+precios reales del catálogo.
+    # El LLM necesita esta información cuando confirma el pedido: cuando el cliente
+    # confirma un producto (ej: reply a la foto "quiero esta"), el LLM debe usar el
+    # precio EXACTO del catálogo, no adivinarlo del historial (bug: $55.000 por $29.900).
+    productos_detalle_estado = ""
+    ids_mostrados = (estado_previo or {}).get("productos_mostrados", [])
+    if ids_mostrados:
+        detalle_lines = []
+        for pid in ids_mostrados[-10:]:
+            p = await catalog.get_producto_by_id(pid)
+            if p:
+                detalle_lines.append(f"  • {p['nombre']} — ${p['precio']:,}")
+        if detalle_lines:
+            productos_detalle_estado = "\n".join(detalle_lines)
+
     raw_reply = await openai_client.complete(
         user_text, history,
         lead=lead, summary=summary_text,
@@ -857,7 +872,8 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             "genero": info["genero"],
             "calificado": info["calificado"],
             "categoria_agotada": info.get("categoria_agotada", False),
-            "productos_mostrados": (estado_previo or {}).get("productos_mostrados", []),
+            "productos_mostrados": ids_mostrados,
+            "productos_con_precios": productos_detalle_estado,
         },
         debe_mostrar_fotos=info["debe_mostrar"],
     )
