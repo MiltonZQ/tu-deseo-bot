@@ -116,12 +116,19 @@ def _limpiar_marker(reply: str) -> str:
     return _PEDIDO_MARKER_RE.sub("", reply).strip()
 
 
-async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], int]:
+async def _resolver_productos_y_total(
+    history: list[dict],
+    productos_mostrados_ids: list[int] | None = None,
+) -> tuple[list[dict], int]:
     """Resuelve productos mencionados contra el catálogo.
 
-    Devuelve (items, total). Prioriza los productos del ÚLTIMO mensaje del cliente
-    (su confirmación de compra real), no de todo el historial (que contiene
-    recomendaciones del bot que el cliente no necesariamente compró).
+    Devuelve (items, total). Prioridad de fuentes (de más confiable a menos):
+      0) productos_mostrados_ids: IDs persistidos en conversation_state (los que el
+         bot efectivamente le ENVIÓ al cliente como fotos). Es la fuente más confiable
+         porque los marcadores [FOTO:ID] se LIMPIAN del historial antes de guardarlo,
+         así que el historial ya no los tiene. Estos IDs sí se persisten por separado.
+      1) Coincidencia de nombres en los últimos mensajes del cliente.
+      2) Coincidencia de nombres en el último mensaje del asistente (fallback).
     """
     items: list[dict] = []
     seen_ids: set[int] = set()
@@ -142,19 +149,11 @@ async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], 
         })
         total += precio
 
-    # 0) PRIORIDAD MÁXIMA: IDs de los marcadores [FOTO:ID] en los últimos mensajes
-    #    del ASISTENTE. El bot muestra productos al cliente con marcadores [FOTO:123]
-    #    que contienen los IDs EXACTOS del catálogo. Es la fuente más confiable de
-    #    qué productos vio/compró el cliente (mejor que coincidencia de nombres).
-    #    Regex tolerante a espacios (igual que _FOTO_MARKER_RE en main.py).
-    _foto_id_re = re.compile(r"\[\s*FOTO:\s*(\d+)\s*\]", re.IGNORECASE)
-    asistente_msgs = [m for m in history if m.get("role") == "assistant"]
-    for msg in asistente_msgs[-3:]:  # últimos 3 mensajes del bot
-        contenido = msg.get("content", "")
-        if not contenido:
-            continue
-        for m_fid in _foto_id_re.finditer(contenido):
-            pid = int(m_fid.group(1))
+    # 0) PRIORIDAD MÁXIMA: productos_mostrados_ids (persistidos en conversation_state).
+    #    Los marcadores [FOTO:ID] se limpian del historial antes de guardarlo, así que
+    #    esta es la ÚNICA fuente confiable de qué productos vio/compró el cliente.
+    if productos_mostrados_ids:
+        for pid in productos_mostrados_ids:
             if pid in seen_ids:
                 continue
             p = await catalog.get_producto_by_id(pid)
@@ -162,11 +161,9 @@ async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], 
                 _agregar(p)
             if len(items) >= 8:
                 break
-        if len(items) >= 8:
-            break
 
-    # 1) Si los marcadores no dieron productos, buscar por nombres en los últimos
-    #    mensajes del CLIENTE (su confirmación real de compra).
+    # 1) Si no hubo IDs persistidos, buscar por nombres en los últimos mensajes
+    #    del CLIENTE (su confirmación real de compra).
     if not items:
         user_msgs = [m for m in history if m.get("role") == "user"]
         for msg in user_msgs[-3:]:  # últimos 3 mensajes del cliente
@@ -183,6 +180,7 @@ async def _resolver_productos_y_total(history: list[dict]) -> tuple[list[dict], 
     # 2) FALLBACK: si nada matcheó, tomar el ÚLTIMO mensaje del asistente y buscar
     #    productos por nombre.
     if not items:
+        asistente_msgs = [m for m in history if m.get("role") == "assistant"]
         if asistente_msgs:
             ultimo = asistente_msgs[-1].get("content", "")
             if ultimo:
@@ -219,8 +217,12 @@ async def maybe_create_pedido(
     direccion = _extraer_direccion(history)
     telefono = _extraer_telefono(history, wa_id)
 
-    # Resolver productos y total del catálogo.
-    items, total = await _resolver_productos_y_total(history)
+    # Resolver productos y total del catálogo. Priorizar los IDs persistidos en
+    # conversation_state (productos_mostrados) porque los marcadores [FOTO:ID] se
+    # limpian del historial antes de guardarlo.
+    estado_conv = await db.get_conversation_state(wa_id)
+    productos_ids = (estado_conv or {}).get("productos_mostrados", []) if estado_conv else []
+    items, total = await _resolver_productos_y_total(history, productos_mostrados_ids=productos_ids)
 
     # Crear el pedido (aunque falten datos o total=0 — el equipo lo completa).
     try:
