@@ -586,13 +586,16 @@ async def _recuperar_candidatos(
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
     if debe_mostrar and cat_func:
-        # Excluir productos ya mostrados en la conversación para no repetir fotos
+        # Excluir productos ya mostrados en la conversación para no repetir fotos.
+        # Pasar el subtipo detectado para priorizar productos que lo cumplan
+        # (exactitud: "doble" → dildos dobles primero, "ventosa" → con ventosa).
         candidatos = await catalog.get_productos_para_recomendar(
             categoria_funcional=cat_func,
             genero=genero,
             user_text=user_text,
             exclude_ids=exclude,
             limit=5,
+            subtipo=clasif.get("subtipo_detectado"),
         )
 
     # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,

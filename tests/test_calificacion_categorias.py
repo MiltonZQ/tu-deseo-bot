@@ -662,3 +662,103 @@ def test_bug9_el_codigo_real_no_tiene_dollar_dollar():
                         assert "$" in line, "Debe tener placeholder $N"
                 return
     raise AssertionError("No se encontró upsert_conversation_state")
+
+
+# ── BUG 10: matching por subtipos (doble, ventosa, realista) ─────────────────
+
+def test_bug10_subtipo_detectado_doble():
+    """El clasificador debe detectar QUÉ subtipo pidió el cliente (no solo si hay
+    uno). Réplica de la extracción de subtipo_detectado en catalog.py."""
+    _SUBTIPO = ("realista", "ventosa", "vidrio", "cristal", "doble", "rabbit",
+                "base de agua", "silicona", "prostat", "próstata", "control remoto")
+
+    def _subtipo_de(user_text):
+        norm = user_text.lower()
+        for s in _SUBTIPO:
+            if s in norm:
+                return s
+        return None
+
+    assert _subtipo_de("doble") == "doble"
+    assert _subtipo_de("quiero con ventosa") == "ventosa"
+    assert _subtipo_de("uno realista") == "realista"
+    assert _subtipo_de("de vidrio") == "vidrio"
+    assert _subtipo_de("base de agua") == "base de agua"
+    assert _subtipo_de("vibrador") is None  # sustantivo de categoría, no subtipo
+
+
+def test_bug10_subtipo_detectado_en_clasificador_real():
+    """Verifica que clasificar_intencion_cliente devuelve subtipo_detectado en el
+    dict (campo nuevo). Inspección del fuente."""
+    import ast
+    src = _CAT.read_text()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "clasificar_intencion_cliente":
+                fn_src = ast.get_source_segment(src, node)
+                assert "subtipo_detectado" in fn_src, (
+                    "clasificar_intencion_cliente debe devolver subtipo_detectado")
+                return
+    raise AssertionError("No se encontró clasificar_intencion_cliente")
+
+
+def test_bug10_ranking_bonus_subtipo():
+    """Réplica del bonus de subtipo en _filtrar (get_productos_para_recomendar):
+    los productos cuyo nombre contiene el subtipo pedido reciben +10 y quedan
+    primeros. Así 'doble' → dildos dobles primero."""
+    subtipo = "doble"
+
+    def _score(nombre, base=2.0):
+        norm = nombre.lower()
+        if subtipo in norm:
+            return base + 10.0
+        return base
+
+    dildo_doble = _score("DILDO DOBLE PENETRADOR")
+    dildo_simple = _score("DILDO BASIX SLIM 7")
+    assert dildo_doble > dildo_simple
+    assert dildo_doble == 12.0
+    assert dildo_simple == 2.0
+
+    # Orden: dobles primero, luego el resto.
+    productos = [
+        ("DILDO BASIX SLIM 7", 2.0),
+        ("DILDO DOBLE PENETRADOR", 12.0),
+        ("DILDO REALISTA KONA", 2.0),
+    ]
+    productos.sort(key=lambda p: -p[1])
+    assert "DOBLE" in productos[0][0]
+
+
+def test_bug10_no_heredar_genero_espurio_con_subtipo():
+    """Réplica de la lógica anti-herencia: si el mensaje actual trae un subtipo
+    (doble), NO se hereda género del historial (evita 'para hombre' espurio)."""
+    _SUBTIPO = ("realista", "ventosa", "vidrio", "cristal", "doble")
+
+    def _deberia_heredar_genero(msg_actual):
+        norm = msg_actual.lower()
+        tiene_subtipo = any(s in norm for s in _SUBTIPO)
+        # Si hay subtipo, no heredar género del historial.
+        return not tiene_subtipo
+
+    # "doble" trae subtipo → NO heredar género.
+    assert _deberia_heredar_genero("doble") is False
+    # "sencillo" sin subtipo → SÍ heredar género.
+    assert _deberia_heredar_genero("sencillo") is True
+    # "para el pene" sin subtipo → SÍ heredar (aunque también detecta género propio).
+    assert _deberia_heredar_genero("para el pene") is True
+
+
+def test_bug10_get_productos_para_recomendar_acepta_subtipo():
+    """Verifica que get_productos_para_recomendar tenga el parámetro subtipo."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "get_productos_para_recomendar":
+                args = [a.arg for a in node.args.args]
+                assert "subtipo" in args, (
+                    "get_productos_para_recomendar debe aceptar subtipo")
+                return
+    raise AssertionError("No se encontró get_productos_para_recomendar")

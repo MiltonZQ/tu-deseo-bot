@@ -845,6 +845,13 @@ def clasificar_intencion_cliente(user_text: str,
 
     # Si el mensaje es corto y no trae intención/género, mirar el historial reciente
     # (mismo truco ya usado por el RAG anterior) para frases como "negro", "sencillo".
+    # IMPORTANTE: si el mensaje actual trae un SUBTIPO explícito (doble, ventosa...),
+    # NO heredamos género del historial. El subtipo define la variante, no el género;
+    # heredar género espurio causaba "doble" → "para hombre" incorrecto.
+    norm_user_temprano = _normalizar_texto(user_text)
+    tiene_subtipo_temprano = any(
+        s in norm_user_temprano for s in _SUBTIPO_KEYWORDS
+    )
     if not intencion and history:
         for h_msg in reversed(history[-6:]):
             c = h_msg.get("content", "")
@@ -855,18 +862,28 @@ def clasificar_intencion_cliente(user_text: str,
                 intencion = h_int
                 if not sustantivo:
                     sustantivo = h_sus
-            h_gen = _genero_desde_texto_cliente(c)
-            if h_gen and not genero:
-                genero = h_gen
-            if intencion and genero:
+            # Solo heredar género si el mensaje actual NO trae subtipo propio.
+            if not tiene_subtipo_temprano:
+                h_gen = _genero_desde_texto_cliente(c)
+                if h_gen and not genero:
+                    genero = h_gen
+            if intencion and (genero or tiene_subtipo_temprano):
                 break
 
     categoria_funcional = _INTENCION_A_CATEGORIA_FUNCIONAL.get(intencion) if intencion else None
 
     # calificado: hay una intención clara Y (género o subtipo explícito o petición de fotos).
-    tiene_subtipo = bool(sustantivo and any(
-        s in _normalizar_texto(user_text) for s in _SUBTIPO_KEYWORDS
-    ))
+    # subtipo_detectado: CUÁL subtipo reconoció (ej: "doble", "ventosa", "realista"),
+    # para usarlo como filtro de ranking (que el producto mostrado coincida con el
+    # subtipo pedido). Antes solo se sabía SI había subtipo (bool), no cuál.
+    norm_user = _normalizar_texto(user_text)
+    subtipo_detectado = None
+    if sustantivo:
+        for s in _SUBTIPO_KEYWORDS:
+            if s in norm_user:
+                subtipo_detectado = s
+                break
+    tiene_subtipo = subtipo_detectado is not None
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
 
     return {
@@ -876,6 +893,7 @@ def clasificar_intencion_cliente(user_text: str,
         "calificado": calificado,
         "pide_fotos": pide_fotos,
         "sustantivo": sustantivo,
+        "subtipo_detectado": subtipo_detectado,
     }
 
 
@@ -908,6 +926,7 @@ async def get_productos_para_recomendar(
     user_text: str = "",
     exclude_ids: list[int] | None = None,
     limit: int = 5,
+    subtipo: str | None = None,
 ) -> list[dict]:
     """Recupera los productos CORRECTOS para recomendar, filtrados por categoría
     funcional y género, con imagen y stock disponibles.
@@ -982,7 +1001,16 @@ async def get_productos_para_recomendar(
                 continue
             p["_categoria_funcional"] = cat_func
             p["_genero"] = gen
-            p["_score"] = _score_candidato(p, user_text)
+            score = _score_candidato(p, user_text)
+            # BONUS DE SUBTIPO: si el cliente pidió un subtipo concreto (doble,
+            # ventosa, realista, vidrio...) y el producto lo cumple en nombre/
+            # descripción, darle prioridad máxima. Así el producto mostrado
+            # coincide con lo pedido (exactitud ante todo).
+            if subtipo:
+                nd = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
+                if subtipo in nd:
+                    score += 10.0
+            p["_score"] = score
             out.append(p)
         out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
         return out[:limit]
