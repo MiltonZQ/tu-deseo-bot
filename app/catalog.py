@@ -599,6 +599,14 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
 # Mapa de intención del cliente (lo que busca) -> categoría funcional interna.
 # Incluye sinónimos y jerga colombiana ("chimbo" = pene -> hombre / anillos).
 _INTENCION_A_CATEGORIA_FUNCIONAL = {
+    "anillos vibradores": "anillos-y-fundas",
+    "anillo vibrador": "anillos-y-fundas",
+    "anillos de pene": "anillos-y-fundas",
+    "anillo de pene": "anillos-y-fundas",
+    "anillos peneanos": "anillos-y-fundas",
+    "anillo peneano": "anillos-y-fundas",
+    "anillos eroticos": "anillos-y-fundas",
+    "anillo erotico": "anillos-y-fundas",
     "vibradores": "vibradores",
     "vibrador": "vibradores",
     "succionador": "succionadores",
@@ -640,16 +648,17 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
 
 # Sustantivos de producto que el cliente puede mencionar (para RAG/fallback).
 _NOUN_KEYWORDS = [
-    "suspensorio", "suspensor", "lenceria", "lencería", "body", "babydoll", "baby doll",
-    "disfraz", "vibrador", "dildo", "succionador", "plug", "anal", "arnes", "arnés",
-    "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage", "chimbo", "pene",
+    "anillos vibradores", "anillo vibrador", "suspensorio", "suspensor", "lenceria", "lencería",
+    "body", "babydoll", "baby doll", "disfraz", "vibrador", "dildo", "succionador", "plug", "anal",
+    "arnes", "arnés", "lubricante", "anillo", "funda", "masturbador", "bomba", "bondage", "chimbo", "pene",
 ]
 
 # Detección de género en el MENSAJE DEL CLIENTE (no del producto).
 # Incluye jerga colombiana. Orden: de específico a general; gana el primero.
 _GENERO_KEYWORDS_CLIENTE = [
     (("chimbo", "pene", "para el", "para él", "para mi pene", "hombre", "masculino",
-      "prostata", "próstata", "miembro", "verga", "gallo", "pito"), "hombre"),
+      "prostata", "próstata", "miembro", "verga", "gallo", "pito",
+      "anillos vibradores", "anillo vibrador", "anillos de pene", "anillo de pene"), "hombre"),
     (("pareja", "en pareja", "los dos", "mi novia", "mi esposa", "mi novio", "mi esposo",
       "we vibe", "chorus"), "pareja"),
     (("anal", "el culo", "por atras", "por atrás", "cola", "recto"), "anal"),

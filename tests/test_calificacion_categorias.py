@@ -162,3 +162,10 @@ def test_foto_request_re_ver_mas_opciones():
     assert foto_re.search("muestrame mas")
     assert foto_re.search("otras opciones")
     assert foto_re.search("dame mas diseños")
+
+
+def test_anillos_vibradores_mapeo():
+    """Verifica que 'anillos vibradores' asigne anillos-y-fundas y genero hombre."""
+    mapa = _extraer_constantes(_CAT, ["_INTENCION_A_CATEGORIA_FUNCIONAL"])["_INTENCION_A_CATEGORIA_FUNCIONAL"]
+    assert mapa.get("anillos vibradores") == "anillos-y-fundas"
+    assert mapa.get("anillo vibrador") == "anillos-y-fundas"
