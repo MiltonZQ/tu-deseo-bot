@@ -211,23 +211,32 @@ async def complete(user_message: str, history: list[dict],
             "Historial recortado por tokens: %d -> %d mensajes",
             len(history), len(fitted),
         )
-    # Llamada al modelo con fallback automático: si el modelo principal falla
-    # (ej. gpt-5.2 deprecado/apagado por OpenAI), reintenta con el modelo fallback
-    # para que el bot nunca se quede sin responder.
+    # Llamada al modelo con timeout y fallback automático determinístico
     try:
-        resp = await _get_client().chat.completions.create(**_model_kwargs(messages))
+        resp = await asyncio.wait_for(
+            _get_client().chat.completions.create(**_model_kwargs(messages)),
+            timeout=15.0,
+        )
         return resp.choices[0].message.content or ""
     except Exception as exc:
-        if config.OPENAI_MODEL_FALLBACK and config.OPENAI_MODEL_FALLBACK != config.OPENAI_MODEL:
-            log.warning("Modelo principal %s falló (%s); reintentando con fallback %s",
-                        config.OPENAI_MODEL, exc, config.OPENAI_MODEL_FALLBACK)
+        fallback_model = config.OPENAI_MODEL_FALLBACK or "gpt-4o-mini"
+        log.warning("Modelo principal %s falló o timed out (%s); reintentando con fallback %s",
+                    config.OPENAI_MODEL, exc, fallback_model)
+        try:
             fallback_kwargs = dict(_model_kwargs(messages))
-            fallback_kwargs["model"] = config.OPENAI_MODEL_FALLBACK
-            # El fallback (gpt-4.1-mini) no es thinking; quitar reasoning exclude.
+            fallback_kwargs["model"] = fallback_model
             fallback_kwargs.pop("extra_body", None)
-            resp = await _get_client().chat.completions.create(**fallback_kwargs)
+            resp = await asyncio.wait_for(
+                _get_client().chat.completions.create(**fallback_kwargs),
+                timeout=15.0,
+            )
             return resp.choices[0].message.content or ""
-        raise
+        except Exception as fb_exc:
+            log.error("Modelo fallback también falló: %s", fb_exc)
+            if candidatos:
+                c_names = ", ".join(f"📸 {c['nombre']}" for c in candidatos[:3])
+                return f"Para ti tengo estas opciones disponibles 👇\n\n{c_names}\n\n¿Cuál de estas opciones te gustaría llevar? 😊"
+            return "¡Con gusto te ayudo! Cuéntame qué tipo de producto buscas o si deseas ver nuestras opciones más vendidas 😊"
 
 
 async def transcribe_audio(audio_url: str, mime_type: str | None = None) -> str | None:

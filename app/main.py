@@ -241,8 +241,18 @@ async def unpause_contact(
 async def _process_message_safe(payload: dict) -> None:
     try:
         await _process_message(payload)
-    except Exception:
-        log.exception("Error procesando mensaje")
+    except Exception as exc:
+        log.exception("Error procesando mensaje: %s", exc)
+        try:
+            msg = whatsapp_client.extract_message(payload)
+            if msg and msg.get("wa_id"):
+                wa_id = msg["wa_id"]
+                await db.set_bot_paused(wa_id, False)
+                fallback_text = "¡Hola! Tuve una breve intermitencia en el sistema, pero ya estoy listo 😊. ¿Qué producto estás buscando?"
+                await db.save_message(wa_id, "assistant", fallback_text)
+                await whatsapp_client.send_text(wa_id, fallback_text)
+        except Exception:
+            log.exception("Error enviando mensaje de recuperación")
 
 
 # wabaId bloqueado: la automatización ignora esta línea (anti-spam multi-línea).
