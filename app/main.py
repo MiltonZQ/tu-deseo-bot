@@ -964,7 +964,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     es_escalamiento = bool(
         info.get("sin_stock_subtipo")
         or escalations.should_escalate(reply)
-        or any(phrase in reply.lower() for phrase in ("verificar con el equipo", "consultar con el equipo", "un momento por favor"))
+        or any(phrase in reply.lower() for phrase in ("verificar con el equipo", "consultar con el equipo"))
     )
 
     if es_escalamiento:
