@@ -895,6 +895,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             "genero": info["genero"],
             "calificado": info["calificado"],
             "categoria_agotada": info.get("categoria_agotada", False),
+            "sin_mas_opciones": info.get("sin_mas_opciones", False),
             "productos_mostrados": ids_mostrados,
             "productos_con_precios": productos_detalle_estado,
         },
@@ -916,25 +917,23 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     reply = re.sub(r"\[\[PEDIDO_DATOS:[^\]]*\]\]", "", reply).strip()
     reply = re.sub(r"[ \t]{2,}", " ", reply)
 
-    # VALIDAR candidatos: los [FOTO:ID] del LLM deben estar en la lista de
-    # candidatos confirmados. Esto elimina alucinaciones (ej: Antifaz/Esposas
-    # cuando el cliente pidió anillo). Si el LLM no emitió marcadores válidos
-    # pero teníamos candidatos, se inyectan los del sistema.
-    # IMPORTANTE: se calcula ANTES de la guardia de calificación para que esa
-    # guardia sepa cuántos productos se enviarán REALMENTE (no solo si el LLM
-    # puso marcadores brutos, que pueden ser IDs alucinados y descartarse aquí).
+    # VALIDAR candidatos: los [FOTO:ID] del LLM se cruzan con la lista de
+    # candidatos confirmados. Para garantizar que NUNCA se omita ningún producto
+    # recuperado por el sistema, si la cantidad devuelta por el LLM difiere de
+    # la lista de candidatos, se envían TODOS los candidatos del sistema (máx 5).
     if info["debe_mostrar"] and candidatos:
-        final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
-        if len(final_productos) < 2:
-            # El LLM omitió las fotos o puso IDs inválidos: forzar candidatos.
+        llm_resueltos = _resolver_candidatos_del_llm(foto_ids, candidatos)
+        if len(llm_resueltos) == len(candidatos):
+            final_productos = llm_resueltos
+        else:
+            # Forzar la lista completa de candidatos para no omitir productos del inventario
             log.info(
-                "Fotos forzadas desde candidatos del sistema (%d) — LLM omitió marcadores",
-                len(candidatos),
+                "Fotos ajustadas a la lista completa de candidatos (%d vs %d del LLM)",
+                len(candidatos), len(llm_resueltos),
             )
             final_productos = candidatos[:5]
     else:
-        # No debía mostrar fotos: el LLM solo califica. Si por error emitió
-        # marcadores, validarlos igualmente contra candidatos (vacío = nada).
+        # No debía mostrar fotos: el LLM solo califica.
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
 
     # RED DE SEGURIDAD — turno de calificación: si el sistema decidió NO mostrar
