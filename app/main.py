@@ -201,6 +201,21 @@ async def debug_fundas():
         return [dict(r) for r in rows]
 
 
+@app.get("/debug/db-status")
+async def debug_db_status():
+    async with db._pool.acquire() as conn:
+        leads = await conn.fetch("SELECT wa_id, bot_paused FROM leads")
+        pausados = await conn.fetch("SELECT telefono, pausado FROM bot_pausado")
+        convs = await conn.fetch("SELECT id, wa_id, role, content, created_at FROM conversations ORDER BY id DESC LIMIT 10")
+        processed = await conn.fetch("SELECT message_id FROM processed_messages ORDER BY processed_at DESC LIMIT 10")
+        return {
+            "leads": [dict(r) for r in leads],
+            "bot_pausado": [dict(r) for r in pausados],
+            "conversations": [dict(r) for r in convs],
+            "processed_messages": [dict(r) for r in processed],
+        }
+
+
 @app.post("/maintenance/reset-all-conversations")
 async def reset_all_conversations(
     x_reload_token: str = Header(None),
