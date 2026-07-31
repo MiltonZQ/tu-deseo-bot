@@ -18,6 +18,7 @@ env/
 .vscode/
 .idea/
 .DS_Store
+.zcode/
 
 # Logs / ejecución
 *.log

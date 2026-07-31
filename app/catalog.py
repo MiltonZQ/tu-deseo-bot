@@ -813,6 +813,31 @@ _SUBTIPO_A_CATEGORIA = {
     "amarre": "pareja-y-bondage", "amarres": "pareja-y-bondage",
     "mordaza": "pareja-y-bondage", "vendas": "pareja-y-bondage",
 }
+
+# Sinónimos y equivalencias por subtipo para filtrado estricto en recomendaciones
+_SUBTIPO_SINONIMOS: dict[str, list[str]] = {
+    "ducha": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
+    "enema": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
+    "prostat": ["prostat", "próstata", "prostatico", "prostático"],
+    "próstata": ["prostat", "próstata", "prostatico", "prostático"],
+    "plug": ["plug", "plugs", "dilatador"],
+    "bola": ["bola", "bolas", "ben wa"],
+    "bolas": ["bola", "bolas", "ben wa"],
+    "realista": ["realista", "realistas", "peneano", "peneana"],
+    "ventosa": ["ventosa", "ventosas"],
+    "vidrio": ["vidrio", "cristal"],
+    "cristal": ["vidrio", "cristal"],
+    "doble": ["doble", "doble estimulacion", "doble penetracion"],
+    "rabbit": ["rabbit", "orejas"],
+    "punto g": ["punto g", "puntog", "curvado"],
+    "hitachi": ["hitachi", "varita", "wand"],
+    "bala": ["bala", "bullet"],
+    "huevo vibr": ["huevo", "huevo vibrador"],
+    "sabores": ["sabor", "sabores", "comestible"],
+    "sabor": ["sabor", "sabores", "comestible"],
+    "base de agua": ["agua", "base de agua"],
+    "silicona": ["silicona", "base de silicona"],
+}
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
 # juguetes con calentamiento. "cola" puede ser plug anal o lencería. "clitor"/
 # "clitori" suelen ser vibradores pero también succionadores. Estos NO se mapean
@@ -1135,24 +1160,27 @@ async def get_productos_para_recomendar(
             p["_genero"] = gen
             score = _score_candidato(p, user_text)
             # BONUS DE SUBTIPO: si el cliente pidió un subtipo concreto (ducha,
-            # doble, ventosa...) y el producto lo cumple en nombre/descripción,
-            # darle prioridad máxima. Y SEPARARLO en out_subtipo: si hay ≥2
+            # doble, ventosa...) y el producto lo cumple en nombre/descripción o sinónimos,
+            # darle prioridad máxima. Y SEPARARLO en out_subtipo: si hay ≥1
             # productos del subtipo, mostrar SOLO esos (exactitud ante todo, no
             # mezclar plugs cuando el cliente pidió duchas).
             cumple_subtipo = False
             if subtipo:
                 nd = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
-                if subtipo in nd:
-                    score += 10.0
+                sinonimos = _SUBTIPO_SINONIMOS.get(subtipo, [subtipo])
+                if any(s in nd for s in sinonimos):
                     cumple_subtipo = True
+                    if subtipo in ("sabor", "sabores") and "sin sabor" in nd and not any(f in nd for f in ("fresa", "chocolate", "uva", "cereza", "manzana", "menta", "frutilla", "sandia", "chicle", "sabor a")):
+                        cumple_subtipo = False
+                if cumple_subtipo:
+                    score += 10.0
             p["_score"] = score
             if cumple_subtipo:
                 out_subtipo.append(p)
             out.append(p)
         out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
-        # Si hay ≥2 productos del subtipo exacto, devolver SOLO esos (no mezclar).
-        # Si hay 0-1, completar con los mejores de la categoría.
-        if out_subtipo and len(out_subtipo) >= 2:
+        # Si hay ≥1 producto del subtipo exacto / sinónimos, devolver SOLO esos (no mezclar con plugs u otros productos).
+        if out_subtipo and len(out_subtipo) >= 1:
             out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
             return out_subtipo[:limit]
         return out[:limit]

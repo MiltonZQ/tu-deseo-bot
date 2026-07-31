@@ -53,6 +53,7 @@ async def clear_history():
             "conversation_state",
             "processed_messages",
             "pending_follow_ups",
+            "escalations",
         ]
 
         print("\n--- Conteo previo ---")
