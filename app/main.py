@@ -23,7 +23,7 @@ log = logging.getLogger("tu-deseo-bot")
 
 _message_buffer: dict[str, list[str]] = {}
 _message_buffer_lock = asyncio.Lock()
-MESSAGE_GROUP_WAIT = 3.0  # segundos de espera para agrupar mensajes del mismo número
+MESSAGE_GROUP_WAIT = 0.5  # agrupar mensajes ráfaga en 0.5s sin bloquear el lock del usuario
 
 # Lock por usuario: serializa el procesamiento de un mismo wa_id para que sus
 # mensajes se atiendan en secuencia (evita respuestas duplicadas y race conditions
@@ -177,8 +177,24 @@ async def reset_all_conversations(
 async def _process_message_safe(payload: dict) -> None:
     try:
         await _process_message(payload)
-    except Exception:
-        log.exception("Error procesando mensaje")
+    except Exception as exc:
+        log.exception("Error procesando mensaje: %s", exc)
+        try:
+            msg = whatsapp_client.extract_message(payload)
+            if msg and msg.get("wa_id"):
+                wa_id = msg["wa_id"]
+                await db.set_bot_paused(wa_id, False)
+                user_txt = msg.get("text", "")
+                candidatos = await catalog.buscar_producto_especifico(user_txt, limit=3)
+                if candidatos:
+                    c_names = "\n".join(f"📸 {c['nombre']} — ${c['precio']:,}" for c in candidatos)
+                    fallback_text = f"Para ti tengo estas opciones disponibles 👇\n\n{c_names}\n\n¿Cuál de estos te llama más la atención? 😊"
+                else:
+                    fallback_text = "¡Hola! Con gusto te asesoro 😊 ¿Qué tipo de producto estás buscando hoy? Tenemos vibradores, fundas, lubricantes y más."
+                await db.save_message(wa_id, "assistant", fallback_text)
+                await whatsapp_client.send_text(wa_id, fallback_text)
+        except Exception:
+            log.exception("Error enviando mensaje de recuperación")
 
 
 # wabaId bloqueado: la automatización ignora esta línea (anti-spam multi-línea).
