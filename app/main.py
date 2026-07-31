@@ -166,13 +166,14 @@ async def reset_contact_memory(
 
 
 @app.get("/debug/test-rec")
-async def debug_test_rec(q: str = "Tienen funda para pene"):
+async def debug_test_rec(q: str = "Tienen succionadores"):
+    clasif = await catalog.clasificar_intencion_cliente(q, [])
     candidatos = await catalog.get_productos_para_recomendar(
-        categoria_funcional="fundas-pene",
-        genero="hombre",
+        categoria_funcional=clasif.get("categoria_funcional"),
+        genero=clasif.get("genero"),
         user_text=q,
         limit=5,
-        subtipo="funda",
+        subtipo=clasif.get("subtipo_detectado"),
     )
     res = []
     for c in candidatos:
@@ -186,6 +187,7 @@ async def debug_test_rec(q: str = "Tienen funda para pene"):
             })
     return {
         "query": q,
+        "clasif": clasif,
         "candidatos": res,
     }
 
