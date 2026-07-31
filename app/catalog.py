@@ -349,6 +349,8 @@ CATEGORIAS_FUNCIONALES = [
 # (palabras clave en nombre/descripción, categoría funcional) — orden importa:
 # se evalúa de arriba a abajo y la primera coincidencia gana.
 _REGLAS_CATEGORIA = [
+    # Enemas, duchas anales e irrigadores (prioridad para no caer en marca optimus)
+    (("enema", "ducha anal", "duchas anales", "irrigador", "pera anal"), "anal"),
     # Higiene/cuidado (sin ambigüedad con juguetes)
     (("limpiador", "limpia juguete", "toallitas"), "lubricantes-y-cuidado"),
     # Lubricantes y cosmética íntima

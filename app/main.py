@@ -614,94 +614,61 @@ async def _recuperar_candidatos(
             subtipo=clasif.get("subtipo_detectado"),
         )
 
-    # BLINDAJE ANTI-BUCLE: si el cliente está respondiendo a una pregunta de
-    # calificación (estado.calificado=True, debe_mostrar=True) PERO no se
-    # encontraron candidatos (género/subtipo restrictivo no matchea nada),
-    # buscar productos de la categoría RELAJADO AL MÁXIMO (sin género, sin
-    # subtipo). Garantiza que cualquier respuesta a una calificación muestre
-    # productos en vez de re-preguntar infinitamente. Si aun así no hay (categoría
-    # realmente vacía), el bot derivará honestamente — nunca re-pregunta lo mismo.
-    if not candidatos and debe_mostrar and cat_func and estado_tiene_cat and estado.get("calificado"):
-        log.info("Blindaje anti-bucle: buscando %s relajado (género=%s→None)", cat_func, genero)
-        candidatos = await catalog.get_productos_para_recomendar(
-            categoria_funcional=cat_func,
-            genero=None,  # relajar género
-            user_text=user_text,
-            exclude_ids=exclude,
-            limit=5,
-        )
-
-    # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,
-    # intentar recuperación por el sustantivo (fallback). Se respeta la exclusión
-    # de productos ya mostrados para no repetir fotos al pedir "ver más".
-    if not candidatos and clasif["pide_fotos"] and clasif["sustantivo"]:
-        cat_func_fb = catalog._INTENCION_A_CATEGORIA_FUNCIONAL.get(
-            clasif["sustantivo"],
-            catalog._categoria_normalizada(clasif["sustantivo"], "", ""),
-        )
-        if cat_func_fb and cat_func_fb != "juegos-y-accesorios":
+    # Si se especificó un subtipo (ej: "duchas anales") y no hay candidatos, NO ejecutar
+    # fallbacks a otras categorías irrelevantes (como Arneses Strap-On).
+    if not candidatos and not clasif.get("subtipo_detectado"):
+        # BLINDAJE ANTI-BUCLE: si el cliente está respondiendo a una pregunta de
+        # calificación (estado.calificado=True, debe_mostrar=True) PERO no se
+        # encontraron candidatos (género/subtipo restrictivo no matchea nada),
+        # buscar productos de la categoría RELAJADO AL MÁXIMO (sin género, sin
+        # subtipo). Garantiza que cualquier respuesta a una calificación muestre
+        # productos en vez de re-preguntar infinitamente.
+        if debe_mostrar and cat_func and estado_tiene_cat and estado.get("calificado"):
+            log.info("Blindaje anti-bucle: buscando %s relajado (género=%s→None)", cat_func, genero)
             candidatos = await catalog.get_productos_para_recomendar(
-                categoria_funcional=cat_func_fb, genero=genero,
-                user_text=user_text, exclude_ids=exclude, limit=5,
+                categoria_funcional=cat_func,
+                genero=None,  # relajar género
+                user_text=user_text,
+                exclude_ids=exclude,
+                limit=5,
             )
-            if candidatos:
-                cat_func = cat_func_fb
 
-    # Si no hay candidatos por categoría, intentar búsqueda por nombre:
-    # 1) por el texto del cliente (producto específico tipo "Lovense Diamo"), y
-    # 2) si debe mostrar y hay un sustantivo/categoría, buscar por ese sustantivo.
-    # NOTA: solo se ejecuta si debe_mostrar es True o la consulta es explícitamente un producto específico.
-    # Se respeta la exclusión de productos ya mostrados.
-    if not candidatos and (debe_mostrar or clasif.get("es_especifico")):
-        especificos = await catalog.buscar_producto_especifico(
-            user_text, limit=5, exclude_ids=exclude)
-        if especificos:
-            candidatos = especificos
+        # Si no hay categoría clara pero el cliente pidió fotos y hay un sustantivo,
+        # intentar recuperación por el sustantivo (fallback).
+        if not candidatos and clasif["pide_fotos"] and clasif["sustantivo"]:
+            cat_func_fb = catalog._INTENCION_A_CATEGORIA_FUNCIONAL.get(
+                clasif["sustantivo"],
+                catalog._categoria_normalizada(clasif["sustantivo"], "", ""),
+            )
+            if cat_func_fb and cat_func_fb != "juegos-y-accesorios":
+                candidatos = await catalog.get_productos_para_recomendar(
+                    categoria_funcional=cat_func_fb, genero=genero,
+                    user_text=user_text, exclude_ids=exclude, limit=5,
+                )
+                if candidatos:
+                    cat_func = cat_func_fb
 
-    if not candidatos and debe_mostrar:
-        # Último recurso: buscar por el sustantivo/intención detectada.
-        termino = clasif["sustantivo"] or intencion or cat_func
-        if termino:
-            especificos2 = await catalog.buscar_producto_especifico(
-                termino, limit=5, exclude_ids=exclude)
-            if especificos2:
-                candidatos = especificos2
-                log.info("Candidatos recuperados por término fallback %r: %d", termino, len(candidatos))
-
-    # BÚSQUEDA POR TEXTO LIBRE EN TODA LA DB: cuando no hay categoría clara
-    # (cat_func=None) y los fallbacks anteriores no dieron nada, pero el mensaje
-    # del cliente PARECE buscar un producto (no es saludo/pago/queja), buscar
-    # directamente en la DB por texto libre (ILIKE). Así "multiorgasmo", "Sen",
-    # "Elixir" o cualquier término que esté en el nombre de un producto se encuentra.
-    # Sin esto, el sistema no busca y el LLM escribe "Para ti tengo esto 👇" sin fotos.
-    if not candidatos and not cat_func and not _es_fase_venta(user_text, history):
-        # Heurística: el mensaje tiene tokens significativos (≥4 letras) que no son
-        # saludos ni preguntas generales → probablemente busca un producto.
-        tokens_significativos = [t for t in user_text.lower().split()
-                                 if len(t) >= 4 and t not in (
-                                     "hola", "buenas", "buenos", "gracias", "dias",
-                                     "tardes", "noches", "donde", "cuanto", "cuantos",
-                                     "como", "esta", "quiero", "tener", "tienen",
-                                     "necesito", "puedo", "puede", "hacer", "tener",
-                                 )]
-        if tokens_significativos:
-            log.info("Búsqueda por texto libre (sin categoría) para %r", user_text[:60])
-            encontrados = await catalog.buscar_producto_especifico(
+        # Si no hay candidatos por categoría, intentar búsqueda por nombre:
+        if not candidatos and (debe_mostrar or clasif.get("es_especifico")):
+            especificos = await catalog.buscar_producto_especifico(
                 user_text, limit=5, exclude_ids=exclude)
-            if encontrados:
-                candidatos = encontrados
-                # Marcar como específico para que se muestre directo.
-                cat_func = "juegos-y-accesorios"  # categoría genérica para que debe_mostrar=True
-                debe_mostrar = True
-                clasif["calificado"] = True
-                log.info("Texto libre encontró %d productos para %r", len(candidatos), user_text[:60])
+            if especificos:
+                candidatos = especificos
 
-    # Detectar CATEGORÍA AGOTADA: el cliente pidió "ver más" (pide_fotos y ya hay
-    # productos mostrados) pero no quedan candidatos nuevos tras la exclusión, y sí
-    # existe una categoría funcional. Esto señala al LLM que NO ofrezca "ver más
-    # diseños" (ya mostró todo) y en su lugar sugiera categorías relacionadas.
+        if not candidatos and debe_mostrar:
+            # Último recurso: buscar por el sustantivo/intención detectada.
+            termino = clasif["sustantivo"] or intencion or cat_func
+            if termino:
+                especificos2 = await catalog.buscar_producto_especifico(
+                    termino, limit=5, exclude_ids=exclude)
+                if especificos2:
+                    candidatos = especificos2
+                    log.info("Candidatos recuperados por término fallback %r: %d", termino, len(candidatos))
+
+    # Detectar CATEGORÍA/SUBTIPO AGOTADO: el cliente pidió "ver más" o un subtipo específico
+    # cuyas opciones disponibles en inventario ya fueron totalmente mostradas en mensajes previos.
     categoria_agotada = bool(
-        not candidatos and clasif["pide_fotos"] and bool(exclude) and cat_func
+        not candidatos and (clasif["pide_fotos"] or clasif.get("subtipo_detectado")) and bool(exclude) and cat_func
     )
 
     info = {
@@ -712,6 +679,8 @@ async def _recuperar_candidatos(
         "pide_fotos": clasif["pide_fotos"],
         "reset_state": reset_state,
         "categoria_agotada": categoria_agotada,
+        "sin_mas_opciones": bool(candidatos and len(candidatos) < 5),
+        "sin_stock_subtipo": bool(clasif.get("subtipo_detectado") and not candidatos and not exclude),
         # NUNCA mostrar fotos en el primer turno de una categoría general sin calificar.
         "debe_mostrar": debe_mostrar and bool(candidatos),
     }
