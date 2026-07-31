@@ -141,9 +141,46 @@ def test_lubricantes_sabores():
     assert len(resultado) == 1
 
 
+def test_funda_pene_no_mezcla_masturbadores():
+    """Valida que para 'tienen funda para el pene', solo se recomienden fundas y NUNCA masturbadores."""
+    from app.catalog import _INTENCION_A_CATEGORIA_FUNCIONAL
+    assert _INTENCION_A_CATEGORIA_FUNCIONAL.get("funda") == "fundas-pene"
+    assert _INTENCION_A_CATEGORIA_FUNCIONAL.get("fundas") == "fundas-pene"
+    assert _INTENCION_A_CATEGORIA_FUNCIONAL.get("funda para el pene") == "fundas-pene"
+
+    user_text = "tienen funda para el pene"
+    norm = _normalizar_texto(user_text)
+
+    subtipo = None
+    for s in _SUBTIPO_KEYWORDS:
+        if s in norm:
+            subtipo = s
+            break
+
+    assert subtipo in ("funda", "fundas")
+    assert _SUBTIPO_A_CATEGORIA.get(subtipo) == "fundas-pene"
+
+    cat_rows = [
+        {"id": 29012, "nombre": "Funda para el Pene Drakon", "descripcion": "Funda para el pene con textura"},
+        {"id": 29037, "nombre": "Funda para el Pene Poer Camtoyz", "descripcion": "Funda realista de pene"},
+        {"id": 10001, "nombre": "Huevo Masturbador Goggy", "descripcion": "Masturbador masculino"},
+        {"id": 10002, "nombre": "Lovense Gush Masturbador Masculino", "descripcion": "Masturbador recargable"},
+    ]
+
+    resultado = _simular_filtrado_subtipo(cat_rows, subtipo, user_text)
+
+    nombres_res = [p["nombre"] for p in resultado]
+    assert "Funda para el Pene Drakon" in nombres_res
+    assert "Funda para el Pene Poer Camtoyz" in nombres_res
+    assert "Huevo Masturbador Goggy" not in nombres_res
+    assert "Lovense Gush Masturbador Masculino" not in nombres_res
+    assert len(resultado) == 2, "Solo debía retornar las 2 fundas para pene"
+
+
 if __name__ == "__main__":
     test_enema_jervis_optimus_genero_anal()
     test_duchas_anales_no_mezcla_plugs()
     test_subtipo_sin_stock_retorna_vacio()
     test_lubricantes_sabores()
+    test_funda_pene_no_mezcla_masturbadores()
     print("✅ Todos los tests unitarios de filtrado por subtipo y género pasaron exitosamente!")

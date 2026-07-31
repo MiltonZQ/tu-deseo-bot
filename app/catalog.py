@@ -662,14 +662,34 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
 # Mapa de intención del cliente (lo que busca) -> categoría funcional interna.
 # Incluye sinónimos y jerga colombiana ("chimbo" = pene -> hombre / anillos).
 _INTENCION_A_CATEGORIA_FUNCIONAL = {
-    "anillos vibradores": "anillos-y-fundas",
-    "anillo vibrador": "anillos-y-fundas",
-    "anillos de pene": "anillos-y-fundas",
-    "anillo de pene": "anillos-y-fundas",
-    "anillos peneanos": "anillos-y-fundas",
-    "anillo peneano": "anillos-y-fundas",
-    "anillos eroticos": "anillos-y-fundas",
-    "anillo erotico": "anillos-y-fundas",
+    "anillos vibradores": "anillos-vibradores",
+    "anillo vibrador": "anillos-vibradores",
+    "anillos de pene": "anillos-vibradores",
+    "anillo de pene": "anillos-vibradores",
+    "anillos peneanos": "anillos-vibradores",
+    "anillo peneano": "anillos-vibradores",
+    "anillos eroticos": "anillos-vibradores",
+    "anillo erotico": "anillos-vibradores",
+    "anillo": "anillos-vibradores",
+    "anillos": "anillos-vibradores",
+    "funda": "fundas-pene",
+    "fundas": "fundas-pene",
+    "funda para el pene": "fundas-pene",
+    "fundas para el pene": "fundas-pene",
+    "funda peneana": "fundas-pene",
+    "extensor": "fundas-pene",
+    "engrosador": "fundas-pene",
+    "bomba": "bombas-pene",
+    "bombas": "bombas-pene",
+    "bomba de vacio": "bombas-pene",
+    "bomba para el pene": "bombas-pene",
+    "ducha": "anal",
+    "duchas": "anal",
+    "ducha anal": "anal",
+    "duchas anales": "anal",
+    "enema": "anal",
+    "enemas": "anal",
+    "irrigador": "anal",
     "vibradores": "vibradores",
     "vibrador": "vibradores",
     "succionador": "succionadores",
@@ -682,11 +702,6 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "anal": "anal",
     "masturbador": "masturbadores",
     "masturbadores": "masturbadores",
-    "anillo": "anillos-y-fundas",
-    "anillos": "anillos-y-fundas",
-    "funda": "anillos-y-fundas",
-    "fundas": "anillos-y-fundas",
-    "bomba": "anillos-y-fundas",
     "suspensorio": "lenceria",
     "suspensorios": "lenceria",
     "suspensor": "lenceria",
@@ -767,9 +782,7 @@ _SUBTIPO_KEYWORDS = (
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
     # Anillos/fundas
-    # (Nota: "vibrador" NO se incluye aquí porque es sustantivo de categoría;
-    # "anillo vibrador" se cubre porque "anillo" es categoría y el género/contexto
-    # determina el subtipo en la regla híbrida.)
+    "funda", "fundas", "extensor", "engrosador",
     # Lencería
     "arnes", "arnés", "liguero", "pechera", "encaje", "body", "disfraz",
     "suspensorio", "conjunto",
@@ -807,6 +820,8 @@ _SUBTIPO_A_CATEGORIA = {
     "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
     "body": "lenceria", "disfraz": "lenceria", "suspensorio": "lenceria",
     "conjunto": "lenceria",
+    # Fundas
+    "funda": "fundas-pene", "fundas": "fundas-pene", "extensor": "fundas-pene", "engrosador": "fundas-pene",
     # Bondage / BDSM
     "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
     "antifaz": "pareja-y-bondage", "antifaces": "pareja-y-bondage",
@@ -818,6 +833,8 @@ _SUBTIPO_A_CATEGORIA = {
 
 # Sinónimos y equivalencias por subtipo para filtrado estricto en recomendaciones
 _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
+    "funda": ["funda", "fundas", "extensor", "engrosador"],
+    "fundas": ["funda", "fundas", "extensor", "engrosador"],
     "ducha": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
     "enema": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
     "prostat": ["prostat", "próstata", "prostatico", "prostático"],
