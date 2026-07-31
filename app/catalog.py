@@ -346,6 +346,25 @@ CATEGORIAS_FUNCIONALES = [
     "juegos-y-accesorios",
 ]
 
+CATEGORIAS_AMPLIAS = {
+    "vibradores",
+    "lenceria",
+    "dildos",
+    "anal",
+    "lubricantes-y-cuidado",
+    "pareja-y-bondage",
+    "juegos-y-accesorios",
+}
+
+CATEGORIAS_PUNTUALES = {
+    "succionadores",
+    "bombas-pene",
+    "fundas-pene",
+    "masturbadores",
+    "anillos-vibradores",
+    "anillos-y-fundas",
+}
+
 # (palabras clave en nombre/descripción, categoría funcional) — orden importa:
 # se evalúa de arriba a abajo y la primera coincidencia gana.
 _REGLAS_CATEGORIA = [
@@ -753,7 +772,7 @@ _GENERO_KEYWORDS_CLIENTE = [
       "we vibe", "chorus"), "pareja"),
     (("anal", "el culo", "por atras", "por atrás", "cola", "recto"), "anal"),
     (("clitoris", "clítoris", "clitorial", "para ella", "punto g", "vagina", "vaginal",
-      "mujer", "femenino", "mi novia", "clit"), "mujer"),
+      "mujer", "femenino", "mi novia", "clit", "succionador", "succionadores", "succion", "satisfyer"), "mujer"),
 ]
 
 # Marcadores de que el cliente ya está especificando subtipo (no necesita calificar).
@@ -786,7 +805,7 @@ _SUBTIPO_KEYWORDS = (
     # Succionadores
     "doble estimulacion", "doble estimulación",
     # Generales de control
-    "con app", "control remoto", "recargable", "inalambrico", "inalámbrico",
+    "con app", "control por app", "control app", "app control", "control remoto", "recargable", "inalambrico", "inalámbrico",
     "sencillo", "simple",
 )
 
@@ -861,6 +880,10 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "sabor": ["sabor", "sabores", "comestible"],
     "base de agua": ["agua", "base de agua"],
     "silicona": ["silicona", "base de silicona"],
+    "con app": ["con app", "control por app", "control app", "app control", "app", "con aplicacion", "control remoto app"],
+    "control por app": ["con app", "control por app", "control app", "app control", "app", "con aplicacion"],
+    "control app": ["con app", "control por app", "control app", "app control", "app"],
+    "control remoto": ["control remoto", "control por app", "con app", "app control"],
 }
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
 # juguetes con calentamiento. "cola" puede ser plug anal o lencería. "clitor"/
@@ -1041,6 +1064,8 @@ async def clasificar_intencion_cliente(user_text: str,
                 intencion = subtipo_detectado
 
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
+    if categoria_funcional in CATEGORIAS_PUNTUALES:
+        calificado = True
 
     # ES_ESPECÍFICO: el cliente pide un producto concreto por marca/modelo (Lovense
     # Lush, Satisfyer Pro 2, Tenga Egg, We-Vibe Chorus...). En ese caso hay que
@@ -1130,22 +1155,21 @@ async def get_productos_para_recomendar(
     """
     exclude_set = set(exclude_ids or [])
 
-    # Intento 0: Búsqueda semántica vectorial en Qdrant (si está activado y hay texto de usuario)
+    qdrant_candidatos_cache: list[dict] = []
     if config.QDRANT_ENABLED and user_text and user_text.strip():
         try:
             from app import vector_store
-            candidatos_qdrant = await vector_store.search_semantic_products(
+            qdrant_candidatos_cache = await vector_store.search_semantic_products(
                 query=user_text,
                 categoria_funcional=categoria_funcional,
                 genero=genero,
                 exclude_ids=exclude_ids,
                 limit=limit,
             )
-            if candidatos_qdrant:
-                log.info("Recuperados %d candidatos por búsqueda semántica Qdrant", len(candidatos_qdrant))
-                return candidatos_qdrant
+            log.info("Qdrant pre-busqueda %d candidatos", len(qdrant_candidatos_cache))
         except Exception as exc:
-            log.warning("Búsqueda semántica Qdrant falló (%s) — cayendo a búsqueda SQL", exc)
+            log.warning("Qdrant pre-busqueda fallo %s", exc)
+            qdrant_candidatos_cache = []
 
     async def _query(con_imagen: bool, con_activo: bool) -> list[dict]:
 
@@ -1230,6 +1254,41 @@ async def get_productos_para_recomendar(
                 return out[:limit]
             return []
         return out[:limit]
+
+    # Intento Q: Qdrant semantico filtrado por reglas negocio
+    if qdrant_candidatos_cache:
+        filtrados_q = []
+        for p in qdrant_candidatos_cache:
+            if p.get("id") in exclude_set:
+                continue
+            if not p.get("imagen_url"):
+                continue
+            if not _pasa_filtro_negativo(p):
+                continue
+            # validar categoria/genero si se exige
+            if categoria_funcional:
+                cat_q = _categoria_normalizada(p.get("nombre",""), p.get("descripcion",""), p.get("categoria_funcional") or p.get("categoria") or "")
+                # si qdrant ya filtro por categoria, respetar; si no, exigir
+                if cat_q != categoria_funcional and categoria_funcional not in (p.get("categoria_funcional") or ""):
+                    # permitir si no hay categoria exacta pero es cercana? por ahora exigir
+                    if cat_q != categoria_funcional:
+                        # para puntuales como succionadores, exigir exacto
+                        if categoria_funcional in ("succionadores","bombas-pene","fundas-pene","masturbadores","anillos-vibradores"):
+                            continue
+            if genero:
+                gen_q = p.get("genero") or _genero_normalizado(p.get("nombre",""), p.get("descripcion"), "")
+                if gen_q != genero and gen_q != "unisex":
+                    if genero != "unisex":
+                        continue
+            p["_categoria_funcional"] = categoria_funcional or p.get("categoria_funcional")
+            p["_genero"] = genero or p.get("genero")
+            if "_score" not in p:
+                p["_score"] = _score_candidato(p, user_text) + float(p.get("_score",0) or 0)
+            filtrados_q.append(p)
+        if filtrados_q:
+            filtrados_q.sort(key=lambda x: (-x.get("_score",0), len(x.get("nombre",""))))
+            log.info("Qdrant filtrado %d/%d candidatos validos", len(filtrados_q), len(qdrant_candidatos_cache))
+            return filtrados_q[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)
     candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
@@ -1340,6 +1399,13 @@ async def get_productos_para_recomendar(
                 if res:
                     log.info("get_productos_para_recomendar: intento E (ILIKE %r + género) → %d", tok, len(res))
                     return res
+
+    if not candidatos and qdrant_candidatos_cache:
+        # Ultimo recurso: Qdrant sin filtro estricto pero con imagen
+        validos = [p for p in qdrant_candidatos_cache if p.get("imagen_url") and p.get("id") not in exclude_set]
+        if validos:
+            log.info("Fallback Qdrant sin filtro estricto -> %d", len(validos))
+            return validos[:limit]
 
     if not candidatos:
         log.warning("get_productos_para_recomendar: 0 candidatos tras todos los intentos cat=%s género=%s", categoria_funcional, genero)

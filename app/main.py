@@ -63,14 +63,20 @@ async def lifespan(_app: FastAPI):
     except Exception:
         log.exception("No se pudo cargar el catálogo (no bloquea el arranque)")
 
-    # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado
-    if config.WOOCOMMERCE_SYNC_ENABLED:
+    if config.WOOCOMMERCE_SYNC_ENABLED and config.WOOCOMMERCE_AUTO_SYNC:
         try:
             from app import woocommerce
-            log.info("WooCommerce activado: iniciando sincronización inicial de productos e imágenes...")
-            asyncio.create_task(woocommerce.sync_catalog_from_woocommerce(full_replace=True))
+            log.info("WooCommerce auto-sync activado: sincronizacion completa en background (delay para no afectar Hostinger)...")
+            async def _delayed_woo_sync():
+                await asyncio.sleep(30)
+                await woocommerce.sync_catalog_from_woocommerce(full_replace=False)
+                if config.QDRANT_ENABLED:
+                    await vector_store.sync_qdrant_from_db()
+            asyncio.create_task(_delayed_woo_sync())
         except Exception:
-            log.exception("No se pudo iniciar sincronización de WooCommerce")
+            log.exception("No se pudo iniciar sincronizacion WooCommerce")
+    elif config.WOOCOMMERCE_SYNC_ENABLED:
+        log.info("WooCommerce sync habilitado pero auto-sync desactivado (Hostinger safe) - usa webhook o endpoint manual")
 
     deleted = await db.purge_old(config.HISTORY_TTL_DAYS)
     if deleted:
@@ -390,37 +396,34 @@ async def _enviar_fotos_productos(
     wa_id: str,
     candidatos: list[dict],
 ) -> list[int]:
-    """Envía las fotos de los candidatos confirmados por el pipeline.
-
-    Los candidatos ya vienen validados por el sistema (categoría + género + stock
-    + imagen), filtrados por los marcadores [FOTO:ID] que el LLM emitió y que
-    estaban en la lista de candidatos. Esta función SOLO envía las imágenes.
-
-    Devuelve la lista de IDs efectivamente enviados (para persistir en estado).
-    Máximo 5 fotos por turno.
-    """
     enviados: list[int] = []
     try:
         seen_ids: set[int] = set()
-        for p in candidatos:
-            if len(enviados) >= 5:
+        for idx, p in enumerate(candidatos, 1):
+            if len(enviados) >= 3:
                 break
-            pid = p["id"]
-            if pid in seen_ids:
+            pid = p.get("id")
+            if not pid or pid in seen_ids:
                 continue
             if not p.get("imagen_url"):
-                log.warning("Candidato sin imagen_url, omitido: '%s' (id=%s)", p.get("nombre"), pid)
+                log.warning("Candidato sin imagen_url omitido id=%s", pid)
                 continue
             seen_ids.add(pid)
-            caption = f"📸 *{p['nombre']}*\n💰 ${p['precio']:,}"
+            precio = p.get("precio", 0)
+            precio_fmt = f"{int(precio):,}".replace(",", ".") if precio else "0"
+            nombre = (p.get("nombre") or "")[:60]
+            caption = f"{idx}️⃣ *{nombre}*\n💰 ${precio_fmt}"
+            desc = (p.get("descripcion") or "")[:80]
+            if desc:
+                caption += f"\n_{desc}_"
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
-            log.info("Foto de producto '%s' enviada a %s", p["nombre"], wa_id)
+            log.info("Foto %d/%d '%s' enviada a %s", idx, len(candidatos), p.get("nombre"), wa_id)
             enviados.append(pid)
-            if len(enviados) < 5:
-                await asyncio.sleep(0.8)
+            if len(enviados) < 3:
+                await asyncio.sleep(0.6)
         log.info("Fotos a %s: %d enviadas de %d candidatos", wa_id, len(enviados), len(candidatos))
     except Exception:
-        log.exception("Error enviando foto de producto a %s", wa_id)
+        log.exception("Error enviando foto a %s", wa_id)
     return enviados
 
 
@@ -795,6 +798,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         log.info("Bot pausado para %s — mensaje ignorado", wa_id)
         return
 
+    pedido_creado_id = 0
     # Typing indicator — mostrar "escribiendo..." inmediatamente
     await whatsapp_client.send_typing_indicator(msg["message_id"])
 
@@ -1118,39 +1122,11 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # Enviar fotos (candidatos ya validados + filtrados por el filtro final).
     enviados_ids = await _enviar_fotos_productos(wa_id, final_productos)
 
-    # GARANTÍA ESTRUCTURAL "nunca prometer sin enviar": si el sistema decidió
-    # mostrar fotos (debe_mostrar=True) pero al final NO se envió ninguna
-    # (candidatos sin imagen_url, categoría vacía, typo, LLM rebelde), no podemos
-    # dejar al cliente con un texto que promete opciones que nunca llegaron.
-    # Enviamos un mensaje de recuperación honesto y, si aplica, la pregunta de
-    # calificación de la categoría. Esto es la red final: cubre TODAS las causas
-    # de "0 fotos" y evita el estado roto ("ofrece pero no envía nada").
     if info["debe_mostrar"] and not enviados_ids and not pedido_creado_id:
         log.warning(
-            "Bot prometió fotos a %s pero se enviaron 0 (cat=%s, género=%s) — "
-            "recuperando con mensaje honesto",
-            wa_id, info["categoria_funcional"], info["genero"],
+            "Bot prometio fotos a %s pero envio 0 (cat=%s gen=%s candidatos=%d) — se deja reply original para evitar doble mensaje",
+            wa_id, info["categoria_funcional"], info["genero"], len(final_productos),
         )
-        cat_nombres = {
-            "vibradores": "vibradores", "dildos": "dildos", "anal": "juguetes anales",
-            "masturbadores": "masturbadores", "anillos-y-fundas": "anillos y fundas",
-            "lubricantes-y-cuidado": "lubricantes", "lenceria": "lencería",
-            "succionadores": "succionadores", "pareja-y-bondage": "productos de pareja",
-            "juegos-y-accesorios": "accesorios",
-        }
-        nombre_cat = cat_nombres.get(info["categoria_funcional"], "ese producto")
-        # Si toca calificar (género sin aclarar), mejor enviar la pregunta; si no,
-        # mensaje honesto de derivación (no perder la venta: el equipo confirma).
-        if info["genero"] is None and info["categoria_funcional"] in _PREGUNTAS_CALIFICACION:
-            recuperacion = _PREGUNTAS_CALIFICACION[info["categoria_funcional"]]
-        else:
-            recuperacion = (
-                f"Te cuento que estoy confirmando con el equipo cuáles opciones de "
-                f"{nombre_cat} tenemos disponibles ahora mismo 😊 Dame un segundo y te "
-                f"envío las fotos. ¿O prefieres que te ayude con algo más mientras tanto?"
-            )
-        await db.save_message(wa_id, "assistant", recuperacion)
-        await whatsapp_client.send_text(wa_id, recuperacion)
 
     # Persistir estado de conversación: registrar categoría/género/calificación
     # y los productos efectivamente mostrados.

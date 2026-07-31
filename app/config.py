@@ -136,6 +136,10 @@ WOOCOMMERCE_WEBHOOK_SECRET = os.getenv("WOOCOMMERCE_WEBHOOK_SECRET", "")
 WOOCOMMERCE_SYNC_ENABLED = os.getenv("WOOCOMMERCE_SYNC_ENABLED", "false").strip().lower() in {
     "1", "true", "yes", "on"
 }
+WOOCOMMERCE_AUTO_SYNC = os.getenv("WOOCOMMERCE_AUTO_SYNC", "false").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+QDRANT_SCORE_THRESHOLD = os.getenv("QDRANT_SCORE_THRESHOLD", "0.50").strip()
 
 # ── URL opcional para leads calificados (checkout, landing) ──
 QUALIFIED_CTA_URL = os.getenv("QUALIFIED_CTA_URL", "")

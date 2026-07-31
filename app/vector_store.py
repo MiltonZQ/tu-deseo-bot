@@ -78,23 +78,22 @@ async def generate_embeddings(texts: List[str]) -> List[List[float]]:
 
 
 def _construir_texto_producto(p: Dict[str, Any]) -> str:
-    """Combina los metadatos del producto en un texto enriquecido para embedding semántico."""
-    nombre = p.get("nombre") or ""
-    desc = p.get("descripcion") or ""
-    cat = p.get("categoria_funcional") or ""
-    genero = p.get("genero") or "unisex"
-    subtipo = p.get("subtipo") or ""
-    
+    nombre = (p.get("nombre") or "").strip()
+    desc = (p.get("descripcion") or "").strip()
+    cat = (p.get("categoria_funcional") or "").strip()
+    genero = (p.get("genero") or "unisex").strip()
+    subtipo = (p.get("subtipo") or "").strip()
     partes = [
-        f"Producto: {nombre}.",
-        f"Categoría: {cat}.",
-        f"Género/Uso: {genero}.",
+        f"{nombre}",
+        f"Categoria funcional {cat}",
+        f"Uso {genero}",
     ]
+    if "app" in nombre.lower() or "app" in desc.lower():
+        partes.append("control por app aplicacion movil bluetooth")
     if subtipo:
-        partes.append(f"Subtipo/Atributos: {subtipo}.")
+        partes.append(f"{subtipo}")
     if desc:
-        partes.append(f"Descripción: {desc[:500]}")
-
+        partes.append(f"{desc[:400]}")
     return " ".join(partes)
 
 
@@ -152,48 +151,35 @@ async def search_semantic_products(
     exclude_ids: Optional[List[int]] = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Ejecuta una búsqueda vectorial semántica en Qdrant con filtros opcionales."""
     if not config.QDRANT_ENABLED or not query.strip():
         return []
-
     embeddings = await generate_embeddings([query])
     if not embeddings:
         return []
-
     vector = embeddings[0]
+    threshold = 0.50
+    try:
+        env_thr = float((getattr(config, "QDRANT_SCORE_THRESHOLD", "") or "0.50"))
+        threshold = env_thr
+    except ValueError:
+        pass
+    if len(query.strip().split()) <= 2:
+        threshold = max(threshold, 0.55)
+
     filter_conditions = []
-
     if categoria_funcional:
-        filter_conditions.append({
-            "key": "categoria_funcional",
-            "match": {"value": categoria_funcional}
-        })
+        filter_conditions.append({"key": "categoria_funcional", "match": {"value": categoria_funcional}})
     if genero:
-        filter_conditions.append({
-            "key": "genero",
-            "match": {"value": genero}
-        })
-
-    must_not_conditions = []
-    if exclude_ids:
-        for ex_id in exclude_ids:
-            must_not_conditions.append({
-                "key": "id",
-                "match": {"value": ex_id}
-            })
+        filter_conditions.append({"key": "genero", "match": {"value": genero}})
 
     qdrant_filter = {}
     if filter_conditions:
         qdrant_filter["must"] = filter_conditions
-    if must_not_conditions:
-        qdrant_filter["must_not"] = must_not_conditions
+    if exclude_ids:
+        qdrant_filter["must_not"] = [{"has_id": exclude_ids}]
 
     url = f"{config.QDRANT_URL.rstrip('/')}/collections/{config.QDRANT_COLLECTION_NAME}/points/search"
-    payload = {
-        "vector": vector,
-        "limit": limit,
-        "with_payload": True,
-    }
+    payload = {"vector": vector, "limit": limit * 2, "with_payload": True}
     if qdrant_filter:
         payload["filter"] = qdrant_filter
 
@@ -201,26 +187,29 @@ async def search_semantic_products(
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(url, headers=_get_headers(), json=payload)
         if resp.status_code != 200:
-            log.warning("Error en búsqueda semántica Qdrant: HTTP %s - %s", resp.status_code, resp.text[:200])
+            log.warning("Error Qdrant search: %s %s", resp.status_code, resp.text[:200])
             return []
-
         results = resp.json().get("result", [])
         candidatos = []
         for res in results:
-            payload = res.get("payload") or {}
+            p = res.get("payload") or {}
             score = res.get("score", 0.0)
-            if score >= 0.35:  # umbral mínimo de similitud coseno
-                candidatos.append(payload)
-
-        log.info("Búsqueda semántica Qdrant %r -> %d candidatos (score >= 0.35)", query[:40], len(candidatos))
+            if score < threshold:
+                continue
+            if not p.get("imagen_url"):
+                continue
+            p["_score"] = score
+            candidatos.append(p)
+            if len(candidatos) >= limit:
+                break
+        log.info("Qdrant '%s' -> %d candidatos (thr %.2f, cat=%s gen=%s)", query[:40], len(candidatos), threshold, categoria_funcional, genero)
         return candidatos
     except Exception as exc:
-        log.warning("Excepción en búsqueda semántica Qdrant: %s", exc)
+        log.warning("Excepcion Qdrant search: %s", exc)
         return []
 
 
 async def sync_qdrant_from_db() -> int:
-    """Lee todos los productos activos de la base de datos y los indexa en Qdrant."""
     if not config.QDRANT_ENABLED:
         return 0
     try:
@@ -231,6 +220,8 @@ async def sync_qdrant_from_db() -> int:
                 SELECT id, woo_id, nombre, descripcion, categoria, precio, imagen_url, stock_status
                 FROM productos
                 WHERE activo = TRUE
+                  AND imagen_url IS NOT NULL AND imagen_url != ''
+                  AND (stock_status IS NULL OR stock_status != 'outofstock')
                 """
             )
         if not rows:
@@ -242,11 +233,14 @@ async def sync_qdrant_from_db() -> int:
             genero = catalog._genero_normalizado(p["nombre"], p.get("descripcion"), p.get("categoria"))
             p["categoria_funcional"] = cat_func
             p["genero"] = genero
-            p["stock"] = 1 if p.get("stock_status") in ("instock", None) else 0
+            p["stock"] = 1
             products.append(p)
-
-        indexed_count = await upsert_batch_products(products)
-        log.info("Indexados %d productos en Qdrant desde DB", indexed_count)
+        indexed_count = 0
+        batch_size = 30
+        for i in range(0, len(products), batch_size):
+            batch = products[i:i+batch_size]
+            indexed_count += await upsert_batch_products(batch)
+        log.info("Indexados %d productos en Qdrant desde DB (filtrados con imagen)", indexed_count)
         return indexed_count
     except Exception as exc:
         log.warning("Error al sincronizar Qdrant desde DB: %s", exc)
