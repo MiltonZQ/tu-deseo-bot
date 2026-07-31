@@ -399,6 +399,24 @@ def _normalizar_texto(texto: str | None) -> str:
     return norm
 
 
+def _match_keyword(clave: str, haystack: str) -> bool:
+    """Verifica si `clave` coincide en `haystack` respetando límites de palabra.
+
+    Para frases (ej: 'funda para el pene'), exige la secuencia completa.
+    Para palabras individuales (ej: 'funda'), exige límites de palabra (\b) para
+    evitar falsos positivos en palabras compuestas (ej: 'profunda' -> 'funda').
+    """
+    if not clave or not haystack:
+        return False
+    c_norm = _normalizar_texto(clave.strip())
+    if not c_norm:
+        return False
+    if " " in c_norm:
+        return c_norm in haystack
+    pattern = r"\b" + re.escape(c_norm) + r"\b"
+    return bool(re.search(pattern, haystack))
+
+
 # Alias de typos comunes del cliente → forma correcta. Aplicado al user_text
 # ANTES de clasificar, para que mensajes como "anl" (anal), "mjer" (mujer),
 # "dldo" (dildo) se clasifiquen bien sin matching difuso genérico (que causaría
@@ -471,7 +489,7 @@ def _categoria_normalizada(nombre: str, descripcion: str | None = "",
         return "juegos-y-accesorios"
     for claves, cat_funcional in _REGLAS_CATEGORIA:
         for clave in claves:
-            if clave in haystack:
+            if _match_keyword(clave, haystack):
                 return cat_funcional
     cat_o = _normalizar_texto(cat_origen)
     if "bondage" in cat_o:
@@ -515,7 +533,7 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
         return "unisex"
     for claves, genero in _REGLAS_GENERO:
         for clave in claves:
-            if clave in haystack:
+            if _match_keyword(clave, haystack):
                 return genero
     return "unisex"
 
@@ -1193,7 +1211,7 @@ async def get_productos_para_recomendar(
             if subtipo:
                 nd = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
                 sinonimos = _SUBTIPO_SINONIMOS.get(subtipo, [subtipo])
-                if any(s in nd for s in sinonimos):
+                if any(_match_keyword(s, nd) for s in sinonimos):
                     cumple_subtipo = True
                     if subtipo in ("sabor", "sabores") and "sin sabor" in nd and not any(f in nd for f in ("fresa", "chocolate", "uva", "cereza", "manzana", "menta", "frutilla", "sandia", "chicle", "sabor a")):
                         cumple_subtipo = False
