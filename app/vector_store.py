@@ -19,34 +19,44 @@ def _get_headers() -> dict:
     return headers
 
 
+def _qdrant_urls() -> list[str]:
+    urls = []
+    if config.QDRANT_URL:
+        urls.append(config.QDRANT_URL.rstrip('/'))
+    urls.extend([
+        "http://pjuo95m2fo92350i673n4cyo:6333",
+        "http://qdrant-pjuo95m2fo92350i673n4cyo:6333",
+        "http://qdrant:6333",
+    ])
+    seen = []
+    for u in urls:
+        if u not in seen:
+            seen.append(u)
+    return seen
+
+
 async def init_vector_store() -> None:
-    """Crea la colección en Qdrant si no existe."""
     if not config.QDRANT_ENABLED:
         log.info("Qdrant desactivado o sin QDRANT_URL")
         return
-
-    url = f"{config.QDRANT_URL.rstrip('/')}/collections/{config.QDRANT_COLLECTION_NAME}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=_get_headers())
-            if resp.status_code == 200:
-                log.info("Colección Qdrant '%s' ya existe", config.QDRANT_COLLECTION_NAME)
-                return
-
-            log.info("Creando colección Qdrant '%s' (vector size 1536, Cosine)...", config.QDRANT_COLLECTION_NAME)
-            payload = {
-                "vectors": {
-                    "size": 1536,
-                    "distance": "Cosine",
-                }
-            }
-            create_resp = await client.put(url, headers=_get_headers(), json=payload)
-            if create_resp.status_code in (200, 201):
-                log.info("Colección Qdrant '%s' creada exitosamente", config.QDRANT_COLLECTION_NAME)
-            else:
-                log.warning("Fallo al crear colección Qdrant: HTTP %s - %s", create_resp.status_code, create_resp.text)
-    except Exception as exc:
-        log.warning("Excepción al conectar con Qdrant en %s: %s", config.QDRANT_URL, exc)
+    for base in _qdrant_urls():
+        url = f"{base}/collections/{config.QDRANT_COLLECTION_NAME}"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, headers=_get_headers())
+                if resp.status_code == 200:
+                    log.info("Coleccion Qdrant '%s' ya existe en %s", config.QDRANT_COLLECTION_NAME, base)
+                    return
+                log.info("Creando coleccion Qdrant '%s' en %s", config.QDRANT_COLLECTION_NAME, base)
+                payload = {"vectors": {"size": 1536, "distance": "Cosine"}}
+                create_resp = await client.put(url, headers=_get_headers(), json=payload)
+                if create_resp.status_code in (200, 201):
+                    log.info("Coleccion Qdrant '%s' creada en %s", config.QDRANT_COLLECTION_NAME, base)
+                    return
+                log.warning("Fallo crear coleccion %s en %s: %s", config.QDRANT_COLLECTION_NAME, base, create_resp.text[:200])
+        except Exception as exc:
+            log.warning("Excepcion Qdrant init %s: %s", base, exc)
+    log.warning("No se pudo inicializar Qdrant en ninguna URL %s", _qdrant_urls())
 
 
 async def generate_embeddings(texts: List[str]) -> List[List[float]]:
@@ -129,19 +139,18 @@ async def upsert_batch_products(products: List[Dict[str, Any]]) -> int:
             "payload": payload,
         })
 
-    url = f"{config.QDRANT_URL.rstrip('/')}/collections/{config.QDRANT_COLLECTION_NAME}/points?wait=true"
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.put(url, headers=_get_headers(), json={"points": points})
-        if resp.status_code in (200, 201):
-            log.info("Indexados exitosamente %d puntos en Qdrant", len(points))
-            return len(points)
-        else:
-            log.warning("Fallo al upsert en Qdrant: HTTP %s - %s", resp.status_code, resp.text[:200])
-            return 0
-    except Exception as exc:
-        log.warning("Excepción indexando puntos en Qdrant: %s", exc)
-        return 0
+    for base in _qdrant_urls():
+        url = f"{base}/collections/{config.QDRANT_COLLECTION_NAME}/points?wait=true"
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.put(url, headers=_get_headers(), json={"points": points})
+            if resp.status_code in (200, 201):
+                log.info("Indexados %d puntos Qdrant en %s", len(points), base)
+                return len(points)
+            log.warning("Fallo upsert Qdrant %s: %s %s", base, resp.status_code, resp.text[:200])
+        except Exception as exc:
+            log.warning("Excepcion upsert Qdrant %s: %s", base, exc)
+    return 0
 
 
 async def search_semantic_products(
@@ -178,35 +187,36 @@ async def search_semantic_products(
     if exclude_ids:
         qdrant_filter["must_not"] = [{"has_id": exclude_ids}]
 
-    url = f"{config.QDRANT_URL.rstrip('/')}/collections/{config.QDRANT_COLLECTION_NAME}/points/search"
-    payload = {"vector": vector, "limit": limit * 2, "with_payload": True}
+    search_payload = {"vector": vector, "limit": limit * 2, "with_payload": True}
     if qdrant_filter:
-        payload["filter"] = qdrant_filter
+        search_payload["filter"] = qdrant_filter
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, headers=_get_headers(), json=payload)
-        if resp.status_code != 200:
-            log.warning("Error Qdrant search: %s %s", resp.status_code, resp.text[:200])
-            return []
-        results = resp.json().get("result", [])
-        candidatos = []
-        for res in results:
-            p = res.get("payload") or {}
-            score = res.get("score", 0.0)
-            if score < threshold:
+    for base in _qdrant_urls():
+        url = f"{base}/collections/{config.QDRANT_COLLECTION_NAME}/points/search"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(url, headers=_get_headers(), json=search_payload)
+            if resp.status_code != 200:
+                log.warning("Error Qdrant search %s: %s %s", base, resp.status_code, resp.text[:200])
                 continue
-            if not p.get("imagen_url"):
-                continue
-            p["_score"] = score
-            candidatos.append(p)
-            if len(candidatos) >= limit:
-                break
-        log.info("Qdrant '%s' -> %d candidatos (thr %.2f, cat=%s gen=%s)", query[:40], len(candidatos), threshold, categoria_funcional, genero)
-        return candidatos
-    except Exception as exc:
-        log.warning("Excepcion Qdrant search: %s", exc)
-        return []
+            results = resp.json().get("result", [])
+            candidatos = []
+            for res in results:
+                p = res.get("payload") or {}
+                score = res.get("score", 0.0)
+                if score < threshold:
+                    continue
+                if not p.get("imagen_url"):
+                    continue
+                p["_score"] = score
+                candidatos.append(p)
+                if len(candidatos) >= limit:
+                    break
+            log.info("Qdrant '%s' -> %d candidatos thr %.2f cat=%s gen=%s via %s", query[:40], len(candidatos), threshold, categoria_funcional, genero, base)
+            return candidatos
+        except Exception as exc:
+            log.warning("Excepcion Qdrant search %s: %s", base, exc)
+    return []
 
 
 async def sync_qdrant_from_db() -> int:
