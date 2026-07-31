@@ -56,9 +56,18 @@ def _simular_filtrado_subtipo(rows: list[dict], subtipo: str | None, user_text: 
         if cumple_subtipo:
             out_subtipo.append(p)
         out.append(p)
-    if out_subtipo and len(out_subtipo) >= 1:
-        return out_subtipo[:limit]
+    if subtipo:
+        if out_subtipo:
+            return out_subtipo[:limit]
+        return []
     return out[:limit]
+
+
+def test_enema_jervis_optimus_genero_anal():
+    """Valida que Enema Jervis Optimus (con marca Optimus) se clasifique como anal, no hombre."""
+    from app.catalog import _genero_normalizado
+    gen = _genero_normalizado("Enema para limpieza Anal Jervis Optimus", "Ducha anal de 310 ml", "anal")
+    assert gen == "anal", f"Se esperaba género 'anal' para Enema Jervis Optimus, dio '{gen}'"
 
 
 def test_duchas_anales_no_mezcla_plugs():
@@ -78,19 +87,31 @@ def test_duchas_anales_no_mezcla_plugs():
 
     cat_rows = [
         {"id": 1, "nombre": "Enema para limpieza Anal Lito", "descripcion": "Bolsa de ducha higiénica"},
-        {"id": 2, "nombre": "Bolas Anales Pimpo", "descripcion": "Bolas anales estimulantes"},
-        {"id": 3, "nombre": "Plug Anal de Vidrio Icicles No. 44", "descripcion": "Plug anal suave"},
-        {"id": 4, "nombre": "Plug Lovense Hush 2", "descripcion": "Plug anal con app conector"},
+        {"id": 2, "nombre": "Enema para limpieza Anal Jervis Optimus", "descripcion": "Ducha anal de 310 ml"},
+        {"id": 3, "nombre": "Bolas Anales Pimpo", "descripcion": "Bolas anales estimulantes"},
+        {"id": 4, "nombre": "Plug Anal de Vidrio Icicles No. 44", "descripcion": "Plug anal suave"},
+        {"id": 5, "nombre": "Plug Lovense Hush 2", "descripcion": "Plug anal con app conector"},
     ]
 
     resultado = _simular_filtrado_subtipo(cat_rows, subtipo, user_text)
 
     nombres_res = [p["nombre"] for p in resultado]
     assert "Enema para limpieza Anal Lito" in nombres_res
+    assert "Enema para limpieza Anal Jervis Optimus" in nombres_res
     assert "Bolas Anales Pimpo" not in nombres_res
     assert "Plug Anal de Vidrio Icicles No. 44" not in nombres_res
     assert "Plug Lovense Hush 2" not in nombres_res
-    assert len(resultado) == 1, "Solo debía retornar la ducha/enema anal"
+    assert len(resultado) == 2, "Debía retornar los 2 enemas anales y NINGÚN plug/bola"
+
+
+def test_subtipo_sin_stock_retorna_vacio():
+    """Valida que si se pide un subtipo que no tiene stock, retorna lista vacía (para disparar handoff)."""
+    cat_rows = [
+        {"id": 3, "nombre": "Plug Anal de Vidrio Icicles No. 44", "descripcion": "Plug anal suave"},
+        {"id": 4, "nombre": "Plug Lovense Hush 2", "descripcion": "Plug anal con app conector"},
+    ]
+    resultado = _simular_filtrado_subtipo(cat_rows, "ducha", "tienen duchas anales")
+    assert resultado == [], "Debía retornar lista vacía al no haber stock del subtipo 'ducha'"
 
 
 def test_lubricantes_sabores():
@@ -121,6 +142,8 @@ def test_lubricantes_sabores():
 
 
 if __name__ == "__main__":
+    test_enema_jervis_optimus_genero_anal()
     test_duchas_anales_no_mezcla_plugs()
+    test_subtipo_sin_stock_retorna_vacio()
     test_lubricantes_sabores()
-    print("✅ Todos los tests unitarios de filtrado por subtipo pasaron exitosamente!")
+    print("✅ Todos los tests unitarios de filtrado por subtipo y género pasaron exitosamente!")

@@ -487,6 +487,9 @@ _REGLAS_GENERO = [
     # MUJER: succionadores, clítoris, punto G, rabbit, baby doll, pezonera
     (("clitoris", "clítoris", "clitorial", "punto g", "succionador", "suction", "air pulse",
       "rabbit", "panty vibr", "pezonera", "baby doll", "babydoll", "estimulacion clitor", "pro 2", "satisfyer pro"), "mujer"),
+    # ANAL: enemas, duchas anales, plugs, bolas anales, dilatadores (prioridad antes que hombre para no descalificar enemas con marca "optimus")
+    (("enema", "ducha anal", "duchas anales", "irrigador", "pera anal", "plug", "bolas anal", "dilatador", "entrenamiento anal", "culo", "estimulacion anal",
+      "estimulación anal"), "anal"),
     # HOMBRE: anillos/fundas para pene, masturbadores, próstata, bombas, lencería masculina
     (("anillo", "funda", "bomba pene", "bomba para", "bomba automatic", "bomba automática",
       "prostat", "próstata", "masturbador", "suspensorio", "suspensor", "pechera",
@@ -495,9 +498,6 @@ _REGLAS_GENERO = [
     # PAREJA: juguetes de uso compartido
     (("pareja", "we vibe", "we-vibe", "chorus", "doble estimulacion", "doble estimulación",
       "rabbit para pare", "arnes con dildo", "strap on", "strap-on"), "pareja"),
-    # ANAL: plugs, bolas anales, dilatadores
-    (("plug", "bolas anal", "dilatador", "entrenamiento anal", "culo", "estimulacion anal",
-      "estimulación anal"), "anal"),
 ]
 
 
@@ -1178,11 +1178,13 @@ async def get_productos_para_recomendar(
             if cumple_subtipo:
                 out_subtipo.append(p)
             out.append(p)
-        out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
-        # Si hay ≥1 producto del subtipo exacto / sinónimos, devolver SOLO esos (no mezclar con plugs u otros productos).
-        if out_subtipo and len(out_subtipo) >= 1:
-            out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
-            return out_subtipo[:limit]
+        # Si el cliente pidió un subtipo concreto: devolver SOLO coincidencias de ese subtipo/sinónimos.
+        # Si hay 0 coincidencias en stock, retornar VACÍO (no rellenar con plugs ni productos irrelevantes).
+        if subtipo:
+            if out_subtipo:
+                out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+                return out_subtipo[:limit]
+            return []
         return out[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)

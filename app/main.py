@@ -763,20 +763,17 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
 
     # ── Caso A: imagen → ¿es comprobante de pago? ──
     if mtype == "image":
-        handled_as_payment = await _maybe_handle_payment_image(wa_id, msg, history)
-        if handled_as_payment:
-            return
-        # Si no era comprobante, cae al reply genérico de media abajo.
-        reply = MEDIA_REPLY
-        saved_user_msg = user_text or "[envió una imagen]"
-        await db.save_message(wa_id, "user", saved_user_msg)
-        await db.save_message(wa_id, "assistant", reply)
-        await whatsapp_client.send_text(wa_id, reply)
-        await escalations.record_if_escalated(
-            wa_id=wa_id, user_text=saved_user_msg, bot_reply=reply,
-            message_type=mtype, media_type=media_type, history=history,
-        )
-        await follow_ups.schedule(wa_id)
+        image_url = msg.get("image_url")
+        if image_url:
+            handled = await payments.handle_comprobante_imagen(
+                wa_id=wa_id,
+                image_url=image_url,
+                caption=user_text,
+                history=history,
+            )
+            if handled:
+                log.info("Comprobante de pago procesado por visión para %s", wa_id)
+                return
         log.info("Imagen (no comprobante) recibida de %s", wa_id)
         return
 
@@ -871,6 +868,27 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     #  - la dependencia de un catálogo gigante en el prompt.
     estado_previo = await db.get_conversation_state(wa_id)
     candidatos, info = await _recuperar_candidatos(user_text, history, estado_previo)
+
+    # ESCALAMIENTO POR PRODUCTO/SUBTIPO NO DISPONIBLE:
+    # Si el cliente especificó un subtipo (ej: "duchas anales") y no hay candidatos
+    # en stock, NO enviar productos no relacionados. Pausar el bot y escalar a humano.
+    if info.get("sin_stock_subtipo"):
+        HANDOFF_NO_STOCK = (
+            "En este momento no cuento con ese producto o diseño específico en inventario 😔. "
+            "Te estoy transfiriendo con un asesor humano para que te ayude a consultar disponibilidad "
+            "o buscar la mejor alternativa 💬"
+        )
+        await db.set_bot_paused(wa_id, True)
+        await db.save_message(wa_id, "user", user_text)
+        await db.save_message(wa_id, "assistant", HANDOFF_NO_STOCK)
+        await whatsapp_client.send_text(wa_id, HANDOFF_NO_STOCK)
+        await escalations.record_if_escalated(
+            wa_id=wa_id, user_text=user_text, bot_reply=HANDOFF_NO_STOCK,
+            message_type="text", media_type=None, history=history,
+        )
+        log.info("Handoff por producto/subtipo sin stock (%s) para %s — bot pausado",
+                 info.get("intencion") or user_text, wa_id)
+        return
 
     if info["reset_state"] and estado_previo:
         await db.upsert_conversation_state(wa_id, reset=True)
