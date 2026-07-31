@@ -209,6 +209,17 @@ async def reset_all_conversations(
     return {"status": "ok", "deleted": deleted}
 
 
+@app.post("/maintenance/unpause-contact")
+async def unpause_contact(
+    wa_id: str,
+    x_reload_token: str = Header(None),
+):
+    if not config.RELOAD_TOKEN or x_reload_token != config.RELOAD_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    await db.unpause_bot(wa_id)
+    return {"status": "ok", "unpaused_wa_id": wa_id}
+
+
 
 async def _process_message_safe(payload: dict) -> None:
     try:

@@ -965,7 +965,7 @@ async def clear_contact_data(wa_ids: list[str]) -> dict[str, int]:
 
 
 async def clear_all_conversations() -> dict[str, int]:
-    """Elimina todo el historial conversacional y estados de la base de datos para todos los números."""
+    """Elimina todo el historial conversacional, despausa el bot y borra estados para todos los números."""
     async with _pool.acquire() as conn:
         results = {
             "conversations": await conn.execute("DELETE FROM conversations"),
@@ -975,6 +975,7 @@ async def clear_all_conversations() -> dict[str, int]:
             "processed_messages": await conn.execute("DELETE FROM processed_messages"),
             "pending_follow_ups": await conn.execute("DELETE FROM pending_follow_ups"),
             "escalations": await conn.execute("DELETE FROM escalations"),
+            "leads_unpaused": await conn.execute("UPDATE leads SET bot_paused = FALSE"),
         }
     return {
         key: int(value.split()[-1]) if value else 0
@@ -1277,7 +1278,7 @@ async def backfill_verified_abonos() -> int:
                 monto_val = 29800
             
             history_rows = await conn.fetch(
-                "SELECT role, content FROM mensajes WHERE wa_id = $1 ORDER BY id DESC LIMIT 20",
+                "SELECT role, content FROM conversations WHERE wa_id = $1 ORDER BY id DESC LIMIT 20",
                 wa_id,
             )
             history = [{"role": h["role"], "content": h["content"]} for h in reversed(history_rows)] if history_rows else []
