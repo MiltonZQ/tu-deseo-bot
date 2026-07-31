@@ -630,8 +630,35 @@ async def _recuperar_candidatos(
             subtipo=clasif.get("subtipo_detectado"),
         )
 
-    # Si se especificó un subtipo (ej: "duchas anales") y no hay candidatos, NO ejecutar
-    # fallbacks a otras categorías irrelevantes (como Arneses Strap-On).
+    # Si subtipo SOFT (primera vez, sencillo, suave...) no dio matches estrictos, relajar a categoría sin subtipo.
+    # Evita el bug "primera vez" -> 0 resultados -> handoff.
+    if not candidatos and clasif.get("subtipo_detectado"):
+        _sub = clasif.get("subtipo_detectado")
+        try:
+            es_soft = catalog._es_subtipo_soft(_sub)
+        except AttributeError:
+            es_soft = False
+        if es_soft:
+            log.info("Subtipo soft %r sin matches, mostrando categoria %s completa para no dejar sin fotos", _sub, cat_func)
+            candidatos = await catalog.get_productos_para_recomendar(
+                categoria_funcional=cat_func,
+                genero=genero,
+                user_text=user_text,
+                exclude_ids=exclude,
+                limit=5,
+                subtipo=None,
+            )
+            if not candidatos and debe_mostrar and cat_func:
+                candidatos = await catalog.get_productos_para_recomendar(
+                    categoria_funcional=cat_func,
+                    genero=None,
+                    user_text=user_text,
+                    exclude_ids=exclude,
+                    limit=5,
+                )
+
+    # Si se especificó un subtipo HARD (ej: "duchas anales") y no hay candidatos, NO ejecutar
+    # fallbacks a otras categorías irrelevantes (como Arneses Strap-On). Para SOFT ya se intentó arriba.
     if not candidatos and not clasif.get("subtipo_detectado"):
         # BLINDAJE ANTI-BUCLE: si el cliente está respondiendo a una pregunta de
         # calificación (estado.calificado=True, debe_mostrar=True) PERO no se
@@ -687,6 +714,14 @@ async def _recuperar_candidatos(
         not candidatos and (clasif["pide_fotos"] or clasif.get("subtipo_detectado")) and bool(exclude) and cat_func
     )
 
+    _subtipo_actual = clasif.get("subtipo_detectado")
+    _es_soft_actual = False
+    if _subtipo_actual:
+        try:
+            _es_soft_actual = catalog._es_subtipo_soft(_subtipo_actual)
+        except AttributeError:
+            _es_soft_actual = False
+
     info = {
         "intencion": intencion,
         "categoria_funcional": cat_func,
@@ -696,8 +731,7 @@ async def _recuperar_candidatos(
         "reset_state": reset_state,
         "categoria_agotada": categoria_agotada,
         "sin_mas_opciones": bool(candidatos and len(candidatos) < 5),
-        "sin_stock_subtipo": bool(clasif.get("subtipo_detectado") and not candidatos and not exclude),
-        # NUNCA mostrar fotos en el primer turno de una categoría general sin calificar.
+        "sin_stock_subtipo": bool(_subtipo_actual and not candidatos and not exclude and not _es_soft_actual),
         "debe_mostrar": debe_mostrar and bool(candidatos),
     }
     return candidatos, info

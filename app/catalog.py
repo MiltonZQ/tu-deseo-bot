@@ -529,9 +529,9 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
 # Las categorías alternativas SE FILTRAN SIEMPRE por el género del cliente, así
 # que no mezclan productos de mujer cuando el cliente pidió hombre.
 _CATEGORIAS_ALTERNATIVAS_POR_GENERO = {
-    "hombre": ["anillos-y-fundas", "masturbadores", "anal"],
+    "hombre": ["anillos-y-fundas", "masturbadores", "anal", "bombas-pene", "fundas-pene", "anillos-vibradores"],
     "anal": ["anal", "anillos-y-fundas"],
-    "pareja": ["pareja-y-bondage", "vibradores", "anillos-y-fundas"],
+    "pareja": ["pareja-y-bondage", "vibradores", "anillos-y-fundas", "anillos-vibradores"],
     "mujer": ["vibradores", "succionadores", "dildos", "lenceria"],
 }
 
@@ -686,7 +686,14 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "anillos": "anillos-y-fundas",
     "funda": "anillos-y-fundas",
     "fundas": "anillos-y-fundas",
-    "bomba": "anillos-y-fundas",
+    "bomba": "bombas-pene",
+    "bombas": "bombas-pene",
+    "bomba pene": "bombas-pene",
+    "bombas pene": "bombas-pene",
+    "bomba para el pene": "bombas-pene",
+    "bombas para el pene": "bombas-pene",
+    "bomba para pene": "bombas-pene",
+    "bombas para pene": "bombas-pene",
     "suspensorio": "lenceria",
     "suspensorios": "lenceria",
     "suspensor": "lenceria",
@@ -790,24 +797,18 @@ _SUBTIPO_KEYWORDS = (
 # "rabbit" → vibradores, y deriva la categoría correcta (cambio de tema legítimo).
 # Subtipos NO ambiguos (seguros de mapear siempre):
 _SUBTIPO_A_CATEGORIA = {
-    # Lubricantes (subtipos específicos, poco ambiguos)
     "sabores": "lubricantes-y-cuidado", "sabor": "lubricantes-y-cuidado",
     "base de agua": "lubricantes-y-cuidado", "silicona": "lubricantes-y-cuidado",
     "desensibiliz": "lubricantes-y-cuidado",
-    # Dildos
     "realista": "dildos", "ventosa": "dildos", "vidrio": "dildos",
     "cristal": "dildos", "doble": "dildos",
-    # Vibradores
     "rabbit": "vibradores", "punto g": "vibradores", "hitachi": "vibradores",
     "bala": "vibradores", "huevo vibr": "vibradores",
-    # Anal
-    "prostat": "anal", "próstata": "anal", "primera vez": "anal",
+    "prostat": "anal", "próstata": "anal",
     "ducha": "anal", "enema": "anal",
-    # Lencería
     "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
     "body": "lenceria", "disfraz": "lenceria", "suspensorio": "lenceria",
     "conjunto": "lenceria",
-    # Bondage / BDSM
     "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
     "antifaz": "pareja-y-bondage", "antifaces": "pareja-y-bondage",
     "fustas": "pareja-y-bondage", "fusta": "pareja-y-bondage",
@@ -815,6 +816,26 @@ _SUBTIPO_A_CATEGORIA = {
     "amarre": "pareja-y-bondage", "amarres": "pareja-y-bondage",
     "mordaza": "pareja-y-bondage", "vendas": "pareja-y-bondage",
 }
+
+_SUBTIPOS_SOFT = {
+    "primera vez", "primera", "principiante", "suave", "sutil",
+    "sencillo", "simple", "facil", "fácil", "basico", "básico",
+    "discreto", "pequeño", "pequeña", "pequeno", "inicio", "iniciando",
+    "para empezar", "empezar",
+}
+
+
+def _es_subtipo_soft(subtipo: str | None) -> bool:
+    if not subtipo:
+        return False
+    s = _normalizar_texto(subtipo)
+    for soft in _SUBTIPOS_SOFT:
+        soft_n = _normalizar_texto(soft)
+        if not soft_n:
+            continue
+        if soft_n in s or s in soft_n:
+            return True
+    return False
 
 # Sinónimos y equivalencias por subtipo para filtrado estricto en recomendaciones
 _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
@@ -1145,7 +1166,8 @@ async def get_productos_para_recomendar(
 
     def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
         out: list[dict] = []
-        out_subtipo: list[dict] = []  # productos que cumplen el subtipo exacto
+        out_subtipo: list[dict] = []
+        es_soft = _es_subtipo_soft(subtipo) if subtipo else False
         for r in rows:
             p = dict(r)
             if p["id"] in exclude_set:
@@ -1161,11 +1183,6 @@ async def get_productos_para_recomendar(
             p["_categoria_funcional"] = cat_func
             p["_genero"] = gen
             score = _score_candidato(p, user_text)
-            # BONUS DE SUBTIPO: si el cliente pidió un subtipo concreto (ducha,
-            # doble, ventosa...) y el producto lo cumple en nombre/descripción o sinónimos,
-            # darle prioridad máxima. Y SEPARARLO en out_subtipo: si hay ≥1
-            # productos del subtipo, mostrar SOLO esos (exactitud ante todo, no
-            # mezclar plugs cuando el cliente pidió duchas).
             cumple_subtipo = False
             if subtipo:
                 nd = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
@@ -1180,12 +1197,13 @@ async def get_productos_para_recomendar(
             if cumple_subtipo:
                 out_subtipo.append(p)
             out.append(p)
-        # Si el cliente pidió un subtipo concreto: devolver SOLO coincidencias de ese subtipo/sinónimos.
-        # Si hay 0 coincidencias en stock, retornar VACÍO (no rellenar con plugs ni productos irrelevantes).
         if subtipo:
             if out_subtipo:
                 out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
                 return out_subtipo[:limit]
+            if es_soft:
+                out.sort(key=lambda p: (-p["_score"], p.get("precio", 0), len(p["nombre"])))
+                return out[:limit]
             return []
         return out[:limit]
 
