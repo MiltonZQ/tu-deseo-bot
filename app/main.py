@@ -168,16 +168,44 @@ async def reset_contact_memory(
 @app.get("/debug/test-rec")
 async def debug_test_rec(q: str = "Tienen funda para pene"):
     clasif = await catalog.clasificar_intencion_cliente(q, [])
+    cat_func = clasif.get("categoria_funcional")
+    gen = clasif.get("genero")
+    sub = clasif.get("subtipo_detectado")
+    
+    rows = await catalog._query(con_imagen=True, con_activo=True)
+    diag = []
+    for r in rows:
+        p = dict(r)
+        c = catalog._categoria_normalizada(p.get("nombre",""), p.get("descripcion",""), p.get("categoria"))
+        g = catalog._genero_normalizado(p.get("nombre",""), p.get("descripcion",""), p.get("categoria"))
+        
+        nd = catalog._normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
+        sinonimos = catalog._SUBTIPO_SINONIMOS.get(sub, [sub]) if sub else []
+        cumple_sub = any(s in nd for s in sinonimos) if sub else False
+        
+        if c == cat_func or g == gen or cumple_sub or "funda" in p.get("nombre","").lower():
+            diag.append({
+                "id": p["id"],
+                "nombre": p["nombre"],
+                "categoria_db": p.get("categoria"),
+                "cat_func": c,
+                "genero": g,
+                "cumple_cat": c == cat_func,
+                "cumple_gen": g == gen,
+                "cumple_subtipo": cumple_sub,
+            })
+            
     candidatos = await catalog.get_productos_para_recomendar(
-        categoria_funcional=clasif.get("categoria_funcional"),
-        genero=clasif.get("genero"),
+        categoria_funcional=cat_func,
+        genero=gen,
         user_text=q,
         limit=5,
-        subtipo=clasif.get("subtipo_detectado"),
+        subtipo=sub,
     )
     return {
         "query": q,
         "clasif": clasif,
+        "diag_interesantes": diag,
         "candidatos": candidatos,
     }
 
