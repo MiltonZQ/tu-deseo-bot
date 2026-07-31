@@ -1231,10 +1231,10 @@ async def get_productos_para_recomendar(
         # Si hay 0 coincidencias en stock, retornar VACÍO (no rellenar con plugs ni productos irrelevantes).
         if subtipo:
             if out_subtipo:
-                out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+                out_subtipo.sort(key=lambda p: (-p["_score"], len(p.get("nombre") or "")))
                 return out_subtipo[:limit]
             return []
-        out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+        out.sort(key=lambda p: (-p["_score"], len(p.get("nombre") or "")))
         return out[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)
