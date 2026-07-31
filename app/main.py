@@ -163,6 +163,15 @@ async def reset_contact_memory(
     return {"cleared_wa_ids": [wa_id], "deleted": deleted}
 
 
+@app.get("/debug/fundas")
+async def debug_fundas():
+    async with db._pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, nombre, activo, stock_status, imagen_url, categoria FROM productos WHERE nombre ILIKE '%funda%' OR id = 31232 OR categoria ILIKE '%funda%'"
+        )
+        return [dict(r) for r in rows]
+
+
 @app.post("/maintenance/reset-all-conversations")
 async def reset_all_conversations(
     x_reload_token: str = Header(None),
