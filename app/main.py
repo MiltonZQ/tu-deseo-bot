@@ -167,35 +167,39 @@ async def reset_contact_memory(
 
 @app.get("/debug/test-rec")
 async def debug_test_rec(q: str = "Tienen funda para pene"):
-    clasif = await catalog.clasificar_intencion_cliente(q, [])
-    cat_func = clasif.get("categoria_funcional")
-    gen = clasif.get("genero")
-    sub = clasif.get("subtipo_detectado")
-    
-    candidatos = await catalog.get_productos_para_recomendar(
-        categoria_funcional=cat_func,
-        genero=gen,
-        user_text=q,
-        limit=5,
-        subtipo=sub,
-    )
-    clean_cands = []
-    for c in candidatos:
-        cand_dict = {}
-        for k, v in c.items():
-            if k.startswith("_"):
-                cand_dict[k] = str(v)
-            elif isinstance(v, (int, float, str, bool, type(None))):
-                cand_dict[k] = v
-            else:
-                cand_dict[k] = str(v)
-        clean_cands.append(cand_dict)
+    import traceback
+    try:
+        clasif = await catalog.clasificar_intencion_cliente(q, [])
+        cat_func = clasif.get("categoria_funcional")
+        gen = clasif.get("genero")
+        sub = clasif.get("subtipo_detectado")
         
-    return {
-        "query": q,
-        "clasif": clasif,
-        "candidatos": clean_cands,
-    }
+        candidatos = await catalog.get_productos_para_recomendar(
+            categoria_funcional=cat_func,
+            genero=gen,
+            user_text=q,
+            limit=5,
+            subtipo=sub,
+        )
+        clean_cands = []
+        for c in candidatos:
+            cand_dict = {}
+            for k, v in c.items():
+                if k.startswith("_"):
+                    cand_dict[k] = str(v)
+                elif isinstance(v, (int, float, str, bool, type(None))):
+                    cand_dict[k] = v
+                else:
+                    cand_dict[k] = str(v)
+            clean_cands.append(cand_dict)
+            
+        return {
+            "query": q,
+            "clasif": clasif,
+            "candidatos": clean_cands,
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.get("/debug/fundas")
