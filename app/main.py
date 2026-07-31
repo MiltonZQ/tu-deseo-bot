@@ -492,19 +492,22 @@ _RESPUESTAS_AFIRMATIVAS = {
 
 
 def _es_respuesta_afirmativa(user_text: str) -> bool:
-    """True si el mensaje es una respuesta corta afirmativa/ambigua que debe
-    disparar mostrar la categoría persistida (no re-clasificar)."""
     t = catalog._normalizar_texto(user_text).strip().strip(".,!?¿¡")
     if not t:
         return False
-    # Coincidencia exacta o el mensaje contiene una afirmativa clave.
     if t in _RESPUESTAS_AFIRMATIVAS:
         return True
-    # "dame los rojos", "ver los sencillos", etc. → contiene verbo afirmativo.
     for af in ("dame", "muestrame", "muéstrame", "mandame", "mándame", "enviame", "envíame"):
         if af in t:
             return True
     return False
+
+
+def _es_ver_mas(user_text: str) -> bool:
+    t = catalog._normalizar_texto(user_text)
+    patrones = ("ver mas", "ver más", "mas diseños", "más diseños", "mas modelos", "más modelos",
+                "otros diseños", "mas opciones", "más opciones", "quiero ver mas", "ver mas diseños")
+    return any(p in t for p in patrones)
 
 
 # Patrones que indican que el cliente está en FASE DE VENTA/PAGO (no explorando
@@ -991,7 +994,30 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         if detalle_lines:
             productos_detalle_estado = "\n".join(detalle_lines)
 
-    raw_reply = await openai_client.complete(
+    es_ver_mas_pedido = _es_ver_mas(user_text) and info.get("debe_mostrar") and candidatos
+    es_agotado = info.get("categoria_agotada")
+    if es_agotado:
+        cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
+        cat_nombre = cat_nombre.replace("-", " ")
+        raw_reply = f"Te mostré todas las opciones de {cat_nombre} disponibles 😊 ¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
+    elif es_ver_mas_pedido:
+        cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
+        cat_nombre = cat_nombre.replace("-", " ")
+        lineas = []
+        marcadores = []
+        for idx, p in enumerate(candidatos[:5], 1):
+            precio_fmt = f"{int(p.get('precio',0)):,}".replace(",", ".")
+            lineas.append(f"{idx}️⃣ *{p['nombre'][:60]}* — ${precio_fmt}")
+            marcadores.append(f"[FOTO:{p['id']}]")
+        if info.get("hay_mas"):
+            intro = f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
+            cta = "¿Cuál te gusta o deseas ver más diseños? 😊"
+        else:
+            intro = f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
+            cta = "¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
+        raw_reply = f"{intro}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
+    else:
+        raw_reply = await openai_client.complete(
         user_text, history,
         lead=lead, summary=summary_text,
         candidatos=candidatos if info["debe_mostrar"] else [],
