@@ -12,6 +12,9 @@ from app import config
 log = logging.getLogger("vector_store")
 
 
+_qdrant_available = False
+
+
 def _get_headers() -> dict:
     headers = {"Content-Type": "application/json"}
     if config.QDRANT_API_KEY:
@@ -36,27 +39,32 @@ def _qdrant_urls() -> list[str]:
 
 
 async def init_vector_store() -> None:
+    global _qdrant_available
     if not config.QDRANT_ENABLED:
         log.info("Qdrant desactivado o sin QDRANT_URL")
+        _qdrant_available = False
         return
     for base in _qdrant_urls():
         url = f"{base}/collections/{config.QDRANT_COLLECTION_NAME}"
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(url, headers=_get_headers())
                 if resp.status_code == 200:
                     log.info("Coleccion Qdrant '%s' ya existe en %s", config.QDRANT_COLLECTION_NAME, base)
+                    _qdrant_available = True
                     return
                 log.info("Creando coleccion Qdrant '%s' en %s", config.QDRANT_COLLECTION_NAME, base)
                 payload = {"vectors": {"size": 1536, "distance": "Cosine"}}
                 create_resp = await client.put(url, headers=_get_headers(), json=payload)
                 if create_resp.status_code in (200, 201):
                     log.info("Coleccion Qdrant '%s' creada en %s", config.QDRANT_COLLECTION_NAME, base)
+                    _qdrant_available = True
                     return
                 log.warning("Fallo crear coleccion %s en %s: %s", config.QDRANT_COLLECTION_NAME, base, create_resp.text[:200])
         except Exception as exc:
             log.warning("Excepcion Qdrant init %s: %s", base, exc)
-    log.warning("No se pudo inicializar Qdrant en ninguna URL %s", _qdrant_urls())
+    log.warning("No se pudo inicializar Qdrant en ninguna URL %s - fallback a SQL", _qdrant_urls())
+    _qdrant_available = False
 
 
 async def generate_embeddings(texts: List[str]) -> List[List[float]]:
@@ -108,8 +116,10 @@ def _construir_texto_producto(p: Dict[str, Any]) -> str:
 
 
 async def upsert_batch_products(products: List[Dict[str, Any]]) -> int:
-    """Genera embeddings e indexa un lote de productos en Qdrant."""
     if not config.QDRANT_ENABLED or not products:
+        return 0
+    if not _qdrant_available:
+        log.info("Qdrant no disponible, skip upsert %d productos", len(products))
         return 0
 
     texts = [_construir_texto_producto(p) for p in products]
@@ -161,6 +171,8 @@ async def search_semantic_products(
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
     if not config.QDRANT_ENABLED or not query.strip():
+        return []
+    if not _qdrant_available:
         return []
     embeddings = await generate_embeddings([query])
     if not embeddings:
