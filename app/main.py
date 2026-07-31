@@ -174,19 +174,19 @@ async def debug_test_rec(q: str = "Tienen funda para pene"):
         limit=5,
         subtipo="funda",
     )
+    res = []
+    for c in candidatos:
+        if isinstance(c, dict):
+            res.append({
+                "id": c.get("id"),
+                "nombre": c.get("nombre"),
+                "precio": c.get("precio"),
+                "categoria_db": c.get("categoria"),
+                "imagen_url": c.get("imagen_url"),
+            })
     return {
         "query": q,
-        "candidatos": [
-            {
-                "id": c["id"],
-                "nombre": c["nombre"],
-                "precio": c["precio"],
-                "categoria_db": c.get("categoria"),
-                "_categoria_funcional": c.get("_categoria_funcional"),
-                "_genero": c.get("_genero"),
-            }
-            for c in candidatos
-        ],
+        "candidatos": res,
     }
 
 
