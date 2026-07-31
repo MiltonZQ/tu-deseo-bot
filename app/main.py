@@ -200,6 +200,15 @@ async def _process_message_safe(payload: dict) -> None:
             msg = whatsapp_client.extract_message(payload)
             if msg and msg.get("wa_id"):
                 wa_id = msg["wa_id"]
+                try:
+                    recent = await db.get_history(wa_id, 2)
+                    if recent:
+                        last = recent[-1] if recent else None
+                        if last and last.get("role") == "assistant":
+                            log.info("Fallback omitido para %s: ya se envio mensaje en este turno", wa_id)
+                            return
+                except Exception:
+                    pass
                 await db.set_bot_paused(wa_id, False)
                 user_txt = msg.get("text", "")
                 candidatos = await catalog.buscar_producto_especifico(user_txt, limit=3)
@@ -400,7 +409,7 @@ async def _enviar_fotos_productos(
     try:
         seen_ids: set[int] = set()
         for idx, p in enumerate(candidatos, 1):
-            if len(enviados) >= 3:
+            if len(enviados) >= 5:
                 break
             pid = p.get("id")
             if not pid or pid in seen_ids:
@@ -413,13 +422,10 @@ async def _enviar_fotos_productos(
             precio_fmt = f"{int(precio):,}".replace(",", ".") if precio else "0"
             nombre = (p.get("nombre") or "")[:60]
             caption = f"{idx}️⃣ *{nombre}*\n💰 ${precio_fmt}"
-            desc = (p.get("descripcion") or "")[:80]
-            if desc:
-                caption += f"\n_{desc}_"
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
             log.info("Foto %d/%d '%s' enviada a %s", idx, len(candidatos), p.get("nombre"), wa_id)
             enviados.append(pid)
-            if len(enviados) < 3:
+            if len(enviados) < 5:
                 await asyncio.sleep(0.6)
         log.info("Fotos a %s: %d enviadas de %d candidatos", wa_id, len(enviados), len(candidatos))
     except Exception:
@@ -1185,20 +1191,13 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         log.info("Bot pausado: reply contiene handoff para %s", wa_id)
         return
 
-    # Insistencia: si el bot ya rechazó ≥3 veces, pausar y escalar
     updated_history = history + [
         {"role": "user", "content": user_text},
         {"role": "assistant", "content": reply},
     ]
     if _count_bot_refusals(updated_history) >= 3:
         await db.set_bot_paused(wa_id, True)
-        insistence_msg = (
-            "Entiendo que tienes dudas sobre esto. "
-            "Voy a pasarte con alguien del equipo que te puede ayudar mejor."
-        )
-        await db.save_message(wa_id, "assistant", insistence_msg)
-        await whatsapp_client.send_text(wa_id, insistence_msg)
-        log.info("Insistencia detectada para %s — bot pausado", wa_id)
+        log.info("Insistencia detectada para %s — bot pausado (sin 2do mensaje)", wa_id)
         return
 
     # Programar follow-up solo si la conversación aún está en progreso

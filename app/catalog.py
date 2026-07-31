@@ -783,7 +783,7 @@ _GENERO_KEYWORDS_CLIENTE = [
 # de calificación del turno 1. Solo subtipos que aclaran una variante concreta.
 _SUBTIPO_KEYWORDS = (
     # Dildos
-    "realista", "ventosa", "vidrio", "cristal", "doble",
+    "realista", "ventosa", "vidrio", "cristal", "doble", "textura piel", "textura", "piel",
     # Vibradores
     "rabbit", "punto g", "clitor", "clitori", "hitachi", "bala", "huevo vibr",
     # Anal
@@ -792,10 +792,6 @@ _SUBTIPO_KEYWORDS = (
     # Lubricantes
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
-    # Anillos/fundas
-    # (Nota: "vibrador" NO se incluye aquí porque es sustantivo de categoría;
-    # "anillo vibrador" se cubre porque "anillo" es categoría y el género/contexto
-    # determina el subtipo en la regla híbrida.)
     # Lencería
     "arnes", "arnés", "liguero", "pechera", "encaje", "body", "disfraz",
     "suspensorio", "conjunto",
@@ -820,7 +816,7 @@ _SUBTIPO_A_CATEGORIA = {
     "base de agua": "lubricantes-y-cuidado", "silicona": "lubricantes-y-cuidado",
     "desensibiliz": "lubricantes-y-cuidado",
     "realista": "dildos", "ventosa": "dildos", "vidrio": "dildos",
-    "cristal": "dildos", "doble": "dildos",
+    "cristal": "dildos", "doble": "dildos", "textura piel": "dildos", "textura": "dildos", "piel": "dildos",
     "rabbit": "vibradores", "punto g": "vibradores", "hitachi": "vibradores",
     "bala": "vibradores", "huevo vibr": "vibradores",
     "prostat": "anal", "próstata": "anal",
@@ -866,7 +862,10 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "plug": ["plug", "plugs", "dilatador"],
     "bola": ["bola", "bolas", "ben wa"],
     "bolas": ["bola", "bolas", "ben wa"],
-    "realista": ["realista", "realistas", "peneano", "peneana"],
+    "realista": ["realista", "realistas", "peneano", "peneana", "textura piel", "textura", "piel"],
+    "textura piel": ["realista", "realistas", "textura piel", "textura", "piel", "peneano"],
+    "textura": ["realista", "textura piel", "textura", "piel"],
+    "piel": ["realista", "textura piel", "piel"],
     "ventosa": ["ventosa", "ventosas"],
     "vidrio": ["vidrio", "cristal"],
     "cristal": ["vidrio", "cristal"],
