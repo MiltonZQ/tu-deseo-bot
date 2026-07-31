@@ -110,9 +110,7 @@ async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
 
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
         if full_replace:
-            # Eliminar productos antiguos per indicación del cliente (usar únicamente catálogo web)
-            await conn.execute("DELETE FROM productos")
-            log.info("Tabla productos vaciada para sincronización limpia desde WooCommerce")
+            log.info("Sincronización WooCommerce iniciada en modo actualización de productos...")
 
         insertados = 0
         actualizados = 0

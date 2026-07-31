@@ -287,6 +287,64 @@ async def seed_catalogo_if_empty(csv_path) -> int:
         return len(rows)
 
 
+async def seed_catalogo_from_md(md_path) -> int:
+    """Carga/sincroniza el catálogo completo desde catalogo.md en la tabla productos.
+
+    Idempotente: inserta o actualiza por `id` los 246 productos del catálogo local
+    con su ID exacto, nombre, precio y descripción, garantizando que siempre estén
+    disponibles y activos.
+    """
+    import re
+    from pathlib import Path
+
+    p = Path(md_path)
+    if not p.exists():
+        return 0
+
+    text = p.read_text(encoding="utf-8")
+    pattern = re.compile(r"-\s*\*\*(.*?)\*\*\s*—\s*\$(.*?)\s*—\s*(.*?)\s*#(\d+)")
+
+    rows = []
+    for line in text.splitlines():
+        line = line.strip()
+        m = pattern.match(line)
+        if m:
+            nombre, precio_str, desc, pid = m.groups()
+            try:
+                precio = int(precio_str.replace(".", "").replace(",", "").strip())
+            except ValueError:
+                precio = 0
+            rows.append((
+                int(pid),
+                nombre.strip(),
+                desc.strip(),
+                precio,
+                "instock",
+                f"https://tu-deseo.autozb.com/img/p_{pid}.jpg",
+                True,
+            ))
+
+    if not rows:
+        return 0
+
+    async with _pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO productos (id, nombre, descripcion, precio, stock_status, imagen_url, activo)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (id) DO UPDATE SET
+                nombre = EXCLUDED.nombre,
+                descripcion = EXCLUDED.descripcion,
+                precio = EXCLUDED.precio,
+                stock_status = EXCLUDED.stock_status,
+                activo = TRUE,
+                imagen_url = COALESCE(NULLIF(productos.imagen_url, ''), EXCLUDED.imagen_url)
+            """,
+            rows,
+        )
+        return len(rows)
+
+
 
 async def purge_old(ttl_days: int) -> int:
     async with _pool.acquire() as conn:

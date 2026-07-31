@@ -45,21 +45,20 @@ async def lifespan(_app: FastAPI):
         log.warning("Config incompleta, faltan: %s", ", ".join(missing))
     await db.init_pool()
     await db.run_migrations()
-    # Cargar catálogo de productos automáticamente si la tabla está vacía
+    # Cargar y asegurar los 246 productos locales con sus IDs exactos desde catalogo.md
     try:
-        csv_path = config.PROMPTS_DIR / "knowledge" / "catalogo.csv"
-        loaded = await db.seed_catalogo_if_empty(csv_path)
-        if loaded:
-            log.info("Catálogo cargado: %d productos", loaded)
+        md_path = config.PROMPTS_DIR / "knowledge" / "catalogo.md"
+        loaded = await db.seed_catalogo_from_md(md_path)
+        log.info("Catálogo local asegurado desde catalogo.md: %d productos", loaded)
     except Exception:
-        log.exception("No se pudo cargar el catálogo (no bloquea el arranque)")
+        log.exception("No se pudo cargar el catálogo local desde catalogo.md")
 
-    # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado
+    # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado (UPSERT sin borrar local)
     if config.WOOCOMMERCE_SYNC_ENABLED:
         try:
             from app import woocommerce
-            log.info("WooCommerce activado: iniciando sincronización inicial de productos e imágenes...")
-            asyncio.create_task(woocommerce.sync_catalog_from_woocommerce(full_replace=True))
+            log.info("WooCommerce activado: iniciando sincronización de productos e imágenes...")
+            asyncio.create_task(woocommerce.sync_catalog_from_woocommerce(full_replace=False))
         except Exception:
             log.exception("No se pudo iniciar sincronización de WooCommerce")
 

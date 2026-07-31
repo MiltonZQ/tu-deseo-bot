@@ -1244,7 +1244,7 @@ async def get_productos_para_recomendar(
     # categoría alternativa que TAMBIÉN cumplan la categoría original (un plug
     # anal que vibra) suben al tope. Así no se diluyen los pocos productos que
     # combinan ambas intenciones entre muchos que solo cumplen el género.
-    if categoria_funcional and genero:
+    if categoria_funcional and genero and not subtipo:
         # Tokens significativos de la categoría original para el bonus de combinación.
         cat_original_tokens = {
             "vibradores": ("vibr", "vibrador", "vibrator"),
