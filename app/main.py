@@ -179,10 +179,22 @@ async def debug_test_rec(q: str = "Tienen funda para pene"):
         limit=5,
         subtipo=sub,
     )
+    clean_cands = []
+    for c in candidatos:
+        cand_dict = {}
+        for k, v in c.items():
+            if k.startswith("_"):
+                cand_dict[k] = str(v)
+            elif isinstance(v, (int, float, str, bool, type(None))):
+                cand_dict[k] = v
+            else:
+                cand_dict[k] = str(v)
+        clean_cands.append(cand_dict)
+        
     return {
         "query": q,
         "clasif": clasif,
-        "candidatos": candidatos,
+        "candidatos": clean_cands,
     }
 
 
