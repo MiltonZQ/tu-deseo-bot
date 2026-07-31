@@ -1118,6 +1118,7 @@ async def get_productos_para_recomendar(
 
     def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
         out: list[dict] = []
+        out_subtipo: list[dict] = []  # productos que cumplen el subtipo exacto
         for r in rows:
             p = dict(r)
             if p["id"] in exclude_set:
@@ -1133,17 +1134,27 @@ async def get_productos_para_recomendar(
             p["_categoria_funcional"] = cat_func
             p["_genero"] = gen
             score = _score_candidato(p, user_text)
-            # BONUS DE SUBTIPO: si el cliente pidió un subtipo concreto (doble,
-            # ventosa, realista, vidrio...) y el producto lo cumple en nombre/
-            # descripción, darle prioridad máxima. Así el producto mostrado
-            # coincide con lo pedido (exactitud ante todo).
+            # BONUS DE SUBTIPO: si el cliente pidió un subtipo concreto (ducha,
+            # doble, ventosa...) y el producto lo cumple en nombre/descripción,
+            # darle prioridad máxima. Y SEPARARLO en out_subtipo: si hay ≥2
+            # productos del subtipo, mostrar SOLO esos (exactitud ante todo, no
+            # mezclar plugs cuando el cliente pidió duchas).
+            cumple_subtipo = False
             if subtipo:
                 nd = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
                 if subtipo in nd:
                     score += 10.0
+                    cumple_subtipo = True
             p["_score"] = score
+            if cumple_subtipo:
+                out_subtipo.append(p)
             out.append(p)
         out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+        # Si hay ≥2 productos del subtipo exacto, devolver SOLO esos (no mezclar).
+        # Si hay 0-1, completar con los mejores de la categoría.
+        if out_subtipo and len(out_subtipo) >= 2:
+            out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+            return out_subtipo[:limit]
         return out[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)
