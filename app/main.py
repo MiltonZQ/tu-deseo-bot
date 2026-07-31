@@ -165,6 +165,23 @@ async def reset_contact_memory(
     return {"cleared_wa_ids": [wa_id], "deleted": deleted}
 
 
+@app.get("/debug/test-rec")
+async def debug_test_rec(q: str = "Tienen funda para pene"):
+    clasif = await catalog.clasificar_intencion_cliente(q, [])
+    candidatos = await catalog.get_productos_para_recomendar(
+        categoria_funcional=clasif.get("categoria_funcional"),
+        genero=clasif.get("genero"),
+        user_text=q,
+        limit=5,
+        subtipo=clasif.get("subtipo_detectado"),
+    )
+    return {
+        "query": q,
+        "clasif": clasif,
+        "candidatos": candidatos,
+    }
+
+
 @app.get("/debug/fundas")
 async def debug_fundas():
     async with db._pool.acquire() as conn:
