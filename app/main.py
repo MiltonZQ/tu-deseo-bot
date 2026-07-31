@@ -524,19 +524,27 @@ _FASE_VENTA_RE = re.compile(
     re.IGNORECASE,
 )
 
+_RECHAZO_CROSS_SELLING_RE = re.compile(
+    r"\b(solo\s+(las|los|el|la|eso|el\s+primero|la\s+1|el\s+1|lo\s+que\s+pedi|las\s+esposas|el\s+vibrador)|"
+    r"no\s+gracias|asi\s+esta\s+bien|así\s+está\s+bien|sin\s+aceite|sin\s+perfume|sin\s+lubricante|"
+    r"nada\s+mas|nada\s+más|ninguno\s+mas|ninguno\s+más|ningun\s+otro|ningún\s+otro|"
+    r"proceder\s+al\s+pago|dame\s+los\s+datos|solo\s+eso)\b",
+    re.IGNORECASE,
+)
+
 
 def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     """Detecta si el cliente está en fase de venta/pago (no de exploración).
 
-    True si el mensaje actual habla de pago/datos/envío, O si en los últimos
-    turnos el bot ya pidió datos de envío / cerró venta (el cliente ya eligió y
-    está dando sus datos → no es momento de mandar más fotos de productos).
+    True si el mensaje actual habla de pago/datos/envío, O si el bot ofreció
+    venta cruzada y el cliente responde confirmando su selección sin adicionales.
     """
     texto = user_text or ""
-    if _FASE_VENTA_RE.search(texto):
+    if _FASE_VENTA_RE.search(texto) or _RECHAZO_CROSS_SELLING_RE.search(texto):
         return True
-    # Mirar últimos turnos del bot: si pidió datos de envío o cerró venta,
-    # estamos en checkout aunque el mensaje actual sea corto ("miltn zambrano...").
+
+    # Mirar últimos turnos del bot: si pidió datos de envío, cerró venta,
+    # o realizó sugerencia de venta cruzada (aceite/perfume/lubricante) y el cliente responde
     for m in reversed(history[-6:]):
         if m.get("role") != "assistant":
             continue
@@ -546,7 +554,11 @@ def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
                                 "datos de envio", "nequi", "daviplata", "bancolombia",
                                 "pago", "total", "[[pedido")):
             return True
+        if any(w in c for w in ("aceite", "perfume", "lubricante", "complementar", "agregar a tu pedido", "experiencia más completa", "experiencia mas completa")):
+            if _RECHAZO_CROSS_SELLING_RE.search(texto) or any(w in texto.lower() for w in ("solo", "no", "así", "asi", "nada", "listo", "pago")):
+                return True
     return False
+
 
 
 async def _recuperar_candidatos(
