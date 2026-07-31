@@ -839,8 +839,9 @@ def _es_subtipo_soft(subtipo: str | None) -> bool:
 
 # Sinónimos y equivalencias por subtipo para filtrado estricto en recomendaciones
 _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
-    "ducha": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
-    "enema": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
+    "ducha": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula", "limpieza", "higiene", "lavado"],
+    "enema": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula", "limpieza", "higiene", "lavado"],
+    "limpieza": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula", "limpieza", "higiene", "lavado"],
     "prostat": ["prostat", "próstata", "prostatico", "prostático"],
     "próstata": ["prostat", "próstata", "prostatico", "prostático"],
     "plug": ["plug", "plugs", "dilatador"],
@@ -1172,6 +1173,10 @@ async def get_productos_para_recomendar(
                 return False
             if any(w in norm_text for w in ("succionador", "air pulse", "pro 2", "satisfyer pro")):
                 return False
+        # Si busca enema / ducha / limpieza anal
+        if any(w in usr_text for w in ("enema", "ducha", "limpieza anal", "irrigador")):
+            if any(w in norm_text for w in ("bolas anales", "bola anal", "plug anal", "arnes", "dilatador")) and not any(w in norm_text for w in ("enema", "ducha", "limpieza")):
+                return False
         # Si el género del cliente es hombre (para él / pene)
         if genero == "hombre":
             if any(w in norm_text for w in ("succionador", "air pulse", "para ella", "estimulacion clitor", "baby doll")):
@@ -1181,6 +1186,7 @@ async def get_productos_para_recomendar(
             if any(w in norm_text for w in ("succionador", "baby doll")):
                 return False
         return True
+
 
     def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
         out: list[dict] = []

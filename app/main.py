@@ -49,8 +49,10 @@ async def lifespan(_app: FastAPI):
     if config.QDRANT_ENABLED:
         try:
             await vector_store.init_vector_store()
+            asyncio.create_task(vector_store.sync_qdrant_from_db())
         except Exception:
             log.exception("Error al inicializar Qdrant (no bloquea el arranque)")
+
 
     # Cargar catálogo de productos automáticamente si la tabla está vacía
     try:

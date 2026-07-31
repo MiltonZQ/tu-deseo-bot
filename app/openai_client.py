@@ -279,12 +279,27 @@ async def execute_tool_call(tool_name: str, args: dict) -> dict:
         cat = args.get("categoria_funcional")
         gen = args.get("genero")
         prods = await catalog.get_productos_para_recomendar(
+
             categoria_funcional=cat,
             genero=gen,
             user_text=query,
             limit=5,
         )
-        return {"productos": prods}
+        formatted_prods = []
+        for p in prods:
+
+            formatted_prods.append({
+                "id": p["id"],
+                "nombre": p.get("nombre"),
+                "precio": p.get("precio"),
+                "marcador_foto": f"[FOTO:{p['id']}]",
+                "descripcion": (p.get("descripcion") or "")[:200],
+            })
+        return {
+            "instruccion": "Para enviar las fotos por WhatsApp, DEBES incluir el marcador [FOTO:ID] exacto para cada producto en tu mensaje.",
+            "productos": formatted_prods,
+        }
+
 
     elif tool_name == "stock_tiempo_real":
         pid = args.get("producto_id")
