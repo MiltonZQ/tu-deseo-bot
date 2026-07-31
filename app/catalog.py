@@ -1168,8 +1168,8 @@ async def get_productos_para_recomendar(
                 return False
             if any(w in norm_text for w in ("succionador", "air pulse", "pro 2", "satisfyer pro")):
                 return False
-        # Si el género del cliente es hombre (para él / pene)
-        if genero == "hombre":
+        # Si el género del cliente es hombre (para él / pene) y NO pidió explícitamente succionadores
+        if genero == "hombre" and categoria_funcional != "succionadores":
             if any(w in norm_text for w in ("succionador", "air pulse", "para ella", "estimulacion clitor", "baby doll")):
                 return False
         # Si busca bombas de pene
