@@ -742,6 +742,20 @@ async def _recuperar_candidatos(
         except AttributeError:
             _es_soft_actual = False
 
+    try:
+        if clasif.get("es_especifico"):
+            total_en_categoria = len(candidatos)
+            hay_mas = False
+        else:
+            total_en_categoria = await catalog.contar_productos(cat_func, genero) if cat_func else 0
+            hay_mas = False
+            if total_en_categoria and candidatos:
+                hay_mas = total_en_categoria > (len(exclude) + len(candidatos))
+    except Exception:
+        total_en_categoria = len(candidatos) if candidatos else 0
+        hay_mas = False
+    sin_mas = not hay_mas if candidatos else False
+
     info = {
         "intencion": intencion,
         "categoria_funcional": cat_func,
@@ -750,7 +764,9 @@ async def _recuperar_candidatos(
         "pide_fotos": clasif["pide_fotos"],
         "reset_state": reset_state,
         "categoria_agotada": categoria_agotada,
-        "sin_mas_opciones": bool(candidatos and len(candidatos) < 5),
+        "sin_mas_opciones": sin_mas,
+        "hay_mas": hay_mas,
+        "total_en_categoria": total_en_categoria,
         "sin_stock_subtipo": bool(_subtipo_actual and not candidatos and not exclude and not _es_soft_actual),
         "debe_mostrar": debe_mostrar and bool(candidatos),
     }
@@ -985,6 +1001,9 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             "genero": info["genero"],
             "calificado": info["calificado"],
             "categoria_agotada": info.get("categoria_agotada", False),
+            "sin_mas_opciones": info.get("sin_mas_opciones", False),
+            "hay_mas": info.get("hay_mas", False),
+            "total_en_categoria": info.get("total_en_categoria", 0),
             "productos_mostrados": ids_mostrados,
             "productos_con_precios": productos_detalle_estado,
         },

@@ -185,7 +185,7 @@ def _score_product_match(product_name: str, tokens: list[str]) -> float:
     name_words = set(re.findall(r"\b[a-z]{2,}\b", clean_name))
     if not name_words:
         return 0.0
-    matches = sum(1 for t in tokens if t in name_words or any(t in w for w in name_words))
+    matches = sum(1 for t in tokens if t in name_words)
     return matches / len(tokens)
 
 
@@ -451,6 +451,7 @@ _ALIASES_TYPO = {
     "masturb": "masturbador", "masturbador": "masturbador",
     # Marcas (typos comunes → forma correcta)
     "lovence": "lovense", "lobense": "lovense", "lovns": "lovense", "lovene": "lovense",
+    "levense": "lovense", "levensse": "lovense", "lovenese": "lovense", "lovense": "lovense",
     "lovense": "lovense",
     "satisfier": "satisfyer", "satifyer": "satisfyer", "satisfier": "satisfyer",
     "satisfyr": "satisfyer", "satisfayer": "satisfyer", "satisfyer": "satisfyer",
@@ -548,9 +549,9 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
 # Las categorías alternativas SE FILTRAN SIEMPRE por el género del cliente, así
 # que no mezclan productos de mujer cuando el cliente pidió hombre.
 _CATEGORIAS_ALTERNATIVAS_POR_GENERO = {
-    "hombre": ["anillos-y-fundas", "masturbadores", "anal", "bombas-pene", "fundas-pene", "anillos-vibradores"],
+    "hombre": ["anillos-vibradores", "anillos-y-fundas", "fundas-pene", "bombas-pene", "masturbadores", "anal"],
     "anal": ["anal", "anillos-y-fundas"],
-    "pareja": ["pareja-y-bondage", "vibradores", "anillos-y-fundas", "anillos-vibradores"],
+    "pareja": ["pareja-y-bondage", "vibradores", "anillos-vibradores", "anillos-y-fundas"],
     "mujer": ["vibradores", "succionadores", "dildos", "lenceria"],
 }
 
@@ -681,14 +682,14 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
 # Mapa de intención del cliente (lo que busca) -> categoría funcional interna.
 # Incluye sinónimos y jerga colombiana ("chimbo" = pene -> hombre / anillos).
 _INTENCION_A_CATEGORIA_FUNCIONAL = {
-    "anillos vibradores": "anillos-y-fundas",
-    "anillo vibrador": "anillos-y-fundas",
-    "anillos de pene": "anillos-y-fundas",
-    "anillo de pene": "anillos-y-fundas",
-    "anillos peneanos": "anillos-y-fundas",
-    "anillo peneano": "anillos-y-fundas",
-    "anillos eroticos": "anillos-y-fundas",
-    "anillo erotico": "anillos-y-fundas",
+    "anillos vibradores": "anillos-vibradores",
+    "anillo vibrador": "anillos-vibradores",
+    "anillos de pene": "anillos-vibradores",
+    "anillo de pene": "anillos-vibradores",
+    "anillos peneanos": "anillos-vibradores",
+    "anillo peneano": "anillos-vibradores",
+    "anillos eroticos": "anillos-vibradores",
+    "anillo erotico": "anillos-vibradores",
     "vibradores": "vibradores",
     "vibrador": "vibradores",
     "succionador": "succionadores",
@@ -701,10 +702,10 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "anal": "anal",
     "masturbador": "masturbadores",
     "masturbadores": "masturbadores",
-    "anillo": "anillos-y-fundas",
-    "anillos": "anillos-y-fundas",
-    "funda": "anillos-y-fundas",
-    "fundas": "anillos-y-fundas",
+    "anillo": "anillos-vibradores",
+    "anillos": "anillos-vibradores",
+    "funda": "fundas-pene",
+    "fundas": "fundas-pene",
     "bomba": "bombas-pene",
     "bombas": "bombas-pene",
     "bomba pene": "bombas-pene",
@@ -1102,10 +1103,6 @@ async def clasificar_intencion_cliente(user_text: str,
 
 
 def _score_candidato(producto: dict, user_text: str) -> float:
-    """Puntúa qué tan bien un producto se ajusta a la consulta del cliente.
-
-    Premia coincidencia de tokens significativos del mensaje en nombre/descripción.
-    """
     if not user_text:
         return 0.0
     tokens = _extract_search_tokens(user_text)
@@ -1113,13 +1110,14 @@ def _score_candidato(producto: dict, user_text: str) -> float:
         return 0.0
     nombre = producto.get("nombre", "") or ""
     desc = producto.get("descripcion", "") or ""
-    nombre_clean = _normalizar_texto(nombre)
-    desc_clean = _normalizar_texto(desc)
+    import re
+    nombre_toks = set(re.findall(r"\b[a-z]{2,}\b", _normalizar_texto(nombre)))
+    desc_toks = set(re.findall(r"\b[a-z]{2,}\b", _normalizar_texto(desc)))
     score = 0.0
     for t in tokens:
-        if t in nombre_clean:
-            score += 2.0  # coincidencia en nombre pesa más
-        elif t in desc_clean:
+        if t in nombre_toks:
+            score += 2.0
+        elif t in desc_toks:
             score += 0.5
     return score
 
@@ -1328,7 +1326,6 @@ async def get_productos_para_recomendar(
     # anal que vibra) suben al tope. Así no se diluyen los pocos productos que
     # combinan ambas intenciones entre muchos que solo cumplen el género.
     if categoria_funcional and genero:
-        # Tokens significativos de la categoría original para el bonus de combinación.
         cat_original_tokens = {
             "vibradores": ("vibr", "vibrador", "vibrator"),
             "dildos": ("dildo", "consolador"),
@@ -1338,10 +1335,10 @@ async def get_productos_para_recomendar(
         }.get(categoria_funcional, ())
         alt_cats = [c for c in _CATEGORIAS_ALTERNATIVAS_POR_GENERO.get(genero, [])
                     if c != categoria_funcional]
+        acumulado = []
         for alt_cat in alt_cats:
             for con_img, con_act in [(True, True), (True, False), (False, True), (False, False)]:
                 rows = await _query(con_imagen=con_img, con_activo=con_act)
-                # Filtrar por la categoría alternativa + el género del cliente.
                 res = []
                 for r in rows:
                     p = dict(r)
@@ -1354,20 +1351,19 @@ async def get_productos_para_recomendar(
                     p["_categoria_funcional"] = alt_cat
                     p["_genero"] = genero
                     p["_score"] = _score_candidato(p, user_text)
-                    # BONUS DE COMBINACIÓN: el producto cumple AMBAS intenciones
-                    # (ej: plug anal que también vibra). Prioridad máxima: estos
-                    # productos van antes que los que solo cumplen el género.
                     if cat_original_tokens:
-                        nombre_desc = _normalizar_texto(
-                            f"{p.get('nombre','')} {p.get('descripcion','')}")
+                        nombre_desc = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
                         if any(tok in nombre_desc for tok in cat_original_tokens):
                             p["_score"] += 10.0
                     res.append(p)
                 if res:
-                    res.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
-                    log.info("get_productos_para_recomendar: intento E-bis (relaja categoría %s→%s, género=%s) → %d",
-                             categoria_funcional, alt_cat, genero, len(res))
-                    return res[:limit]
+                    acumulado.extend(res)
+            if len(acumulado) >= limit:
+                break
+        if acumulado:
+            acumulado.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
+            log.info("E-bis relaja %s→%s gen=%s -> %d (acumulado)", categoria_funcional, alt_cats, genero, len(acumulado))
+            return acumulado[:limit]
 
     # Intento E: búsqueda ILIKE por sustantivo del user_text + género (con imagen).
     # Último recurso: captura productos que _categoria_normalizada etiqueta mal.
@@ -1409,6 +1405,28 @@ async def get_productos_para_recomendar(
     if not candidatos:
         log.warning("get_productos_para_recomendar: 0 candidatos tras todos los intentos cat=%s género=%s", categoria_funcional, genero)
     return candidatos
+
+
+async def contar_productos(categoria_funcional: str | None, genero: str | None) -> int:
+    try:
+        if not categoria_funcional and not genero:
+            return 0
+        where = ["(stock_status IS NULL OR stock_status <> 'outofstock')", "imagen_url IS NOT NULL AND imagen_url != ''", "activo = TRUE"]
+        sql = "SELECT id, nombre, descripcion, categoria FROM productos WHERE " + " AND ".join(where)
+        async with db._pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+        count = 0
+        for r in rows:
+            cat = _categoria_normalizada(r["nombre"], r["descripcion"], r["categoria"])
+            gen = _genero_normalizado(r["nombre"], r["descripcion"], r["categoria"])
+            if categoria_funcional and cat != categoria_funcional:
+                continue
+            if genero and gen != genero:
+                continue
+            count += 1
+        return count
+    except Exception:
+        return 0
 
 
 async def buscar_producto_especifico(user_text: str, limit: int = 3,

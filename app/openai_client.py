@@ -195,17 +195,19 @@ async def complete(user_message: str, history: list[dict],
             estado_lines.append(f"- Género/uso: {estado['genero']}")
         if estado.get("calificado"):
             estado_lines.append("- Ya fue calificado (NO vuelvas a preguntar la categoría)")
+        if estado.get("hay_mas"):
+            total = estado.get("total_en_categoria", 0)
+            estado_lines.append(
+                f"- ✅ HAY MAS PRODUCTOS: total {total} en categoria, quedan por mostrar. Usa CTA '¿Cuál te gusta o deseas ver más diseños? 😊'"
+            )
         if estado.get("sin_mas_opciones"):
             estado_lines.append(
                 "- ⚠️ TODAS LAS OPCIONES DISPONIBLES MOSTRADAS: Con estas fotos ya le enviaste TODAS las "
-                "opciones/diseños disponibles en inventario para este producto/subtipo. PROHIBIDO preguntar "
-                "'¿deseas ver más diseños?' o '¿quieres ver más opciones?' (no hay más). En su lugar, pregunta "
-                "si le gustó alguno de estos diseños o si prefiere explorar otra categoría."
+                "opciones/diseños disponibles. PROHIBIDO preguntar '¿deseas ver más?'."
             )
         elif estado.get("categoria_agotada"):
             estado_lines.append(
-                "- ⚠️ CATEGORÍA/SUBTIPO AGOTADO: Ya se le enviaron TODAS las opciones disponibles de esta búsqueda "
-                "en mensajes anteriores. PROHIBIDO ofrecer 'ver más diseños' ni prometer más fotos."
+                "- ⚠️ CATEGORÍA/SUBTIPO AGOTADO: Ya se le enviaron TODAS las opciones disponibles. PROHIBIDO ofrecer 'ver más'."
             )
         if estado.get("productos_mostrados"):
             estado_lines.append(
