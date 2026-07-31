@@ -1163,6 +1163,9 @@ async def get_productos_para_recomendar(
     def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
         out: list[dict] = []
         out_subtipo: list[dict] = []  # productos que cumplen el subtipo exacto
+        seen_names: set[str] = set()
+        seen_subtipo_names: set[str] = set()
+
         for r in rows:
             p = dict(r)
             if p["id"] in exclude_set:
@@ -1175,6 +1178,9 @@ async def get_productos_para_recomendar(
                 continue
             if exige_gen and genero and gen != genero:
                 continue
+
+            norm_name = _normalizar_texto(p.get("nombre", ""))
+
             p["_categoria_funcional"] = cat_func
             p["_genero"] = gen
             score = _score_candidato(p, user_text)
@@ -1194,9 +1200,15 @@ async def get_productos_para_recomendar(
                 if cumple_subtipo:
                     score += 10.0
             p["_score"] = score
+
             if cumple_subtipo:
-                out_subtipo.append(p)
-            out.append(p)
+                if norm_name not in seen_subtipo_names:
+                    seen_subtipo_names.add(norm_name)
+                    out_subtipo.append(p)
+            if norm_name not in seen_names:
+                seen_names.add(norm_name)
+                out.append(p)
+
         # Si el cliente pidió un subtipo concreto: devolver SOLO coincidencias de ese subtipo/sinónimos.
         # Si hay 0 coincidencias en stock, retornar VACÍO (no rellenar con plugs ni productos irrelevantes).
         if subtipo:
@@ -1204,6 +1216,7 @@ async def get_productos_para_recomendar(
                 out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
                 return out_subtipo[:limit]
             return []
+        out.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
         return out[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)

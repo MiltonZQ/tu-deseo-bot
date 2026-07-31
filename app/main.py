@@ -50,8 +50,11 @@ async def lifespan(_app: FastAPI):
         md_path = config.PROMPTS_DIR / "knowledge" / "catalogo.md"
         loaded = await db.seed_catalogo_from_md(md_path)
         log.info("Catálogo local asegurado desde catalogo.md: %d productos", loaded)
+        dedup_count = await db.deduplicate_products_in_db()
+        if dedup_count:
+            log.info("Deduplicados %d productos repetidos en la DB", dedup_count)
     except Exception:
-        log.exception("No se pudo cargar el catálogo local desde catalogo.md")
+        log.exception("No se pudo cargar o deduplicar el catálogo local")
 
     # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado (UPSERT sin borrar local)
     if config.WOOCOMMERCE_SYNC_ENABLED:

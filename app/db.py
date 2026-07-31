@@ -287,6 +287,23 @@ async def seed_catalogo_if_empty(csv_path) -> int:
         return len(rows)
 
 
+async def deduplicate_products_in_db() -> int:
+    """Elimina productos duplicados en la base de datos por nombre normalizado,
+    manteniendo la fila con mejor información (preferencia a woo_id o imagen web real).
+    """
+    async with _pool.acquire() as conn:
+        deleted = await conn.execute(
+            """
+            DELETE FROM productos p1
+            USING productos p2
+            WHERE p1.id < p2.id
+              AND LOWER(TRIM(p1.nombre)) = LOWER(TRIM(p2.nombre))
+              AND (p2.woo_id IS NOT NULL OR p2.imagen_url LIKE 'https://tudeseosexshop%')
+            """
+        )
+        return int(deleted.split()[-1]) if deleted and deleted.startswith("DELETE") else 0
+
+
 async def seed_catalogo_from_md(md_path) -> int:
     """Carga/sincroniza el catálogo completo desde catalogo.md en la tabla productos.
 
