@@ -45,23 +45,21 @@ async def lifespan(_app: FastAPI):
         log.warning("Config incompleta, faltan: %s", ", ".join(missing))
     await db.init_pool()
     await db.run_migrations()
-    # Cargar y asegurar los 246 productos locales con sus IDs exactos desde catalogo.md
+    # Cargar catálogo de productos automáticamente si la tabla está vacía
     try:
-        md_path = config.PROMPTS_DIR / "knowledge" / "catalogo.md"
-        loaded = await db.seed_catalogo_from_md(md_path)
-        log.info("Catálogo local asegurado desde catalogo.md: %d productos", loaded)
-        dedup_count = await db.deduplicate_products_in_db()
-        if dedup_count:
-            log.info("Deduplicados %d productos repetidos en la DB", dedup_count)
+        csv_path = config.PROMPTS_DIR / "knowledge" / "catalogo.csv"
+        loaded = await db.seed_catalogo_if_empty(csv_path)
+        if loaded:
+            log.info("Catálogo cargado: %d productos", loaded)
     except Exception:
-        log.exception("No se pudo cargar o deduplicar el catálogo local")
+        log.exception("No se pudo cargar el catálogo (no bloquea el arranque)")
 
-    # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado (UPSERT sin borrar local)
+    # Sincronizar catálogo e imágenes desde la web WooCommerce si está activado
     if config.WOOCOMMERCE_SYNC_ENABLED:
         try:
             from app import woocommerce
-            log.info("WooCommerce activado: iniciando sincronización de productos e imágenes...")
-            asyncio.create_task(woocommerce.sync_catalog_from_woocommerce(full_replace=False))
+            log.info("WooCommerce activado: iniciando sincronización inicial de productos e imágenes...")
+            asyncio.create_task(woocommerce.sync_catalog_from_woocommerce(full_replace=True))
         except Exception:
             log.exception("No se pudo iniciar sincronización de WooCommerce")
 
@@ -165,57 +163,6 @@ async def reset_contact_memory(
     return {"cleared_wa_ids": [wa_id], "deleted": deleted}
 
 
-@app.get("/debug/test-rec")
-async def debug_test_rec(q: str = "Tienen succionadores"):
-    clasif = await catalog.clasificar_intencion_cliente(q, [])
-    candidatos = await catalog.get_productos_para_recomendar(
-        categoria_funcional=clasif.get("categoria_funcional"),
-        genero=clasif.get("genero"),
-        user_text=q,
-        limit=5,
-        subtipo=clasif.get("subtipo_detectado"),
-    )
-    res = []
-    for c in candidatos:
-        if isinstance(c, dict):
-            res.append({
-                "id": c.get("id"),
-                "nombre": c.get("nombre"),
-                "precio": c.get("precio"),
-                "categoria_db": c.get("categoria"),
-                "imagen_url": c.get("imagen_url"),
-            })
-    return {
-        "query": q,
-        "clasif": clasif,
-        "candidatos": res,
-    }
-
-
-@app.get("/debug/fundas")
-async def debug_fundas():
-    async with db._pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, nombre, activo, stock_status, imagen_url, categoria FROM productos WHERE nombre ILIKE '%funda%' OR id = 31232 OR categoria ILIKE '%funda%'"
-        )
-        return [dict(r) for r in rows]
-
-
-@app.get("/debug/db-status")
-async def debug_db_status():
-    async with db._pool.acquire() as conn:
-        leads = await conn.fetch("SELECT wa_id, bot_paused FROM leads")
-        pausados = await conn.fetch("SELECT telefono, pausado FROM bot_pausado")
-        convs = await conn.fetch("SELECT id, wa_id, role, content, created_at FROM conversations ORDER BY id DESC LIMIT 10")
-        processed = await conn.fetch("SELECT message_id FROM processed_messages ORDER BY processed_at DESC LIMIT 10")
-        return {
-            "leads": [dict(r) for r in leads],
-            "bot_pausado": [dict(r) for r in pausados],
-            "conversations": [dict(r) for r in convs],
-            "processed_messages": [dict(r) for r in processed],
-        }
-
-
 @app.post("/maintenance/reset-all-conversations")
 async def reset_all_conversations(
     x_reload_token: str = Header(None),
@@ -226,33 +173,12 @@ async def reset_all_conversations(
     return {"status": "ok", "deleted": deleted}
 
 
-@app.post("/maintenance/unpause-contact")
-async def unpause_contact(
-    wa_id: str,
-    x_reload_token: str = Header(None),
-):
-    if not config.RELOAD_TOKEN or x_reload_token != config.RELOAD_TOKEN:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    await db.unpause_bot(wa_id)
-    return {"status": "ok", "unpaused_wa_id": wa_id}
-
-
 
 async def _process_message_safe(payload: dict) -> None:
     try:
         await _process_message(payload)
-    except Exception as exc:
-        log.exception("Error procesando mensaje: %s", exc)
-        try:
-            msg = whatsapp_client.extract_message(payload)
-            if msg and msg.get("wa_id"):
-                wa_id = msg["wa_id"]
-                await db.set_bot_paused(wa_id, False)
-                fallback_text = "¡Hola! Tuve una breve intermitencia en el sistema, pero ya estoy listo 😊. ¿Qué producto estás buscando?"
-                await db.save_message(wa_id, "assistant", fallback_text)
-                await whatsapp_client.send_text(wa_id, fallback_text)
-        except Exception:
-            log.exception("Error enviando mensaje de recuperación")
+    except Exception:
+        log.exception("Error procesando mensaje")
 
 
 # wabaId bloqueado: la automatización ignora esta línea (anti-spam multi-línea).
@@ -961,7 +887,6 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             "genero": info["genero"],
             "calificado": info["calificado"],
             "categoria_agotada": info.get("categoria_agotada", False),
-            "sin_mas_opciones": info.get("sin_mas_opciones", False),
             "productos_mostrados": ids_mostrados,
             "productos_con_precios": productos_detalle_estado,
         },
@@ -983,31 +908,25 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     reply = re.sub(r"\[\[PEDIDO_DATOS:[^\]]*\]\]", "", reply).strip()
     reply = re.sub(r"[ \t]{2,}", " ", reply)
 
-    # ESCALAMIENTO O CONSULTA A HUMANO: Si la respuesta indica escalamiento/verificación
-    # con el equipo ("déjame verificar con el equipo", sin stock subtipo, etc.),
-    # PROHIBIDO enviar fotos de productos. El bot debe pausar y detener el envío de fotos.
-    es_escalamiento = bool(
-        info.get("sin_stock_subtipo")
-        or escalations.should_escalate(reply)
-        or any(phrase in reply.lower() for phrase in ("verificar con el equipo", "consultar con el equipo"))
-    )
-
-    if es_escalamiento:
-        log.info("Escalamiento a humano detectado para %s: 0 fotos enviadas", wa_id)
-        final_productos = []
-    elif info["debe_mostrar"] and candidatos:
-        llm_resueltos = _resolver_candidatos_del_llm(foto_ids, candidatos)
-        if len(llm_resueltos) == len(candidatos):
-            final_productos = llm_resueltos
-        else:
-            # Forzar la lista completa de candidatos para no omitir productos del inventario
+    # VALIDAR candidatos: los [FOTO:ID] del LLM deben estar en la lista de
+    # candidatos confirmados. Esto elimina alucinaciones (ej: Antifaz/Esposas
+    # cuando el cliente pidió anillo). Si el LLM no emitió marcadores válidos
+    # pero teníamos candidatos, se inyectan los del sistema.
+    # IMPORTANTE: se calcula ANTES de la guardia de calificación para que esa
+    # guardia sepa cuántos productos se enviarán REALMENTE (no solo si el LLM
+    # puso marcadores brutos, que pueden ser IDs alucinados y descartarse aquí).
+    if info["debe_mostrar"] and candidatos:
+        final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
+        if len(final_productos) < 2:
+            # El LLM omitió las fotos o puso IDs inválidos: forzar candidatos.
             log.info(
-                "Fotos ajustadas a la lista completa de candidatos (%d vs %d del LLM)",
-                len(candidatos), len(llm_resueltos),
+                "Fotos forzadas desde candidatos del sistema (%d) — LLM omitió marcadores",
+                len(candidatos),
             )
             final_productos = candidatos[:5]
     else:
-        # No debía mostrar fotos: el LLM solo califica.
+        # No debía mostrar fotos: el LLM solo califica. Si por error emitió
+        # marcadores, validarlos igualmente contra candidatos (vacío = nada).
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
 
     # RED DE SEGURIDAD — turno de calificación: si el sistema decidió NO mostrar

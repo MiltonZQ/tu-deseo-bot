@@ -399,24 +399,6 @@ def _normalizar_texto(texto: str | None) -> str:
     return norm
 
 
-def _match_keyword(clave: str, haystack: str) -> bool:
-    """Verifica si `clave` coincide en `haystack` respetando límites de palabra.
-
-    Para frases (ej: 'funda para el pene'), exige la secuencia completa.
-    Para palabras individuales (ej: 'funda'), exige límites de palabra (\b) para
-    evitar falsos positivos en palabras compuestas (ej: 'profunda' -> 'funda').
-    """
-    if not clave or not haystack:
-        return False
-    c_norm = _normalizar_texto(clave.strip())
-    if not c_norm:
-        return False
-    if " " in c_norm:
-        return c_norm in haystack
-    pattern = r"\b" + re.escape(c_norm) + r"\b"
-    return bool(re.search(pattern, haystack))
-
-
 # Alias de typos comunes del cliente → forma correcta. Aplicado al user_text
 # ANTES de clasificar, para que mensajes como "anl" (anal), "mjer" (mujer),
 # "dldo" (dildo) se clasifiquen bien sin matching difuso genérico (que causaría
@@ -489,7 +471,7 @@ def _categoria_normalizada(nombre: str, descripcion: str | None = "",
         return "juegos-y-accesorios"
     for claves, cat_funcional in _REGLAS_CATEGORIA:
         for clave in claves:
-            if _match_keyword(clave, haystack):
+            if clave in haystack:
                 return cat_funcional
     cat_o = _normalizar_texto(cat_origen)
     if "bondage" in cat_o:
@@ -533,7 +515,7 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
         return "unisex"
     for claves, genero in _REGLAS_GENERO:
         for clave in claves:
-            if _match_keyword(clave, haystack):
+            if clave in haystack:
                 return genero
     return "unisex"
 
@@ -680,34 +662,14 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
 # Mapa de intención del cliente (lo que busca) -> categoría funcional interna.
 # Incluye sinónimos y jerga colombiana ("chimbo" = pene -> hombre / anillos).
 _INTENCION_A_CATEGORIA_FUNCIONAL = {
-    "anillos vibradores": "anillos-vibradores",
-    "anillo vibrador": "anillos-vibradores",
-    "anillos de pene": "anillos-vibradores",
-    "anillo de pene": "anillos-vibradores",
-    "anillos peneanos": "anillos-vibradores",
-    "anillo peneano": "anillos-vibradores",
-    "anillos eroticos": "anillos-vibradores",
-    "anillo erotico": "anillos-vibradores",
-    "anillo": "anillos-vibradores",
-    "anillos": "anillos-vibradores",
-    "funda": "fundas-pene",
-    "fundas": "fundas-pene",
-    "funda para el pene": "fundas-pene",
-    "fundas para el pene": "fundas-pene",
-    "funda peneana": "fundas-pene",
-    "extensor": "fundas-pene",
-    "engrosador": "fundas-pene",
-    "bomba": "bombas-pene",
-    "bombas": "bombas-pene",
-    "bomba de vacio": "bombas-pene",
-    "bomba para el pene": "bombas-pene",
-    "ducha": "anal",
-    "duchas": "anal",
-    "ducha anal": "anal",
-    "duchas anales": "anal",
-    "enema": "anal",
-    "enemas": "anal",
-    "irrigador": "anal",
+    "anillos vibradores": "anillos-y-fundas",
+    "anillo vibrador": "anillos-y-fundas",
+    "anillos de pene": "anillos-y-fundas",
+    "anillo de pene": "anillos-y-fundas",
+    "anillos peneanos": "anillos-y-fundas",
+    "anillo peneano": "anillos-y-fundas",
+    "anillos eroticos": "anillos-y-fundas",
+    "anillo erotico": "anillos-y-fundas",
     "vibradores": "vibradores",
     "vibrador": "vibradores",
     "succionador": "succionadores",
@@ -720,6 +682,11 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "anal": "anal",
     "masturbador": "masturbadores",
     "masturbadores": "masturbadores",
+    "anillo": "anillos-y-fundas",
+    "anillos": "anillos-y-fundas",
+    "funda": "anillos-y-fundas",
+    "fundas": "anillos-y-fundas",
+    "bomba": "anillos-y-fundas",
     "suspensorio": "lenceria",
     "suspensorios": "lenceria",
     "suspensor": "lenceria",
@@ -800,7 +767,9 @@ _SUBTIPO_KEYWORDS = (
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
     # Anillos/fundas
-    "funda", "fundas", "extensor", "engrosador",
+    # (Nota: "vibrador" NO se incluye aquí porque es sustantivo de categoría;
+    # "anillo vibrador" se cubre porque "anillo" es categoría y el género/contexto
+    # determina el subtipo en la regla híbrida.)
     # Lencería
     "arnes", "arnés", "liguero", "pechera", "encaje", "body", "disfraz",
     "suspensorio", "conjunto",
@@ -838,8 +807,6 @@ _SUBTIPO_A_CATEGORIA = {
     "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
     "body": "lenceria", "disfraz": "lenceria", "suspensorio": "lenceria",
     "conjunto": "lenceria",
-    # Fundas
-    "funda": "fundas-pene", "fundas": "fundas-pene", "extensor": "fundas-pene", "engrosador": "fundas-pene",
     # Bondage / BDSM
     "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
     "antifaz": "pareja-y-bondage", "antifaces": "pareja-y-bondage",
@@ -851,8 +818,6 @@ _SUBTIPO_A_CATEGORIA = {
 
 # Sinónimos y equivalencias por subtipo para filtrado estricto en recomendaciones
 _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
-    "funda": ["funda", "fundas", "extensor", "engrosador"],
-    "fundas": ["funda", "fundas", "extensor", "engrosador"],
     "ducha": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
     "enema": ["ducha", "duchas", "enema", "enemas", "irrigador", "pera anal", "canula", "cánula"],
     "prostat": ["prostat", "próstata", "prostatico", "prostático"],
@@ -1168,8 +1133,8 @@ async def get_productos_para_recomendar(
                 return False
             if any(w in norm_text for w in ("succionador", "air pulse", "pro 2", "satisfyer pro")):
                 return False
-        # Si el género del cliente es hombre (para él / pene) y NO pidió explícitamente succionadores
-        if genero == "hombre" and categoria_funcional != "succionadores":
+        # Si el género del cliente es hombre (para él / pene)
+        if genero == "hombre":
             if any(w in norm_text for w in ("succionador", "air pulse", "para ella", "estimulacion clitor", "baby doll")):
                 return False
         # Si busca bombas de pene
@@ -1181,9 +1146,6 @@ async def get_productos_para_recomendar(
     def _filtrar(rows: list[dict], exige_cat: bool, exige_gen: bool) -> list[dict]:
         out: list[dict] = []
         out_subtipo: list[dict] = []  # productos que cumplen el subtipo exacto
-        seen_names: set[str] = set()
-        seen_subtipo_names: set[str] = set()
-
         for r in rows:
             p = dict(r)
             if p["id"] in exclude_set:
@@ -1196,9 +1158,6 @@ async def get_productos_para_recomendar(
                 continue
             if exige_gen and genero and gen != genero:
                 continue
-
-            norm_name = _normalizar_texto(p.get("nombre", ""))
-
             p["_categoria_funcional"] = cat_func
             p["_genero"] = gen
             score = _score_candidato(p, user_text)
@@ -1211,30 +1170,23 @@ async def get_productos_para_recomendar(
             if subtipo:
                 nd = _normalizar_texto(f"{p.get('nombre','')} {p.get('descripcion','')}")
                 sinonimos = _SUBTIPO_SINONIMOS.get(subtipo, [subtipo])
-                if any(_match_keyword(s, nd) for s in sinonimos):
+                if any(s in nd for s in sinonimos):
                     cumple_subtipo = True
                     if subtipo in ("sabor", "sabores") and "sin sabor" in nd and not any(f in nd for f in ("fresa", "chocolate", "uva", "cereza", "manzana", "menta", "frutilla", "sandia", "chicle", "sabor a")):
                         cumple_subtipo = False
                 if cumple_subtipo:
                     score += 10.0
             p["_score"] = score
-
             if cumple_subtipo:
-                if norm_name not in seen_subtipo_names:
-                    seen_subtipo_names.add(norm_name)
-                    out_subtipo.append(p)
-            if norm_name not in seen_names:
-                seen_names.add(norm_name)
-                out.append(p)
-
+                out_subtipo.append(p)
+            out.append(p)
         # Si el cliente pidió un subtipo concreto: devolver SOLO coincidencias de ese subtipo/sinónimos.
         # Si hay 0 coincidencias en stock, retornar VACÍO (no rellenar con plugs ni productos irrelevantes).
         if subtipo:
             if out_subtipo:
-                out_subtipo.sort(key=lambda p: (-p["_score"], len(p.get("nombre") or "")))
+                out_subtipo.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
                 return out_subtipo[:limit]
             return []
-        out.sort(key=lambda p: (-p["_score"], len(p.get("nombre") or "")))
         return out[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)
@@ -1242,18 +1194,6 @@ async def get_productos_para_recomendar(
                           exige_cat=True, exige_gen=True)
     if candidatos:
         return candidatos
-
-    # Intento A-bis: SI SE SOLICITÓ UNA CATEGORÍA ESPECÍFICA (ej: succionadores)
-    # y con filtro de género dio 0 resultados (ej. succionadores + hombre = 0),
-    # RELAJAR EL GÉNERO PRIMERO manteniendo la categoría exacta. Esto garantiza que
-    # "succionadores" devuelva succionadores (Satisfyer Pro, Curvy, Sona) sin cambiar
-    # jamás de categoría a masturbadores.
-    if categoria_funcional:
-        candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
-                              exige_cat=True, exige_gen=False)
-        if candidatos:
-            log.info("get_productos_para_recomendar: intento A-bis (relajando género) cat=%s → %d", categoria_funcional, len(candidatos))
-            return candidatos
 
     # Intento C: categoría + género + con imagen, sin exigir activo
     candidatos = _filtrar(await _query(con_imagen=True, con_activo=False),
@@ -1287,7 +1227,7 @@ async def get_productos_para_recomendar(
     # categoría alternativa que TAMBIÉN cumplan la categoría original (un plug
     # anal que vibra) suben al tope. Así no se diluyen los pocos productos que
     # combinan ambas intenciones entre muchos que solo cumplen el género.
-    if categoria_funcional and genero and not subtipo:
+    if categoria_funcional and genero:
         # Tokens significativos de la categoría original para el bonus de combinación.
         cat_original_tokens = {
             "vibradores": ("vibr", "vibrador", "vibrator"),

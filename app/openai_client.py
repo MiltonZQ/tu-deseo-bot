@@ -143,18 +143,14 @@ async def complete(user_message: str, history: list[dict],
             estado_lines.append(
                 "- ⚠️ TODAS LAS OPCIONES DISPONIBLES MOSTRADAS: Con estas fotos ya le enviaste TODAS las "
                 "opciones/diseños disponibles en inventario para este producto/subtipo. PROHIBIDO preguntar "
-                "'¿deseas ver más diseños?' o '¿quieres ver más opciones?' (no hay más). En su lugar, usa un CTA directo: "
-                "'¿Cuál de estos te llama más la atención?' o si prefiere explorar otra categoría (lubricantes, lencería)."
+                "'¿deseas ver más diseños?' o '¿quieres ver más opciones?' (no hay más). En su lugar, pregunta "
+                "si le gustó alguno de estos diseños o si prefiere explorar otra categoría (ej. lubricantes, lencería) o información de envío."
             )
         elif estado.get("categoria_agotada"):
             estado_lines.append(
                 "- ⚠️ CATEGORÍA/SUBTIPO AGOTADO: Ya se le enviaron TODAS las opciones disponibles de esta búsqueda "
                 "en mensajes anteriores. PROHIBIDO ofrecer 'ver más diseños' ni prometer más fotos. Explícale "
                 "amablemente que esas eran todas las opciones en inventario y pregunta si desea alguna o ver otra categoría."
-            )
-        elif debe_mostrar_fotos:
-            estado_lines.append(
-                "- ℹ️ QUEDAN MÁS OPCIONES/DISEÑOS EN INVENTARIO: Al final del mensaje DEBES ofrecer si desea ver más opciones/diseños de este producto: '¿Te gustó alguno o deseas ver más diseños? 😊'."
             )
         if estado.get("productos_mostrados"):
             estado_lines.append(
@@ -211,32 +207,23 @@ async def complete(user_message: str, history: list[dict],
             "Historial recortado por tokens: %d -> %d mensajes",
             len(history), len(fitted),
         )
-    # Llamada al modelo con timeout y fallback automático determinístico
+    # Llamada al modelo con fallback automático: si el modelo principal falla
+    # (ej. gpt-5.2 deprecado/apagado por OpenAI), reintenta con el modelo fallback
+    # para que el bot nunca se quede sin responder.
     try:
-        resp = await asyncio.wait_for(
-            _get_client().chat.completions.create(**_model_kwargs(messages)),
-            timeout=15.0,
-        )
+        resp = await _get_client().chat.completions.create(**_model_kwargs(messages))
         return resp.choices[0].message.content or ""
     except Exception as exc:
-        fallback_model = config.OPENAI_MODEL_FALLBACK or "gpt-4o-mini"
-        log.warning("Modelo principal %s falló o timed out (%s); reintentando con fallback %s",
-                    config.OPENAI_MODEL, exc, fallback_model)
-        try:
+        if config.OPENAI_MODEL_FALLBACK and config.OPENAI_MODEL_FALLBACK != config.OPENAI_MODEL:
+            log.warning("Modelo principal %s falló (%s); reintentando con fallback %s",
+                        config.OPENAI_MODEL, exc, config.OPENAI_MODEL_FALLBACK)
             fallback_kwargs = dict(_model_kwargs(messages))
-            fallback_kwargs["model"] = fallback_model
+            fallback_kwargs["model"] = config.OPENAI_MODEL_FALLBACK
+            # El fallback (gpt-4.1-mini) no es thinking; quitar reasoning exclude.
             fallback_kwargs.pop("extra_body", None)
-            resp = await asyncio.wait_for(
-                _get_client().chat.completions.create(**fallback_kwargs),
-                timeout=15.0,
-            )
+            resp = await _get_client().chat.completions.create(**fallback_kwargs)
             return resp.choices[0].message.content or ""
-        except Exception as fb_exc:
-            log.error("Modelo fallback también falló: %s", fb_exc)
-            if candidatos:
-                c_names = ", ".join(f"📸 {c['nombre']}" for c in candidatos[:3])
-                return f"Para ti tengo estas opciones disponibles 👇\n\n{c_names}\n\n¿Cuál de estas opciones te gustaría llevar? 😊"
-            return "¡Con gusto te ayudo! Cuéntame qué tipo de producto buscas o si deseas ver nuestras opciones más vendidas 😊"
+        raise
 
 
 async def transcribe_audio(audio_url: str, mime_type: str | None = None) -> str | None:
