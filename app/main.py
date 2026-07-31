@@ -13,7 +13,7 @@ from fastapi.responses import PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature, catalog
-from app import escalations, admin, leads, follow_ups, sedes, pedidos
+from app import escalations, admin, leads, follow_ups, sedes, pedidos, redis_client, vector_store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +45,13 @@ async def lifespan(_app: FastAPI):
         log.warning("Config incompleta, faltan: %s", ", ".join(missing))
     await db.init_pool()
     await db.run_migrations()
+    await redis_client.init_redis()
+    if config.QDRANT_ENABLED:
+        try:
+            await vector_store.init_vector_store()
+        except Exception:
+            log.exception("Error al inicializar Qdrant (no bloquea el arranque)")
+
     # Cargar catálogo de productos automáticamente si la tabla está vacía
     try:
         csv_path = config.PROMPTS_DIR / "knowledge" / "catalogo.csv"
@@ -84,7 +91,9 @@ async def lifespan(_app: FastAPI):
     yield
     if task:
         task.cancel()
+    await redis_client.close_redis()
     await db.close_pool()
+
 
 
 app = FastAPI(lifespan=lifespan, title="Tu Deseo — WhatsApp Bot")
@@ -758,10 +767,23 @@ async def _process_message(payload: dict) -> None:
     await db.mark_processed(msg["message_id"])
 
     # Serializar el procesamiento por usuario: los mensajes de un mismo wa_id se
-    # atienden en secuencia (nunca en paralelo). Evita respuestas duplicadas y
-    # que el buffer de agrupación se des sincronice.
-    async with _get_user_lock(wa_id):
-        await _handle_message(msg, wa_id)
+    # atienden en secuencia (nunca en paralelo). Usa Redis lock distribuido o fallback en memoria.
+    if redis_client.is_redis_available():
+        acquired = await redis_client.acquire_user_lock(wa_id)
+        if not acquired:
+            log.info("Mensaje para %s pospuesto: lock distribuido activo en Redis", wa_id)
+            await asyncio.sleep(0.5)
+            acquired = await redis_client.acquire_user_lock(wa_id)
+        if acquired:
+            try:
+                await _handle_message(msg, wa_id)
+            finally:
+                await redis_client.release_user_lock(wa_id)
+        else:
+            log.warning("No se pudo adquirir lock Redis para %s — omitiendo ejecución recurrente", wa_id)
+    else:
+        async with _get_user_lock(wa_id):
+            await _handle_message(msg, wa_id)
 
 
 async def _handle_message(msg: dict, wa_id: str) -> None:
@@ -835,25 +857,39 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         return
 
     # ── Caso D: texto (o audio transcrito) → flujo OpenAI ──
-    # Agrupación de mensajes rápidos del mismo número en 4s
+    # Agrupación de mensajes rápidos del mismo número
     if user_text.strip():
-        async with _message_buffer_lock:
-            if wa_id not in _message_buffer:
-                _message_buffer[wa_id] = []
-            _message_buffer[wa_id].append(user_text.strip())
-            is_first = len(_message_buffer[wa_id]) == 1
-
-        if is_first:
-            await asyncio.sleep(MESSAGE_GROUP_WAIT)
-            async with _message_buffer_lock:
-                mensajes = _message_buffer.pop(wa_id, [])
-            if mensajes:
-                user_text = " ".join(mensajes)
-                log.info("Mensajes agrupados para %s (%d): %r", wa_id, len(mensajes), user_text[:80])
+        if redis_client.is_redis_available():
+            count = await redis_client.push_user_message(wa_id, user_text.strip())
+            if count == 1:
+                await asyncio.sleep(config.REDIS_BUFFER_WAIT_SECONDS)
+                mensajes = await redis_client.pop_all_user_messages(wa_id)
+                if mensajes:
+                    user_text = " ".join(mensajes)
+                    log.info("Mensajes agrupados en Redis para %s (%d): %r", wa_id, len(mensajes), user_text[:80])
+            else:
+                await follow_ups.cancel(wa_id)
+                log.info("Mensaje agregado al buffer Redis de %s, esperando procesamiento principal", wa_id)
+                return
         else:
-            await follow_ups.cancel(wa_id)
-            log.info("Mensaje agregado al buffer de %s, esperando procesamiento principal", wa_id)
-            return
+            async with _message_buffer_lock:
+                if wa_id not in _message_buffer:
+                    _message_buffer[wa_id] = []
+                _message_buffer[wa_id].append(user_text.strip())
+                is_first = len(_message_buffer[wa_id]) == 1
+
+            if is_first:
+                await asyncio.sleep(MESSAGE_GROUP_WAIT)
+                async with _message_buffer_lock:
+                    mensajes = _message_buffer.pop(wa_id, [])
+                if mensajes:
+                    user_text = " ".join(mensajes)
+                    log.info("Mensajes agrupados para %s (%d): %r", wa_id, len(mensajes), user_text[:80])
+            else:
+                await follow_ups.cancel(wa_id)
+                log.info("Mensaje agregado al buffer de %s, esperando procesamiento principal", wa_id)
+                return
+
 
     await follow_ups.cancel(wa_id)
 

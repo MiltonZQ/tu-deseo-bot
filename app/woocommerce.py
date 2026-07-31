@@ -189,7 +189,15 @@ async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
 
     # Actualizar prompt de conocimiento
     await catalog.export_knowledge_md()
+    if config.QDRANT_ENABLED:
+        try:
+            from app import vector_store
+            await vector_store.sync_qdrant_from_db()
+        except Exception:
+            log.exception("Error sincronizando Qdrant tras sync de WooCommerce")
+
     log.info("Sincronización WooCommerce finalizada: %d productos procesados", insertados)
+
 
     # Diagnóstico post-sync: cuántos productos hay con imagen/activo (para detectar
     # si los filtros del bot van a encontrar candidatos).

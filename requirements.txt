@@ -8,3 +8,4 @@ python-dotenv==1.0.1
 itsdangerous==2.2.0
 python-multipart==0.0.17
 Pillow>=10.0.0  # conversión webp→jpg para envío de fotos por WhatsApp (WA no soporta webp)
+redis>=5.0.0

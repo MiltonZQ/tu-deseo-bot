@@ -48,6 +48,19 @@ MAX_REPLY_TOKENS = int(os.getenv("MAX_REPLY_TOKENS", "2000"))
 # ── Base de datos ──
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
+# ── Redis (Encolador y Locks distribuidos) ──
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_LOCK_TTL_SECONDS = int(os.getenv("REDIS_LOCK_TTL_SECONDS", "10"))
+REDIS_BUFFER_WAIT_SECONDS = float(os.getenv("REDIS_BUFFER_WAIT_SECONDS", "0.8"))
+
+# ── Qdrant Vector Store & Embeddings ──
+QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
+QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "tu_deseo_productos").strip()
+OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small").strip()
+OPENAI_EMBEDDING_API_KEY = os.getenv("OPENAI_EMBEDDING_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
+QDRANT_ENABLED = os.getenv("QDRANT_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"} and bool(QDRANT_URL)
+
 # ── Identidad y comportamiento del bot ──
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "Tu Deseo")
 BUSINESS_TAGLINE = os.getenv("BUSINESS_TAGLINE", "Sex Shop & Bienestar Sexual")

@@ -207,31 +207,193 @@ async def complete(user_message: str, history: list[dict],
             "Historial recortado por tokens: %d -> %d mensajes",
             len(history), len(fitted),
         )
+BOT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "busqueda_semantica",
+            "description": "Busca productos en el catálogo por descripción semántica, necesidad o características (ej. 'control por app', 'vibrador para parejas', 'lubricante con calor').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Término o frase de búsqueda semántica expresada por el cliente."
+                    },
+                    "categoria_funcional": {
+                        "type": "string",
+                        "description": "Categoría opcional (vibradores, succionadores, dildos, anal, masturbadores, anillos-y-fundas, pareja-y-bondage, lubricantes-y-cuidado, lenceria, juegos-y-accesorios)."
+                    },
+                    "genero": {
+                        "type": "string",
+                        "description": "Género opcional: hombre, mujer, pareja, anal."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stock_tiempo_real",
+            "description": "Consulta la disponibilidad e inventario en tiempo real de un producto por su ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "producto_id": {
+                        "type": "integer",
+                        "description": "ID numérico del producto en la base de datos."
+                    }
+                },
+                "required": ["producto_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cross_selling",
+            "description": "Obtiene sugerencias de productos complementarios según la categoría consultada.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "categoria": {
+                        "type": "string",
+                        "description": "Categoría principal de interés del cliente."
+                    }
+                },
+                "required": ["categoria"]
+            }
+        }
+    }
+]
+
+
+async def execute_tool_call(tool_name: str, args: dict) -> dict:
+    """Ejecuta determinísticamente la función invocada por el modelo."""
+    import json
+    from app import catalog, db
+    if tool_name == "busqueda_semantica":
+        query = args.get("query", "")
+        cat = args.get("categoria_funcional")
+        gen = args.get("genero")
+        prods = await catalog.get_productos_para_recomendar(
+            categoria_funcional=cat,
+            genero=gen,
+            user_text=query,
+            limit=5,
+        )
+        return {"productos": prods}
+
+    elif tool_name == "stock_tiempo_real":
+        pid = args.get("producto_id")
+        if not pid:
+            return {"error": "ID no provisto"}
+        async with db._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, nombre, precio, stock_status, activo FROM productos WHERE id = $1",
+                int(pid)
+            )
+        if not row:
+            return {"disponible": False, "motivo": "Producto no encontrado en catálogo"}
+        return {
+            "id": row["id"],
+            "nombre": row["nombre"],
+            "precio": row["precio"],
+            "disponible": bool(row["activo"]) and row["stock_status"] in ("instock", None),
+            "stock_status": row["stock_status"],
+        }
+
+    elif tool_name == "cross_selling":
+        cat = (args.get("categoria") or "").lower()
+        target_cat = "lubricantes-y-cuidado"
+        if "lenceria" in cat:
+            target_cat = "pareja-y-bondage"
+        prods = await catalog.get_productos_para_recomendar(
+            categoria_funcional=target_cat,
+            genero=None,
+            limit=3,
+        )
+        return {"sugeridos": prods}
+
+    return {"error": f"Herramienta desconocida: {tool_name}"}
+
+
+async def _resolve_model_response(messages: list[dict], model_kwargs: dict) -> str:
+    """Llama al modelo y procesa llamadas a herramientas si el modelo decide ejecutarlas."""
+    import json
+    kwargs = dict(model_kwargs)
+    kwargs["tools"] = BOT_TOOLS
+    kwargs["tool_choice"] = "auto"
+    
+    resp = await _get_client().chat.completions.create(**kwargs)
+    choice = resp.choices[0]
+    message = choice.message
+
+    if message.tool_calls:
+        tool_calls = message.tool_calls
+        messages.append(message.model_dump())
+        for tool_call in tool_calls:
+            fname = tool_call.function.name
+            try:
+                fargs = json.loads(tool_call.function.arguments or "{}")
+            except json.JSONDecodeError:
+                fargs = {}
+            log.info("Modelo invocó herramienta %s con args: %r", fname, fargs)
+            result = await execute_tool_call(fname, fargs)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+        # Segunda llamada con la respuesta de la herramienta
+        kwargs2 = dict(model_kwargs)
+        kwargs2["messages"] = messages
+        resp2 = await _get_client().chat.completions.create(**kwargs2)
+        return resp2.choices[0].message.content or ""
+
+    return message.content or ""
+
+
     # Llamada al modelo con fallback automático: si el modelo principal falla
     # (ej. gpt-5.2 deprecado/apagado por OpenAI), reintenta con el modelo fallback
     # para que el bot nunca se quede sin responder.
     try:
-        resp = await _get_client().chat.completions.create(**_model_kwargs(messages))
-        return resp.choices[0].message.content or ""
+        kwargs = _model_kwargs(messages)
+        return await _resolve_model_response(messages, kwargs)
     except Exception as exc:
         if config.OPENAI_MODEL_FALLBACK and config.OPENAI_MODEL_FALLBACK != config.OPENAI_MODEL:
             log.warning("Modelo principal %s falló (%s); reintentando con fallback %s",
                         config.OPENAI_MODEL, exc, config.OPENAI_MODEL_FALLBACK)
             fallback_kwargs = dict(_model_kwargs(messages))
             fallback_kwargs["model"] = config.OPENAI_MODEL_FALLBACK
-            # El fallback (gpt-4.1-mini) no es thinking; quitar reasoning exclude.
             fallback_kwargs.pop("extra_body", None)
-            resp = await _get_client().chat.completions.create(**fallback_kwargs)
-            return resp.choices[0].message.content or ""
+            return await _resolve_model_response(messages, fallback_kwargs)
         raise
+
 
 
 async def transcribe_audio(audio_url: str, mime_type: str | None = None) -> str | None:
     """Descarga el audio de la URL y lo transcribe con Whisper. Devuelve None si falla."""
     try:
+        headers = {}
+        if config.WHATSAPP_PROVIDER == "ycloud" and config.YCLOUD_API_KEY:
+            headers["X-API-Key"] = config.YCLOUD_API_KEY
+        elif config.WHATSAPP_API_TOKEN:
+            headers["Authorization"] = f"Bearer {config.WHATSAPP_API_TOKEN}"
+
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(audio_url)
-        if resp.status_code != 200:
+            resp = await client.get(audio_url, headers=headers)
+
+        if resp.status_code not in (200, 201) and headers:
+            # Intento de respaldo sin headers en caso de ser una URL pública de CDN firmada
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp_no_auth = await client.get(audio_url)
+            if resp_no_auth.status_code in (200, 201):
+                resp = resp_no_auth
+
+        if resp.status_code not in (200, 201):
             log.warning("Audio download failed: HTTP %s for %s", resp.status_code, audio_url)
             return None
         ext = "ogg"

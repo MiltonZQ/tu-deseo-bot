@@ -1129,7 +1129,25 @@ async def get_productos_para_recomendar(
     """
     exclude_set = set(exclude_ids or [])
 
+    # Intento 0: Búsqueda semántica vectorial en Qdrant (si está activado y hay texto de usuario)
+    if config.QDRANT_ENABLED and user_text and user_text.strip():
+        try:
+            from app import vector_store
+            candidatos_qdrant = await vector_store.search_semantic_products(
+                query=user_text,
+                categoria_funcional=categoria_funcional,
+                genero=genero,
+                exclude_ids=exclude_ids,
+                limit=limit,
+            )
+            if candidatos_qdrant:
+                log.info("Recuperados %d candidatos por búsqueda semántica Qdrant", len(candidatos_qdrant))
+                return candidatos_qdrant
+        except Exception as exc:
+            log.warning("Búsqueda semántica Qdrant falló (%s) — cayendo a búsqueda SQL", exc)
+
     async def _query(con_imagen: bool, con_activo: bool) -> list[dict]:
+
         where = ["(stock_status IS NULL OR stock_status <> 'outofstock')"]
         if con_imagen:
             where.append("imagen_url IS NOT NULL AND imagen_url != ''")
