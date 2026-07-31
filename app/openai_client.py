@@ -143,14 +143,18 @@ async def complete(user_message: str, history: list[dict],
             estado_lines.append(
                 "- ⚠️ TODAS LAS OPCIONES DISPONIBLES MOSTRADAS: Con estas fotos ya le enviaste TODAS las "
                 "opciones/diseños disponibles en inventario para este producto/subtipo. PROHIBIDO preguntar "
-                "'¿deseas ver más diseños?' o '¿quieres ver más opciones?' (no hay más). En su lugar, pregunta "
-                "si le gustó alguno de estos diseños o si prefiere explorar otra categoría (ej. lubricantes, lencería) o información de envío."
+                "'¿deseas ver más diseños?' o '¿quieres ver más opciones?' (no hay más). En su lugar, usa un CTA directo: "
+                "'¿Cuál de estos te llama más la atención?' o si prefiere explorar otra categoría (lubricantes, lencería)."
             )
         elif estado.get("categoria_agotada"):
             estado_lines.append(
                 "- ⚠️ CATEGORÍA/SUBTIPO AGOTADO: Ya se le enviaron TODAS las opciones disponibles de esta búsqueda "
                 "en mensajes anteriores. PROHIBIDO ofrecer 'ver más diseños' ni prometer más fotos. Explícale "
                 "amablemente que esas eran todas las opciones en inventario y pregunta si desea alguna o ver otra categoría."
+            )
+        elif debe_mostrar_fotos:
+            estado_lines.append(
+                "- ℹ️ QUEDAN MÁS OPCIONES/DISEÑOS EN INVENTARIO: Al final del mensaje DEBES ofrecer si desea ver más opciones/diseños de este producto: '¿Te gustó alguno o deseas ver más diseños? 😊'."
             )
         if estado.get("productos_mostrados"):
             estado_lines.append(

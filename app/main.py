@@ -945,11 +945,19 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     reply = re.sub(r"\[\[PEDIDO_DATOS:[^\]]*\]\]", "", reply).strip()
     reply = re.sub(r"[ \t]{2,}", " ", reply)
 
-    # VALIDAR candidatos: los [FOTO:ID] del LLM se cruzan con la lista de
-    # candidatos confirmados. Para garantizar que NUNCA se omita ningún producto
-    # recuperado por el sistema, si la cantidad devuelta por el LLM difiere de
-    # la lista de candidatos, se envían TODOS los candidatos del sistema (máx 5).
-    if info["debe_mostrar"] and candidatos:
+    # ESCALAMIENTO O CONSULTA A HUMANO: Si la respuesta indica escalamiento/verificación
+    # con el equipo ("déjame verificar con el equipo", sin stock subtipo, etc.),
+    # PROHIBIDO enviar fotos de productos. El bot debe pausar y detener el envío de fotos.
+    es_escalamiento = bool(
+        info.get("sin_stock_subtipo")
+        or escalations.should_escalate(reply)
+        or any(phrase in reply.lower() for phrase in ("verificar con el equipo", "consultar con el equipo", "un momento por favor"))
+    )
+
+    if es_escalamiento:
+        log.info("Escalamiento a humano detectado para %s: 0 fotos enviadas", wa_id)
+        final_productos = []
+    elif info["debe_mostrar"] and candidatos:
         llm_resueltos = _resolver_candidatos_del_llm(foto_ids, candidatos)
         if len(llm_resueltos) == len(candidatos):
             final_productos = llm_resueltos

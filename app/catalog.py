@@ -1243,6 +1243,18 @@ async def get_productos_para_recomendar(
     if candidatos:
         return candidatos
 
+    # Intento A-bis: SI SE SOLICITÓ UNA CATEGORÍA ESPECÍFICA (ej: succionadores)
+    # y con filtro de género dio 0 resultados (ej. succionadores + hombre = 0),
+    # RELAJAR EL GÉNERO PRIMERO manteniendo la categoría exacta. Esto garantiza que
+    # "succionadores" devuelva succionadores (Satisfyer Pro, Curvy, Sona) sin cambiar
+    # jamás de categoría a masturbadores.
+    if categoria_funcional:
+        candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
+                              exige_cat=True, exige_gen=False)
+        if candidatos:
+            log.info("get_productos_para_recomendar: intento A-bis (relajando género) cat=%s → %d", categoria_funcional, len(candidatos))
+            return candidatos
+
     # Intento C: categoría + género + con imagen, sin exigir activo
     candidatos = _filtrar(await _query(con_imagen=True, con_activo=False),
                           exige_cat=True, exige_gen=True)
