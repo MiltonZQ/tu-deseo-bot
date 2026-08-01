@@ -1448,3 +1448,275 @@ def test_bug19_info_expone_es_especifico():
             assert '"es_especifico"' in src
             return
     raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+# ── BUG 20 (RAÍZ): off-by-one de placeholders en upsert_conversation_state ───
+# Los logs de producción mostraban DOS errores distintos en cada intento de
+# persistir estado: "the server expects 3 arguments, 4 were passed" y
+# 'column "calificado" is of type boolean but expression is of type text'.
+# Causa: el SET dinámico numeraba desde $1, pero $1 ya está tomado por wa_id en
+# el VALUES, así que todos los índices quedaban corridos por uno. Existía desde
+# el commit inicial → el estado de conversación NUNCA se persistió.
+
+def _build_set_upsert(categoria_busqueda=None, categoria_funcional=None, genero=None,
+                      calificado=None, add_productos_mostrados=None):
+    """Réplica del SET dinámico de db.upsert_conversation_state.
+    Devuelve (sql_completo, params_incluyendo_wa_id)."""
+    sets, params = [], []
+    idx = 2  # $1 = wa_id en el VALUES
+    if categoria_busqueda is not None:
+        sets.append(f"categoria_busqueda = ${idx}"); params.append(categoria_busqueda); idx += 1
+    if categoria_funcional is not None:
+        sets.append(f"categoria_funcional = ${idx}"); params.append(categoria_funcional); idx += 1
+    if genero is not None:
+        sets.append(f"genero = ${idx}"); params.append(genero); idx += 1
+    if calificado is not None:
+        sets.append(f"calificado = ${idx}"); params.append(calificado); idx += 1
+    if add_productos_mostrados:
+        sets.append(
+            "productos_mostrados = ARRAY(SELECT DISTINCT unnest("
+            f"conversation_state.productos_mostrados || ${idx}::bigint[]))")
+        params.append(list(add_productos_mostrados)); idx += 1
+    sets.append("updated_at = now()")
+    sql = ("INSERT INTO conversation_state (wa_id, calificado, productos_mostrados, updated_at) "
+           "VALUES ($1, FALSE, '{}', now()) ON CONFLICT (wa_id) DO UPDATE SET "
+           + ", ".join(sets))
+    return sql, ["WA_ID"] + params
+
+
+def test_bug20_placeholders_coinciden_con_params_en_toda_combinacion():
+    """Para CUALQUIER combinación de campos, los placeholders deben ser $1..$N
+    contiguos y N debe ser exactamente el número de parámetros enviados."""
+    import itertools
+    valores = dict(categoria_busqueda="dildos", categoria_funcional="dildos",
+                   genero="mujer", calificado=True, add_productos_mostrados=[1, 2])
+    nombres = list(valores)
+    for r in range(len(nombres) + 1):
+        for combo in itertools.combinations(nombres, r):
+            kwargs = {k: valores[k] for k in combo}
+            sql, params = _build_set_upsert(**kwargs)
+            usados = sorted({int(n) for n in re.findall(r"\$(\d+)", sql)})
+            assert usados == list(range(1, len(params) + 1)), (
+                f"combo={combo}: placeholders {usados} vs {len(params)} params")
+
+
+def test_bug20_calificado_recibe_el_booleano_no_otro_campo():
+    """El error real de producción ('calificado is boolean but expression is
+    text') venía de que el índice corrido hacía que `calificado` apuntara al
+    parámetro de otro campo. Verifica el mapeo posición→valor."""
+    sql, params = _build_set_upsert(categoria_busqueda="lubricantes",
+                                    categoria_funcional="lubricantes-y-cuidado",
+                                    calificado=True)
+    idx_calificado = int(re.search(r"calificado = \$(\d+)", sql).group(1))
+    # params está indexado desde 0 y $1 es params[0] (wa_id).
+    assert params[idx_calificado - 1] is True, (
+        f"calificado apunta a ${idx_calificado} = {params[idx_calificado - 1]!r}, "
+        "debería ser el booleano")
+
+
+def test_bug20_el_codigo_real_arranca_los_placeholders_en_2():
+    """Regresión sobre el fuente: el idx del SET dinámico debe arrancar en 2."""
+    _DB = _ROOT / "app" / "db.py"
+    src_completo = _DB.read_text()
+    tree = ast.parse(src_completo)
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "upsert_conversation_state"):
+            src = ast.get_source_segment(src_completo, node)
+            assert re.search(r"^\s*idx = 2\s*$", src, re.MULTILINE), (
+                "El SET dinámico debe arrancar en idx = 2 ($1 es wa_id)")
+            assert not re.search(r"^\s*idx = 1\s*$", src, re.MULTILINE), (
+                "idx = 1 corre todos los placeholders y rompe el UPDATE")
+            return
+    raise AssertionError("No se encontró upsert_conversation_state")
+
+
+# ── BUG 21: guardia anti-invención de productos ─────────────────────────────
+# Caso "multiorgarmo": sin categoría ni candidatos, el LLM redactó una lista de
+# 5 productos inventados con precios. El filtro de IDs impidió mandar las fotos
+# (logs: "ID 30122 del LLM rechazado"), pero el TEXTO llegó igual al cliente
+# porque la guardia solo reescribía cuando había categoria_funcional.
+
+_LISTA_PRODUCTOS_RE = re.compile(r"[1-9]️⃣[^\n]*\$\s*[\d.,]+")
+
+
+def test_bug21_detecta_lista_numerada_con_precios_inventada():
+    """El texto real que salió al cliente debe detectarse como oferta de productos."""
+    inventado = (
+        "¡Genial! Te muestro las mejores opciones de juguetes multiorgásmicos 👇\n"
+        "1️⃣ Succionador Womanizer Premium — $350.000 — estimulación múltiple\n"
+        "2️⃣ Vibrador Bunny Lelo — $280.000 — doble estimulación")
+    assert _LISTA_PRODUCTOS_RE.search(inventado)
+
+
+def test_bug21_no_detecta_texto_sin_lista_de_productos():
+    """Preguntas de calificación y confirmaciones sin lista numerada no deben
+    activar la guardia."""
+    for texto in (
+        "¡Claro! ¿Buscas un dildo realista, con ventosa, de vidrio, o doble? 😊",
+        "¡Excelente elección! Te anoto Consolador King Cock ($60,000).",
+        "Con gusto, ¿en qué ciudad estás?",
+    ):
+        assert not _LISTA_PRODUCTOS_RE.search(texto), f"falso positivo en {texto!r}"
+
+
+def test_bug21_guardia_reescribe_cuando_no_hay_categoria():
+    """Réplica de la guardia: sin candidatos y sin categoría, el texto se
+    reemplaza por el mensaje honesto en vez de dejar salir la invención."""
+    def _guardia(reply, debe_mostrar, final_productos, categoria_funcional, en_fase_venta):
+        if (not debe_mostrar and not final_productos
+                and (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply))):
+            pregunta = _PREGUNTAS_CALIFICACION.get(categoria_funcional) if categoria_funcional else None
+            if pregunta:
+                return "pregunta"
+            elif not en_fase_venta:
+                return "honesto"
+        return "sin cambios"
+
+    inventado = "Te muestro las mejores opciones 👇\n1️⃣ Womanizer Premium — $350.000"
+    # Caso del bug: sin categoría → mensaje honesto (antes: pasaba tal cual).
+    assert _guardia(inventado, False, [], None, False) == "honesto"
+    # Con categoría → sigue inyectando la pregunta de calificación (sin cambios).
+    assert _guardia(inventado, False, [], "dildos", False) == "pregunta"
+    # En fase de venta, la lista numerada es el resumen del pedido: no tocar.
+    assert _guardia(inventado, False, [], None, True) == "sin cambios"
+    # Con fotos reales que sí se envían, la guardia no interviene.
+    assert _guardia(inventado, True, [{"id": 1}], None, False) == "sin cambios"
+
+
+def test_bug21_guardia_conectada_en_el_codigo_real():
+    src = _MAIN.read_text()
+    assert "_LISTA_PRODUCTOS_RE" in src
+    assert "_SIN_RESULTADO_MSG" in src
+
+
+# ── BUG 22: _es_fase_venta demasiado laxo bloqueaba consultas nuevas ─────────
+# Una venta cruzada vieja ("¿agregarlo a tu pedido?") dejaba la conversación en
+# modo-venta indefinidamente: al mirar los últimos 6 mensajes del bot y buscar
+# palabras sueltas ("pedido"), toda consulta posterior perdía sus fotos.
+
+_BOT_ABRIO_CHECKOUT = (
+    "nombre completo", "datos de envío", "datos de envio",
+    "teléfono de contacto", "telefono de contacto",
+    "dirección de envío", "direccion de envio",
+    "información de pagos", "informacion de pagos",
+    "confirmar tu pedido", "confirmo tu pedido", "resumen de tu pedido",
+    "[[pedido",
+)
+_CIERRE_CROSS_SELLING_RE = re.compile(
+    r"\b(solo|no|así|asi|nada|listo|pago|ninguno|ninguna)\b", re.IGNORECASE)
+_BOT_OFRECIO_CROSS_SELLING = (
+    "aceite", "perfume", "lubricante", "complementar", "agregar a tu pedido",
+    "experiencia más completa", "experiencia mas completa",
+)
+_FASE_VENTA_RE = re.compile(
+    r"\b(nequi|daviplata|bancolombia|bold|pago|pagar|pague|transferencia|"
+    r"comprobante|comprobant|envio|envío|despacho|despachar|direcci[oó]n|"
+    r"telefono|tel[eé]fono|celular|nombre completo|ciudad|barrio|"
+    r"cuesta|cuanto cuesta|cu[aá]nto|valor|total|yappi|yapy|"
+    r"pedido|lo quiero|lo compro|lo llevo|me lo llevo|ese quiero|"
+    r"ya pague|ya pagu|ya transferi|ya transferí|adjunto|adjunt|"
+    r"comprobante de pago|efectivo|contra ?entrega)\b", re.IGNORECASE)
+_RECHAZO_CROSS_RE = re.compile(
+    r"\b(solo\s+(las|los|el|la|eso|el\s+primero|la\s+1|el\s+1|lo\s+que\s+pedi|las\s+esposas|el\s+vibrador)|"
+    r"no\s+gracias|asi\s+esta\s+bien|así\s+está\s+bien|sin\s+aceite|sin\s+perfume|sin\s+lubricante|"
+    r"nada\s+mas|nada\s+más|ninguno\s+mas|ninguno\s+más|ningun\s+otro|ningún\s+otro|"
+    r"proceder\s+al\s+pago|dame\s+los\s+datos|solo\s+eso)\b", re.IGNORECASE)
+
+
+def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
+    """Réplica de la versión corregida en main.py."""
+    texto = user_text or ""
+    if _FASE_VENTA_RE.search(texto) or _RECHAZO_CROSS_RE.search(texto):
+        return True
+    ultimo_bot = next((m for m in reversed(history) if m.get("role") == "assistant"), None)
+    if not ultimo_bot:
+        return False
+    c = (ultimo_bot.get("content") or "").lower()
+    if any(f in c for f in _BOT_ABRIO_CHECKOUT):
+        return True
+    if any(w in c for w in _BOT_OFRECIO_CROSS_SELLING):
+        if _RECHAZO_CROSS_RE.search(texto) or _CIERRE_CROSS_SELLING_RE.search(texto):
+            return True
+    return False
+
+
+_HIST_CROSS_SELLING_VIEJA = [
+    {"role": "assistant", "content": (
+        "💡 Para una experiencia más cómoda, te recomiendo acompañarlos con "
+        "nuestro Lubricante Íntimo a Base de Agua por $29,800. ¿Te gustaría "
+        "agregarlo a tu pedido?")},
+]
+
+
+def test_bug22_consulta_nueva_tras_venta_cruzada_no_es_fase_venta():
+    """Caso del reporte: 'Tienen productos King' tras una venta cruzada vieja
+    NO debe considerarse fase de venta (antes bloqueaba las fotos y terminaba
+    inyectando una pregunta de calificación sin relación)."""
+    assert _es_fase_venta("Tienen productos King", _HIST_CROSS_SELLING_VIEJA) is False
+    assert _es_fase_venta("Tienen multiorgarmo", _HIST_CROSS_SELLING_VIEJA) is False
+
+
+def test_bug22_respuesta_de_calificacion_no_es_fase_venta():
+    """'Base de agua' respondiendo la pregunta de lubricantes debe seguir el
+    flujo normal (antes: fase de venta → sin búsqueda → handoff falso)."""
+    history = [{"role": "assistant", "content": (
+        "¿lo buscas a base de agua, de silicona, anal desensibilizante, o con sabores?")}]
+    assert _es_fase_venta("Base de agua", history) is False
+
+
+def test_bug22_palabras_completas_no_substrings():
+    """'uno'/'bueno' contienen 'no' como substring: no deben activar el cierre
+    de venta cruzada."""
+    assert _es_fase_venta("quiero uno", _HIST_CROSS_SELLING_VIEJA) is False
+    assert _es_fase_venta("bueno", _HIST_CROSS_SELLING_VIEJA) is False
+
+
+def test_bug22_checkout_y_cierre_real_si_son_fase_venta():
+    """Los casos legítimos de fase de venta se siguen detectando."""
+    checkout = [{"role": "assistant", "content": (
+        "Perfecto, pásame tu nombre completo, ciudad y dirección 😊")}]
+    assert _es_fase_venta("Juan Pérez, Bogotá", checkout) is True
+    assert _es_fase_venta("no gracias, solo eso", _HIST_CROSS_SELLING_VIEJA) is True
+    assert _es_fase_venta("ya pague, adjunto comprobante", []) is True
+
+
+def test_bug22_solo_mira_el_ultimo_mensaje_del_bot():
+    """Verifica en el fuente que ya no se recorren los últimos 6 mensajes."""
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_es_fase_venta":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            assert "history[-6:]" not in src, (
+                "_es_fase_venta debe mirar solo el último mensaje del bot")
+            assert "ultimo_bot" in src
+            return
+    raise AssertionError("No se encontró _es_fase_venta")
+
+
+# ── BUG 23: falso "sin stock" cuando la búsqueda nunca corrió ───────────────
+
+def test_bug23_sin_stock_requiere_que_la_busqueda_se_haya_ejecutado():
+    """Réplica de la condición corregida: sin busqueda_ejecutada, un turno que
+    no mostraba fotos se leía como inventario vacío → handoff + bot pausado."""
+    def _sin_stock(busqueda_ejecutada, subtipo, candidatos, exclude, es_soft):
+        return bool(busqueda_ejecutada and subtipo and not candidatos
+                    and not exclude and not es_soft)
+
+    # Caso del bug: no se buscó (debe_mostrar=False) → NO es sin stock.
+    assert _sin_stock(False, "base de agua", [], [], False) is False
+    # Se buscó y de verdad no hay nada → sí es sin stock (comportamiento legítimo).
+    assert _sin_stock(True, "base de agua", [], [], False) is True
+    # Se buscó y sí hay candidatos → no es sin stock.
+    assert _sin_stock(True, "base de agua", [{"id": 1}], [], False) is False
+
+
+def test_bug23_flag_conectado_en_el_codigo_real():
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            assert "busqueda_ejecutada = bool(debe_mostrar)" in src
+            assert "busqueda_ejecutada and _subtipo_actual" in src
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")

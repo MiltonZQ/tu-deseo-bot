@@ -400,6 +400,21 @@ _OFRECE_PRODUCTOS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Lista numerada de productos con precio ("1️⃣ Nombre — $80.000"). Es la forma
+# más directa de detectar que el LLM está ofreciendo productos concretos, incluso
+# si no usó ninguna de las frases de _OFRECE_PRODUCTOS_RE. Si aparece sin fotos
+# reales detrás, son productos inventados.
+_LISTA_PRODUCTOS_RE = re.compile(r"[1-9]️⃣[^\n]*\$\s*[\d.,]+")
+
+# Mensaje honesto cuando el cliente pide algo que no se pudo resolver contra el
+# catálogo. Coherente con la regla "nunca digas 'no tenemos' sin verificar" del
+# system prompt: no niega el producto, ofrece confirmar con el equipo.
+_SIN_RESULTADO_MSG = (
+    "Déjame confirmar con el equipo si tenemos ese producto disponible 😊 "
+    "Mientras tanto, ¿te gustaría que te muestre otras opciones? Tenemos "
+    "vibradores, dildos, lencería, lubricantes y más."
+)
+
 
 async def _enviar_fotos_productos(
     wa_id: str,
@@ -556,30 +571,58 @@ def _es_seleccion_de_lista_mostrada(user_text: str, history: list[dict]) -> bool
     return False
 
 
+# Frases que indican que el bot REALMENTE abrió el checkout (pidió datos de envío
+# o dio medios de pago). Son frases completas a propósito: palabras sueltas como
+# "pedido", "ciudad" o "total" aparecen en mensajes de exploración normales — la
+# venta cruzada "¿te gustaría agregarlo a tu pedido?" activaba modo-venta para
+# todo el resto de la conversación, bloqueando las fotos de consultas nuevas.
+_BOT_ABRIO_CHECKOUT = (
+    "nombre completo", "datos de envío", "datos de envio",
+    "teléfono de contacto", "telefono de contacto",
+    "dirección de envío", "direccion de envio",
+    "información de pagos", "informacion de pagos",
+    "confirmar tu pedido", "confirmo tu pedido", "resumen de tu pedido",
+    "[[pedido",
+)
+
+# Respuestas cortas con las que el cliente cierra la venta cruzada ("solo eso",
+# "no gracias", "listo"). Se evalúan como palabra completa: usar substrings hacía
+# que "no" matcheara dentro de "u-no"/"bue-no" y "asi" dentro de "casi".
+_CIERRE_CROSS_SELLING_RE = re.compile(
+    r"\b(solo|no|así|asi|nada|listo|pago|ninguno|ninguna)\b",
+    re.IGNORECASE,
+)
+
+_BOT_OFRECIO_CROSS_SELLING = (
+    "aceite", "perfume", "lubricante", "complementar", "agregar a tu pedido",
+    "experiencia más completa", "experiencia mas completa",
+)
+
+
 def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     """Detecta si el cliente está en fase de venta/pago (no de exploración).
 
     True si el mensaje actual habla de pago/datos/envío, O si el bot ofreció
-    venta cruzada y el cliente responde confirmando su selección sin adicionales.
+    venta cruzada en su ÚLTIMO mensaje y el cliente responde cerrando sin
+    adicionales.
     """
     texto = user_text or ""
     if _FASE_VENTA_RE.search(texto) or _RECHAZO_CROSS_SELLING_RE.search(texto):
         return True
 
-    # Mirar últimos turnos del bot: si pidió datos de envío, cerró venta,
-    # o realizó sugerencia de venta cruzada (aceite/perfume/lubricante) y el cliente responde
-    for m in reversed(history[-6:]):
-        if m.get("role") != "assistant":
-            continue
-        c = (m.get("content") or "").lower()
-        if any(w in c for w in ("nombre completo", "direcci", "teléfono de contacto",
-                                "teléfono", "ciudad", "pedido", "datos de envío",
-                                "datos de envio", "nequi", "daviplata", "bancolombia",
-                                "pago", "total", "[[pedido")):
+    # Solo el ÚLTIMO mensaje del bot: la fase de venta la define el turno
+    # inmediatamente anterior, no cualquier mensaje de los últimos seis (si no,
+    # una venta cruzada vieja dejaba la conversación en modo-venta para siempre).
+    ultimo_bot = next(
+        (m for m in reversed(history) if m.get("role") == "assistant"), None)
+    if not ultimo_bot:
+        return False
+    c = (ultimo_bot.get("content") or "").lower()
+    if any(f in c for f in _BOT_ABRIO_CHECKOUT):
+        return True
+    if any(w in c for w in _BOT_OFRECIO_CROSS_SELLING):
+        if _RECHAZO_CROSS_SELLING_RE.search(texto) or _CIERRE_CROSS_SELLING_RE.search(texto):
             return True
-        if any(w in c for w in ("aceite", "perfume", "lubricante", "complementar", "agregar a tu pedido", "experiencia más completa", "experiencia mas completa")):
-            if _RECHAZO_CROSS_SELLING_RE.search(texto) or any(w in texto.lower() for w in ("solo", "no", "así", "asi", "nada", "listo", "pago")):
-                return True
     return False
 
 
@@ -645,6 +688,15 @@ async def _recuperar_candidatos(
             exclude_previo = estado.get("productos_mostrados", []) if estado else []
             producto_por_nombre = await catalog.buscar_producto_especifico(
                 user_text, limit=5, exclude_ids=exclude_previo)
+            if not producto_por_nombre:
+                # El término puede venir con un typo ("multiorgarmo"). Corregirlo
+                # contra los nombres reales del catálogo y reintentar: sin esto el
+                # turno se queda sin candidatos, que es justo cuando el LLM puede
+                # inventarse una lista de productos.
+                texto_corregido = await catalog.corregir_typos_contra_catalogo(user_text)
+                if texto_corregido != user_text:
+                    producto_por_nombre = await catalog.buscar_producto_especifico(
+                        texto_corregido, limit=5, exclude_ids=exclude_previo)
             if producto_por_nombre:
                 clasif["es_especifico"] = True
                 clasif["calificado"] = True
@@ -680,7 +732,8 @@ async def _recuperar_candidatos(
     # es ruido que confunde y rompe la venta. Las fotos vuelven solo cuando el
     # cliente haga una consulta NUEVA de productos (el detector de cambio de tema
     # reinicia el estado).
-    if debe_mostrar and _es_fase_venta(user_text, history):
+    en_fase_venta = _es_fase_venta(user_text, history)
+    if debe_mostrar and en_fase_venta:
         debe_mostrar = False
         clasif["calificado"] = False
         log.info("Fase de venta detectada — fotos desactivadas este turno")
@@ -698,6 +751,11 @@ async def _recuperar_candidatos(
 
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
+    # ¿Se llegó a consultar el inventario en este turno? Si debe_mostrar quedó en
+    # False, ninguna búsqueda corre y `candidatos` queda vacío por no haber
+    # buscado — NO por falta de stock. Distinguir ambos casos evita el handoff
+    # falso "no tengo ese producto" (ver sin_stock_subtipo más abajo).
+    busqueda_ejecutada = bool(debe_mostrar)
 
     # Si el cliente pidió un PRODUCTO ESPECÍFICO por marca/modelo (Lovense Lush,
     # Satisfyer Pro 2), buscar por NOMBRE primero (más preciso que categoría).
@@ -835,12 +893,18 @@ async def _recuperar_candidatos(
         "calificado": clasif["calificado"] or (debe_mostrar and bool(candidatos)),
         "pide_fotos": clasif["pide_fotos"],
         "es_especifico": bool(clasif.get("es_especifico")),
+        "en_fase_venta": en_fase_venta,
         "reset_state": reset_state,
         "categoria_agotada": categoria_agotada,
         "sin_mas_opciones": sin_mas,
         "hay_mas": hay_mas,
         "total_en_categoria": total_en_categoria,
-        "sin_stock_subtipo": bool(_subtipo_actual and not candidatos and not exclude and not _es_soft_actual),
+        # Solo es "sin stock" si de verdad se buscó y no había nada. Sin
+        # busqueda_ejecutada, un turno que no mostraba fotos (fase de venta,
+        # selección numérica) se leía como inventario vacío y disparaba el
+        # handoff "no tengo ese producto" + bot pausado sin justificación.
+        "sin_stock_subtipo": bool(busqueda_ejecutada and _subtipo_actual and not candidatos
+                                  and not exclude and not _es_soft_actual),
         "debe_mostrar": debe_mostrar and bool(candidatos),
     }
     return candidatos, info
@@ -1142,20 +1206,16 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # marcadores, validarlos igualmente contra candidatos (vacío = nada).
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
 
-    # RED DE SEGURIDAD — turno de calificación: si el sistema decidió NO mostrar
-    # fotos (debe_mostrar=False) porque toca calificar, pero el LLM incumplió y
-    # escribió una plantilla de "mostrar productos" ("Mira estas opciones…") SIN
-    # fotos que se vayan a enviar realmente, corregimos reemplazando por la
-    # pregunta determinista de esa categoría. Se evalúa sobre final_productos
-    # (marcadores válidos) — no sobre foto_ids brutos — para cerrar el hueco del
-    # marcador [FOTO] espurio (el LLM puede alucinar [FOTO:999] sin candidatos;
-    # al resolver contra candidatos vacíos final_productos queda vacío y la
-    # guardia SÍ dispara, evitando el estado roto "ofrece pero no envía nada").
+    # RED DE SEGURIDAD — el LLM ofrece productos que NO se van a enviar. Se evalúa
+    # sobre final_productos (marcadores ya validados contra candidatos reales), no
+    # sobre foto_ids brutos, para cubrir también el [FOTO:999] alucinado. El filtro
+    # de IDs impide mandar la foto, pero sin esta guardia el TEXTO igual salía.
+    # Se detecta por las frases de plantilla ("Mira estas opciones…") y por una
+    # lista numerada con precios. Dos salidas según haya categoría o no.
     if (not info["debe_mostrar"]
-            and info["categoria_funcional"]
             and not final_productos
-            and _OFRECE_PRODUCTOS_RE.search(reply)):
-        pregunta = _PREGUNTAS_CALIFICACION.get(info["categoria_funcional"])
+            and (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply))):
+        pregunta = _PREGUNTAS_CALIFICACION.get(info["categoria_funcional"]) if info["categoria_funcional"] else None
         if pregunta:
             log.info(
                 "LLM omitió la pregunta de calificación para '%s' (escribió plantilla sin "
@@ -1163,6 +1223,17 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
                 info["categoria_funcional"],
             )
             reply = pregunta
+        elif not info.get("en_fase_venta"):
+            # Sin categoría no hay pregunta de calificación que inyectar. Antes se
+            # dejaba pasar el texto tal cual, y el LLM podía listar productos que no
+            # existen (caso "multiorgarmo": 5 productos fabricados con precios).
+            # Se excluye la fase de venta: ahí una lista numerada con precios es el
+            # resumen legítimo del pedido, no una invención.
+            log.warning(
+                "LLM ofreció productos sin candidatos ni categoría — texto reemplazado "
+                "por mensaje honesto (posible invención)",
+            )
+            reply = _SIN_RESULTADO_MSG
 
     # DEFENSA A PRUEBA DE FALLOS — filtro FINAL de productos ya mostrados.
     # Aunque la exclusión se propaga por todos los caminos de _recuperar_candidatos,

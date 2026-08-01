@@ -948,6 +948,108 @@ def _tokens_no_reconocidos(user_text: str) -> list[str]:
             if len(t) >= 4 and t not in _VOCABULARIO_CONOCIDO and t not in _PALABRAS_GENERICAS_IGNORAR]
 
 
+# Marcas/modelos concretos del catálogo. Si el cliente nombra uno, se busca por
+# NOMBRE y se muestra directo (sin pregunta de calificación). Esta lista curada
+# NO pretende ser exhaustiva: _tokens_no_reconocidos() cubre las marcas que no
+# estén aquí, y corregir_typos_contra_catalogo() las cubre incluso con typos.
+_MARCAS_CONOCIDAS = (
+    "lovense", "satisfyer", "tenga", "we vibe", "wevibe", "chorus",
+    "womanizer", "lelo", "fun factory", "pipedream", "california dreaming",
+    "camtoyz", "lerot", "optimus",
+    "lush", "hush", "diamo", "max", "nova", "ambu", "oski", "ferri",
+    "gush", "pro 2", "pro 3",
+    # Marcas de cosmética/lubricantes/estimulantes del catálogo
+    "sen ", "sen intimo", "elixir", "blix", "hot production", "hot ",
+    "joy division", "joydivision", "system jo", "swiss navy", "pjur",
+    "doc johnson", "troc", "basix", "icicles", "spanish fly",
+    # Términos de productos que están en nombres del catálogo
+    "multiorgasmo", "orgasmo", "estimulante", "retardante", "afrodisiaco",
+)
+
+
+# ── Corrección de typos contra los nombres REALES del catálogo ──
+# _corregir_typos() cubre typos frecuentes con alias fijos ("anl"→"anal"), pero
+# no puede cubrir los nombres de producto/marca (son cientos y cambian con el
+# catálogo). Sin esto, un typo como "multiorgarmo" no matchea nada: el
+# clasificador no reconoce categoría y el LLM se queda sin candidatos, que es
+# justo el escenario donde puede inventarse una lista de productos.
+_PALABRAS_CATALOGO_CACHE: frozenset[str] = frozenset()
+_PALABRAS_CATALOGO_TS: float = 0.0
+_PALABRAS_CATALOGO_TTL = 600  # segundos
+
+
+async def _palabras_de_nombres_catalogo() -> frozenset[str]:
+    """Palabras que aparecen en los NOMBRES de productos activos (cache con TTL).
+
+    Ante cualquier fallo devuelve el cache previo (posiblemente vacío): la
+    corrección de typos es una mejora opcional, nunca debe romper el flujo.
+    """
+    global _PALABRAS_CATALOGO_CACHE, _PALABRAS_CATALOGO_TS
+    import time
+    ahora = time.monotonic()
+    if _PALABRAS_CATALOGO_CACHE and (ahora - _PALABRAS_CATALOGO_TS) < _PALABRAS_CATALOGO_TTL:
+        return _PALABRAS_CATALOGO_CACHE
+    try:
+        async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+            rows = await conn.fetch(
+                "SELECT nombre FROM productos WHERE activo = TRUE AND nombre IS NOT NULL"
+            )
+        palabras: set[str] = set()
+        for r in rows:
+            for palabra in re.findall(r"\b[a-z]{4,}\b", _normalizar_texto(r["nombre"])):
+                palabras.add(palabra)
+        _PALABRAS_CATALOGO_CACHE = frozenset(palabras)
+        _PALABRAS_CATALOGO_TS = ahora
+        log.info("Cache de palabras del catálogo refrescado: %d palabras", len(palabras))
+    except Exception as exc:
+        log.warning("No se pudo refrescar el cache de palabras del catálogo: %s", exc)
+    return _PALABRAS_CATALOGO_CACHE
+
+
+def _misma_familia(a: str, b: str) -> bool:
+    """True si dos palabras son variantes de la misma (uno es prefijo del otro),
+    ej: 'multiorgasmo' y 'multiorgasmos'."""
+    return a.startswith(b) or b.startswith(a)
+
+
+async def corregir_typos_contra_catalogo(user_text: str) -> str:
+    """Corrige typos de nombres de producto/marca comparando con el catálogo real.
+
+    Solo toca tokens que NO son vocabulario conocido (categoría/subtipo/género)
+    y que tienen al menos 5 letras, y solo si hay UNA coincidencia cercana de
+    alta confianza. Si no hay match claro, devuelve el texto sin cambios: es
+    preferible no encontrar nada a buscar un producto equivocado.
+    """
+    tokens = [t for t in _tokens_no_reconocidos(user_text) if len(t) >= 5]
+    if not tokens:
+        return user_text
+    vocabulario = await _palabras_de_nombres_catalogo()
+    if not vocabulario:
+        return user_text
+    candidatas = sorted(vocabulario | {m.strip() for m in _MARCAS_CONOCIDAS if len(m.strip()) >= 5})
+    import difflib
+    texto_corregido = user_text
+    for token in tokens:
+        if token in vocabulario:
+            continue  # ya es una palabra real del catálogo, no es typo
+        cercanas = difflib.get_close_matches(token, candidatas, n=2, cutoff=0.8)
+        if not cercanas:
+            continue
+        # No elegir al azar entre dos palabras DISTINTAS igual de parecidas (sería
+        # adivinar de qué producto habla el cliente). Variantes de la misma palabra
+        # ("multiorgasmo"/"multiorgasmos") no cuentan como ambigüedad: una es
+        # prefijo de la otra y ambas llevan al mismo producto.
+        if len(cercanas) > 1 and not _misma_familia(cercanas[0], cercanas[1]):
+            r0 = difflib.SequenceMatcher(None, token, cercanas[0]).ratio()
+            r1 = difflib.SequenceMatcher(None, token, cercanas[1]).ratio()
+            if (r0 - r1) < 0.05:
+                continue
+        texto_corregido = re.sub(rf"\b{re.escape(token)}\b", cercanas[0],
+                                 texto_corregido, flags=re.IGNORECASE)
+        log.info("Typo corregido contra el catálogo: %r → %r", token, cercanas[0])
+    return texto_corregido
+
+
 # Petición explícita de fotos por parte del cliente.
 import re as _re_mod
 _FOTO_REQUEST_RE = _re_mod.compile(
@@ -1175,19 +1277,6 @@ async def clasificar_intencion_cliente(user_text: str,
     # buscarlo por nombre y mostrarlo DIRECTO, sin pasar por la calificación de
     # categoría (que genera la pregunta genérica innecesaria). El user_text ya viene
     # corregido de typos (_corregir_typos), así que "lovence"→"lovense" matchea.
-    _MARCAS_CONOCIDAS = (
-        "lovense", "satisfyer", "tenga", "we vibe", "wevibe", "chorus",
-        "womanizer", "lelo", "fun factory", "pipedream", "california dreaming",
-        "camtoyz", "lerot", "optimus",
-        "lush", "hush", "diamo", "max", "nova", "ambu", "oski", "ferri",
-        "gush", "pro 2", "pro 3",
-        # Marcas de cosmética/lubricantes/estimulantes del catálogo
-        "sen ", "sen intimo", "elixir", "blix", "hot production", "hot ",
-        "joy division", "joydivision", "system jo", "swiss navy", "pjur",
-        "doc johnson", "troc", "basix", "icicles", "spanish fly",
-        # Términos de productos que están en nombres del catálogo
-        "multiorgasmo", "orgasmo", "estimulante", "retardante", "afrodisiaco",
-    )
     es_especifico = any(marca in norm_user for marca in _MARCAS_CONOCIDAS)
     if es_especifico:
         # Producto específico → mostrar directo (no preguntar calificación).

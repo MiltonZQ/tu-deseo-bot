@@ -566,9 +566,14 @@ async def upsert_conversation_state(
             return
 
         # Construir SET dinámico solo con los campos provistos.
+        # OJO: los placeholders arrancan en $2 porque $1 ya está tomado por wa_id
+        # en el VALUES ($1, ...) de abajo, y la llamada pasa `wa_id, *params`.
+        # Arrancar en $1 corría todos los índices y hacía fallar el UPDATE
+        # siempre ("the server expects N arguments, N+1 were passed" o un choque
+        # de tipos), así que el estado de conversación nunca se persistía.
         sets: list[str] = []
         params: list = []
-        idx = 1
+        idx = 2
         if categoria_busqueda is not None:
             sets.append(f"categoria_busqueda = ${idx}")
             params.append(categoria_busqueda)

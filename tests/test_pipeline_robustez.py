@@ -198,3 +198,75 @@ def test_palabras_genericas_de_relleno_no_cuentan_como_marca():
                   "cual opcion me recomiendas"):
         tokens = catalog._tokens_no_reconocidos(texto)
         assert tokens == [], f"{texto!r} no debería generar tokens no reconocidos: {tokens}"
+
+
+# ── Corrección de typos contra los nombres reales del catálogo ──────────────
+# Caso reportado: "multiorgarmo" (typo de multiorgasmo) no matcheaba nada, el
+# turno se quedaba sin candidatos y el LLM se inventó 5 productos con precios.
+# Estos tests inyectan el cache de palabras del catálogo para no necesitar DB.
+
+def _con_cache_catalogo(palabras: set[str]):
+    """Precarga el cache de palabras del catálogo para evitar tocar la DB."""
+    import time
+    catalog._PALABRAS_CATALOGO_CACHE = frozenset(palabras)
+    catalog._PALABRAS_CATALOGO_TS = time.monotonic()
+
+
+# Palabras tomadas de nombres reales del catálogo semilla (prompts/knowledge/catalogo.md).
+_PALABRAS_REALES = {
+    "multiorgasmos", "multiorgasmo", "electrizante", "euforia", "original",
+    "intimo", "consolador", "king", "cock", "prepucio", "squirting",
+    "lovense", "satisfyer", "icicles", "elixir", "limpiador", "juguetes",
+    "vibrador", "dildo", "realista", "camtoyz", "ayami",
+}
+
+
+def test_typo_multiorgarmo_se_corrige_a_multiorgasmo():
+    """El caso EXACTO del reporte: el typo debe resolver al producto real."""
+    _con_cache_catalogo(_PALABRAS_REALES)
+    corregido = asyncio.run(catalog.corregir_typos_contra_catalogo("Tienen multiorgarmo"))
+    assert "multiorgasmo" in corregido.lower(), corregido
+
+
+def test_typos_de_marcas_conocidas_se_corrigen():
+    _con_cache_catalogo(_PALABRAS_REALES)
+    for typo, esperado in (("lovence", "lovense"), ("satisfayer", "satisfyer"),
+                           ("iciclees", "icicles"), ("consolodor", "consolador")):
+        corregido = asyncio.run(
+            catalog.corregir_typos_contra_catalogo(f"tienen {typo}"))
+        assert esperado in corregido.lower(), f"{typo!r} → {corregido!r}"
+
+
+def test_texto_sin_typos_no_se_altera():
+    """Si el cliente escribe bien, el texto debe pasar intacto."""
+    _con_cache_catalogo(_PALABRAS_REALES)
+    for texto in ("Tienen multiorgasmos", "quiero un consolador king cock",
+                  "tienen lubricantes"):
+        assert asyncio.run(catalog.corregir_typos_contra_catalogo(texto)) == texto
+
+
+def test_palabras_sin_parecido_no_se_corrigen():
+    """Ante algo que no se parece a nada del catálogo, NO inventar una
+    corrección: es preferible no encontrar nada a mostrar el producto errado."""
+    _con_cache_catalogo(_PALABRAS_REALES)
+    for texto in ("tienen asdfghjk", "quiero qwertyui"):
+        assert asyncio.run(catalog.corregir_typos_contra_catalogo(texto)) == texto
+
+
+def test_sin_cache_de_catalogo_no_rompe():
+    """Si el cache está vacío (DB caída al refrescar), la corrección debe ser
+    un no-op silencioso en vez de propagar el error."""
+    catalog._PALABRAS_CATALOGO_CACHE = frozenset()
+    catalog._PALABRAS_CATALOGO_TS = 0.0
+    try:
+        resultado = asyncio.run(catalog.corregir_typos_contra_catalogo("Tienen multiorgarmo"))
+    except Exception as exc:
+        raise AssertionError(f"No debe propagar excepciones: {exc!r}")
+    assert resultado == "Tienen multiorgarmo"
+
+
+def test_variantes_singular_plural_no_bloquean_la_correccion():
+    """'multiorgasmo'/'multiorgasmos' son la misma palabra: no deben tratarse
+    como ambigüedad (era lo que impedía corregir el caso del reporte)."""
+    assert catalog._misma_familia("multiorgasmo", "multiorgasmos") is True
+    assert catalog._misma_familia("lovense", "satisfyer") is False
