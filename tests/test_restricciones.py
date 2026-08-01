@@ -194,3 +194,72 @@ def test_toda_opcion_ofrecida_se_entiende():
             fallos.append(f"menú {menu}: el cliente responde {respuesta!r} y no se "
                           f"reconoce {campo} (se obtuvo {r})")
     assert not fallos, "\n  " + "\n  ".join(fallos)
+
+
+# ── Vocabulario único ──
+# El vocabulario del cliente quedó duplicado: catalog.py (clasificador viejo) y
+# facetas.py (el que manda en la búsqueda). Divergieron, y el nuevo era el más
+# pobre. Reportado: "Manejan suspensores de hombre" devolvía conjuntos de mujer
+# porque ni "suspensores" ni "de hombre" estaban en el vocabulario nuevo.
+
+FRASES_REALES = [
+    # (mensaje del cliente, campo, valor esperado)
+    ("Manejan suspensores de hombre", "tipo", "lenceria"),
+    ("Manejan suspensores de hombre", "genero_uso", "hombre"),
+    ("Quiero suspensores de hombre", "genero_uso", "hombre"),
+    ("quiero un suspensor", "tipo", "lenceria"),
+    ("tienen suspensorios", "tipo", "lenceria"),
+    ("algo de hombre", "genero_uso", "hombre"),
+    ("algo para hombre", "genero_uso", "hombre"),
+    ("es para un hombre", "genero_uso", "hombre"),
+    ("lenceria de mujer", "genero_uso", "mujer"),
+    ("algo femenino", "genero_uso", "mujer"),
+    ("para dama", "genero_uso", "mujer"),
+    ("para caballero", "genero_uso", "hombre"),
+    ("juguetes masculinos", "genero_uso", "hombre"),
+]
+
+
+def test_las_frases_reales_de_los_clientes_se_entienden():
+    fallos = []
+    for texto, campo, esperado in FRASES_REALES:
+        r = leer(texto)
+        if r.get(campo) != esperado:
+            fallos.append(f"{texto!r} → {campo}={r.get(campo)!r} (esperado {esperado!r})")
+    assert not fallos, "\n  " + "\n  ".join(fallos)
+
+
+def test_suspensores_de_hombre_no_devuelve_lenceria_de_mujer():
+    """El caso exacto del reporte, sobre el estado que había."""
+    previas = {"tipo": "lenceria"}
+    r = fusionar(previas, leer("Manejan suspensores de hombre"))
+    assert r.get("tipo") == "lenceria"
+    assert r.get("genero_uso") == "hombre", r
+
+
+# Marcas: no se mapean a facetas a propósito. Satisfyer fabrica succionadores de
+# clítoris y también masturbadores masculinos, así que "satisfyer" no implica un
+# género. Los nombres de marca los resuelve la búsqueda por nombre
+# (`catalog.buscar_producto_especifico`), no la clasificación por facetas.
+_MARCAS_NO_SON_FACETAS = {"satisfyer", "lovense diamo", "we vibe", "chorus"}
+
+
+def test_el_vocabulario_del_clasificador_viejo_esta_cubierto():
+    """Ninguna palabra que el clasificador viejo entendía puede perderse.
+
+    Los dos vocabularios convivieron y divergieron: el viejo conocía
+    "suspensores" y "de hombre", el nuevo no, y como el nuevo manda en la
+    búsqueda, un cliente que pedía suspensorios masculinos recibía conjuntos de
+    mujer. Este test falla si vuelven a separarse.
+    """
+    from app import catalog
+    faltan = []
+    for claves, genero in catalog._GENERO_KEYWORDS_CLIENTE:
+        for clave in claves:
+            if len(clave) < 4 or clave in _MARCAS_NO_SON_FACETAS:
+                continue
+            r = leer(f"quiero algo {clave}")
+            if not r:
+                faltan.append(f"{clave!r} (→ {genero})")
+    assert not faltan, ("el vocabulario nuevo no entiende palabras que el viejo sí:\n  "
+                        + "\n  ".join(faltan[:25]))

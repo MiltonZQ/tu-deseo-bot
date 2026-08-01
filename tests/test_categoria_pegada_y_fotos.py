@@ -221,17 +221,28 @@ def test_sin_subtipo_e_bis_sigue_relajando_la_categoria_por_genero():
 
 # ── Bug 3b: se forzaban fotos sobre respuestas que no ofrecían productos ──
 
-def test_no_se_fuerzan_fotos_si_la_respuesta_no_ofrece_productos():
+def test_las_fotos_solo_salen_con_el_texto_que_las_describe():
+    """Antes se adjuntaban fotos a respuestas que no ofrecían productos.
+
+    El cliente preguntaba por látigos, recibía el mensaje de escalado y detrás
+    dos anillos vibradores al azar. Se resolvía con una bandera que detectaba si
+    el LLM había prometido productos; ahora la garantía es estructural: en los
+    turnos de producto el TEXTO lo arma el sistema desde los mismos candidatos
+    que las fotos, y solo entonces se envían fotos.
+    """
     src = (_ROOT / "app" / "main.py").read_text()
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_message":
             fn_src = ast.get_source_segment(src, node)
-            idx = fn_src.index("promete_productos")
-            bloque = fn_src[idx:idx + 700]
-            assert "_LISTA_PRODUCTOS_RE" in bloque and "_OFRECE_PRODUCTOS_RE" in bloque
-            assert "final_productos = []" in bloque, (
-                "sin oferta de productos en el texto no deben adjuntarse fotos")
+            i = fn_src.index("texto_lo_arma_el_sistema = ")
+            assert "info.get(\"debe_mostrar\") and candidatos" in fn_src[i:i + 160], fn_src[i:i + 160]
+            # "\n    if" para no encontrar antes el "elif" que redacta el texto.
+            j = fn_src.index("\n    if texto_lo_arma_el_sistema:")
+            bloque = fn_src[j:j + 700]
+            assert "final_productos = candidatos[:5]" in bloque, bloque[:300]
+            assert "_resolver_candidatos_del_llm" in bloque, (
+                "en los turnos que redacta el LLM hay que seguir validando sus IDs")
             return
     raise AssertionError("No se encontró _handle_message")
 

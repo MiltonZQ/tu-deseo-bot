@@ -1806,15 +1806,22 @@ def test_bug24_texto_del_llm_se_reemplaza_si_no_corresponde():
 
 
 def test_bug24_reemplazo_conectado_en_el_codigo():
+    """El texto de los turnos de producto lo arma el sistema, no el LLM.
+
+    Antes el LLM redactaba la lista y el sistema la reemplazaba cuando no
+    coincidía con las fotos. Ese reemplazo a posteriori se sustituyó por la
+    garantía de origen: si hay productos que mostrar, el texto sale de
+    `_texto_desde_candidatos` y nunca del LLM, así que no hay nada que corregir.
+    """
     src = _MAIN.read_text()
     assert "_texto_desde_candidatos" in src
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_message":
             fn_src = ast.get_source_segment(src, node)
-            idx = fn_src.index("Fotos forzadas desde candidatos")
-            bloque = fn_src[idx:idx + 900]
+            idx = fn_src.index("elif texto_lo_arma_el_sistema:")
+            bloque = fn_src[idx:idx + 500]
             assert "_texto_desde_candidatos" in bloque, (
-                "al forzar candidatos hay que rearmar el texto para que coincida")
+                "el turno de producto debe redactarse desde los candidatos reales")
             return
     raise AssertionError("No se encontró _handle_message")

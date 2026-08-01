@@ -377,7 +377,7 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
     (("bolas anales", "bolas chinas", "kegel", "ben wa"), {"tipo": "bolas"}),
     (("strap on", "strap-on", "arnes", "arneses"), {"tipo": "arnes"}),
     (("succionador", "succionadores", "succion", "satisfyer pro"), {"tipo": "succionador"}),
-    (("masturbador", "masturbadores", "huevo masturbador"), {"tipo": "masturbador"}),
+    (("masturbador", "masturbadores", "huevo masturb"), {"tipo": "masturbador"}),
     (("bomba", "bombas"), {"tipo": "bomba"}),
     (("plug", "plugs", "tapon"), {"tipo": "plug"}),
     (("anillo", "anillos", "cockring"), {"tipo": "anillo"}),
@@ -387,8 +387,13 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
     (("lubricante", "lubricantes", "lubricacion", "gel intimo"), {"tipo": "lubricante"}),
     (("estimulante", "retardante", "afrodisiaco", "potenciador",
       "multiorgasmo", "multiorgasmos"), {"tipo": "cosmetica"}),
+    # Los suspensorios del catálogo son todos masculinos: la palabra aporta el
+    # tipo Y el género. Sin esto, "suspensores de hombre" devolvía conjuntos de
+    # mujer, que fue el fallo reportado.
+    (("suspensorio", "suspensorios", "suspensor", "suspensores"),
+     {"tipo": "lenceria", "genero_uso": "hombre"}),
     (("lenceria", "baby doll", "babydoll", "bodys", "bodies", "body",
-      "conjunto", "disfraz", "disfraces", "suspensorio", "suspensorios",
+      "conjunto", "disfraz", "disfraces",
       "pechera", "liguero", "tanga"), {"tipo": "lenceria"}),
     (("bondage", "bdsm", "esposas", "antifaz", "antifaces", "latigo", "latigos",
       "fusta", "fustas", "mordaza", "amarre", "amarres", "vendas", "sado",
@@ -396,7 +401,7 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
     (("juego de mesa", "juegos de mesa", "jenga", "cartas", "dados", "ruleta"), {"tipo": "juego"}),
     # ── zona ──
     (("prostata", "prostatico"), {"zona": "anal"}),
-    (("anal", "anales", "por atras", "el culo", "recto"), {"zona": "anal"}),
+    (("anal", "anales", "por atras", "el culo", "recto", "cola"), {"zona": "anal"}),
     (("clitoris", "clitorial", "clitorion"), {"zona": "clitoris"}),
     (("punto g", "vaginal", "vagina", "penetracion"), {"zona": "vaginal"}),
     (("pene", "chimbo", "miembro", "verga", "pito", "glande"), {"zona": "pene"}),
@@ -406,11 +411,19 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
       "app control"), {"control": "app"}),
     (("control remoto", "a distancia", "inalambrico"), {"control": "remoto"}),
     # ── género / uso ──
-    (("en pareja", "para pareja", "para parejas", "los dos", "con mi novia",
-      "con mi esposa", "con mi pareja"), {"genero_uso": "pareja"}),
-    (("para ella", "para mujer", "para mi novia", "para mi esposa", "femenino"),
-     {"genero_uso": "mujer"}),
-    (("para el", "para hombre", "para mi", "masculino"), {"genero_uso": "hombre"}),
+    # OJO CON EL ORDEN: gana la primera coincidencia por campo, y las claves
+    # llevan límite de palabra solo a la izquierda. "para el" coincidiría dentro
+    # de "para ella", así que mujer va ANTES que hombre.
+    (("en pareja", "para pareja", "para parejas", "pareja", "parejas",
+      "los dos", "con mi novia", "con mi esposa", "con mi pareja",
+      "mi novia", "mi esposa", "mi novio", "mi esposo",
+      "we vibe", "we-vibe", "chorus"), {"genero_uso": "pareja"}),
+    (("para ella", "de mujer", "para mujer", "para mi novia", "para mi esposa",
+      "femenino", "femenina", "mujer", "mujeres", "dama", "damas",
+      "clit"), {"genero_uso": "mujer"}),
+    (("de hombre", "para hombre", "para el", "para él", "para mi",
+      "masculino", "masculina", "hombre", "hombres", "caballero", "caballeros",
+      "gallo", "pito"), {"genero_uso": "hombre"}),
 )
 
 # Atributos que el cliente pide por nombre. `solo_para` declara con qué tipos

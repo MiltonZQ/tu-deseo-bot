@@ -1338,6 +1338,15 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
 
     es_ver_mas_pedido = _es_ver_mas(user_text) and info.get("debe_mostrar") and candidatos
     es_agotado = info.get("categoria_agotada")
+    # EL SISTEMA REDACTA LOS TURNOS DE PRODUCTO.
+    # Nombres, precios, numeración, marcadores de foto y CTA salen todos de los
+    # mismos candidatos, así que texto y fotos no pueden desalinearse y el CTA no
+    # puede prometer "ver más" cuando no queda nada. El LLM sigue llevando el
+    # resto de la conversación (asesoría, dudas, datos de envío, pago, tono).
+    # Antes el LLM redactaba también estos turnos y el sistema iba detrás
+    # corrigiéndolo —detectar si prometió productos, forzar fotos, reemplazar el
+    # texto—, y esas correcciones se pisaban entre sí.
+    texto_lo_arma_el_sistema = bool(info.get("debe_mostrar") and candidatos)
     # Numeración continua entre rondas: en un "ver más" los productos nuevos siguen
     # desde donde quedó la ronda anterior. Solo se aplica cuando el TEXTO lo redacta
     # el sistema; si lo escribe el LLM numera desde 1 por su cuenta y un offset en
@@ -1347,9 +1356,12 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
         cat_nombre = cat_nombre.replace("-", " ")
         raw_reply = f"Te mostré todas las opciones de {cat_nombre} disponibles 😊 ¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
-    elif es_ver_mas_pedido:
-        offset_numeracion = len(ids_mostrados)
-        raw_reply = _texto_desde_candidatos(candidatos, info, mas_disenos=True,
+    elif texto_lo_arma_el_sistema:
+        # La numeración continúa mientras siga la misma búsqueda; si el cliente
+        # cambió de tema, el estado se reinició y arranca de nuevo en 1️⃣.
+        offset_numeracion = 0 if info.get("reset_state") else len(ids_mostrados)
+        raw_reply = _texto_desde_candidatos(candidatos, info,
+                                            mas_disenos=bool(es_ver_mas_pedido),
                                             offset=offset_numeracion)
     else:
         raw_reply = await openai_client.complete(
@@ -1393,47 +1405,15 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # IMPORTANTE: se calcula ANTES de la guardia de calificación para que esa
     # guardia sepa cuántos productos se enviarán REALMENTE (no solo si el LLM
     # puso marcadores brutos, que pueden ser IDs alucinados y descartarse aquí).
-    if info["debe_mostrar"] and candidatos:
-        final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
-        # Solo se fuerzan fotos si la respuesta REALMENTE ofrece productos (lista
-        # numerada, plantilla de "mira estas opciones" o marcadores). Cuando el LLM
-        # responde otra cosa a propósito — escalar ("Déjame confirmar con el equipo"),
-        # o preguntar para calificar — forzar los candidatos adjuntaba fotos que nadie
-        # ofreció: el cliente preguntaba por látigos, recibía el mensaje de escalado y
-        # detrás dos anillos vibradores al azar.
-        promete_productos = bool(
-            foto_ids or _LISTA_PRODUCTOS_RE.search(reply) or _OFRECE_PRODUCTOS_RE.search(reply)
-        )
-        if len(final_productos) < 2 and not promete_productos:
-            log.info(
-                "Respuesta sin oferta de productos (%d candidatos disponibles) — no se "
-                "adjuntan fotos que el texto no promete",
-                len(candidatos),
-            )
-            final_productos = []
-        elif len(final_productos) < 2:
-            # El LLM omitió las fotos o puso IDs inválidos: forzar candidatos.
-            log.info(
-                "Fotos forzadas desde candidatos del sistema (%d) — LLM omitió marcadores",
-                len(candidatos),
-            )
-            final_productos = candidatos[:5]
-            # GARANTÍA TEXTO = FOTOS. Si el LLM además redactó su propia lista de
-            # productos, esa lista no describe lo que se va a enviar (pasó en
-            # producción: texto de succionadores con fotos de vibradores Lovense).
-            # Se reemplaza por el texto armado desde los candidatos reales.
-            if _LISTA_PRODUCTOS_RE.search(reply) or _OFRECE_PRODUCTOS_RE.search(reply):
-                log.warning(
-                    "El texto del LLM no corresponde a los productos que se enviarán "
-                    "— reemplazado por el texto determinista del catálogo",
-                )
-                offset_numeracion = len(ids_mostrados)
-                reply = _texto_desde_candidatos(final_productos, info,
-                                                offset=offset_numeracion)
-                foto_ids, reply = _extraer_marcadores_foto(reply)
+    if texto_lo_arma_el_sistema:
+        # El texto salió de estos mismos candidatos: van sus fotos, sin más
+        # comprobaciones. Aquí vivían las tres banderas que se pisaban entre sí
+        # (forzar fotos, detectar si el LLM prometía productos, reemplazar su
+        # texto); ya no hacen falta porque el LLM no redacta estos turnos.
+        final_productos = candidatos[:5]
     else:
-        # No debía mostrar fotos: el LLM solo califica. Si por error emitió
-        # marcadores, validarlos igualmente contra candidatos (vacío = nada).
+        # Turno de conversación: el LLM redacta. Si emitió marcadores de foto, se
+        # validan contra los candidatos reales para descartar IDs inventados.
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
 
     # RED DE SEGURIDAD — el LLM ofrece productos que NO se van a enviar. Se evalúa
