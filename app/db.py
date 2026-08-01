@@ -253,6 +253,9 @@ async def run_migrations() -> None:
                 f"ALTER TABLE productos ADD COLUMN IF NOT EXISTS {_col} {_tipo}"
             )
         await conn.execute(
+            "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS restricciones JSONB"
+        )
+        await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_productos_facetas ON productos(tipo, zona)"
         )
         await conn.execute(
@@ -583,7 +586,7 @@ async def get_conversation_state(wa_id: str) -> dict | None:
         row = await conn.fetchrow(
             """
             SELECT categoria_busqueda, categoria_funcional, genero, calificado,
-                   productos_mostrados
+                   productos_mostrados, restricciones
             FROM conversation_state WHERE wa_id = $1
             """,
             wa_id,
@@ -596,6 +599,7 @@ async def get_conversation_state(wa_id: str) -> dict | None:
         "genero": row["genero"],
         "calificado": row["calificado"],
         "productos_mostrados": list(row["productos_mostrados"] or []),
+        "restricciones": json.loads(row["restricciones"]) if row["restricciones"] else {},
     }
 
 
@@ -606,6 +610,7 @@ async def upsert_conversation_state(
     genero: str | None = None,
     calificado: bool | None = None,
     add_productos_mostrados: list[int] | None = None,
+    restricciones: dict | None = None,
     reset: bool = False,
 ) -> None:
     """Crea o actualiza el estado de conversación de un cliente.
@@ -628,6 +633,7 @@ async def upsert_conversation_state(
                     genero = NULL,
                     calificado = FALSE,
                     productos_mostrados = '{}',
+                    restricciones = NULL,
                     updated_at = now()
                 """,
                 wa_id,
@@ -670,6 +676,9 @@ async def upsert_conversation_state(
             _campo("genero", genero, f"${idx}", f"${idx}")
         if calificado is not None:
             _campo("calificado", calificado, f"${idx}", f"${idx}")
+        if restricciones is not None:
+            _campo("restricciones", json.dumps(restricciones),
+                   f"${idx}::jsonb", f"${idx}::jsonb")
         if add_productos_mostrados:
             # UPDATE: unir con lo ya guardado, sin duplicados.
             # OJO: usar ${idx} (un solo $) como placeholder de asyncpg. Escribir

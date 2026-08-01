@@ -352,6 +352,187 @@ async def clasificar_con_llm(nombre: str, descripcion: str | None = "") -> Facet
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Lo que pide el CLIENTE (no lo que ES el producto)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# La intención del cliente es multidimensional y se construye entre turnos:
+#
+#   "tienen vibradores"  → {tipo: vibrador}
+#   "anal"               → {tipo: vibrador, zona: anal}     ← REFINA
+#   "con app"            → {tipo: vibrador, zona: anal, control: app}
+#   "ahora lubricantes"  → {tipo: lubricante}               ← REEMPLAZA
+#
+# Antes esto era UNA variable que se sobrescribía, así que "anal" borraba
+# "vibradores" y el cliente que pedía un vibrador anal recibía enemas. Los
+# parches previos (lista fija de sustantivos de cambio de tema, caso especial de
+# lubricantes) eran aproximaciones a la regla que está abajo, en
+# `fusionar_restricciones`.
+
+# (claves que puede decir el cliente, restricciones que aportan). Orden: lo más
+# específico primero, porque gana la primera coincidencia por campo.
+_VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
+    # ── tipo ──
+    (("ducha anal", "duchas anales", "enema", "enemas", "irrigador"), {"tipo": "enema"}),
+    (("bolas anales", "bolas chinas", "kegel", "ben wa"), {"tipo": "bolas"}),
+    (("strap on", "strap-on", "arnes", "arneses"), {"tipo": "arnes"}),
+    (("succionador", "succionadores", "succion", "satisfyer pro"), {"tipo": "succionador"}),
+    (("masturbador", "masturbadores", "huevo masturbador"), {"tipo": "masturbador"}),
+    (("bomba", "bombas"), {"tipo": "bomba"}),
+    (("plug", "plugs", "tapon"), {"tipo": "plug"}),
+    (("anillo", "anillos", "cockring"), {"tipo": "anillo"}),
+    (("funda", "fundas", "extensor", "engrosador"), {"tipo": "funda"}),
+    (("dildo", "dildos", "consolador", "consoladores"), {"tipo": "dildo"}),
+    (("vibrador", "vibradores", "vibradorcito"), {"tipo": "vibrador"}),
+    (("lubricante", "lubricantes", "lubricacion", "gel intimo"), {"tipo": "lubricante"}),
+    (("estimulante", "retardante", "afrodisiaco", "potenciador",
+      "multiorgasmo", "multiorgasmos"), {"tipo": "cosmetica"}),
+    (("lenceria", "baby doll", "babydoll", "bodys", "bodies", "body",
+      "conjunto", "disfraz", "disfraces", "suspensorio", "suspensorios",
+      "pechera", "liguero", "tanga"), {"tipo": "lenceria"}),
+    (("bondage", "bdsm", "esposas", "antifaz", "antifaces", "latigo", "latigos",
+      "fusta", "fustas", "mordaza", "amarre", "amarres", "vendas", "sado",
+      "sadomasoquismo", "collar"), {"tipo": "bondage"}),
+    (("juego de mesa", "juegos de mesa", "jenga", "cartas", "dados", "ruleta"), {"tipo": "juego"}),
+    # ── zona ──
+    (("prostata", "prostatico"), {"zona": "anal"}),
+    (("anal", "anales", "por atras", "el culo", "recto"), {"zona": "anal"}),
+    (("clitoris", "clitorial", "clitorion"), {"zona": "clitoris"}),
+    (("punto g", "vaginal", "vagina", "penetracion"), {"zona": "vaginal"}),
+    (("pene", "chimbo", "miembro", "verga", "pito", "glande"), {"zona": "pene"}),
+    (("pezon", "pezones"), {"zona": "pezones"}),
+    # ── control ──
+    (("con app", "control por app", "por aplicacion", "con aplicacion",
+      "app control"), {"control": "app"}),
+    (("control remoto", "a distancia", "inalambrico"), {"control": "remoto"}),
+    # ── género / uso ──
+    (("en pareja", "para pareja", "para parejas", "los dos", "con mi novia",
+      "con mi esposa", "con mi pareja"), {"genero_uso": "pareja"}),
+    (("para ella", "para mujer", "para mi novia", "para mi esposa", "femenino"),
+     {"genero_uso": "mujer"}),
+    (("para el", "para hombre", "para mi", "masculino"), {"genero_uso": "hombre"}),
+)
+
+# Atributos que el cliente pide por nombre. `solo_para` declara con qué tipos
+# tiene sentido el atributo: si el tipo activo no está en la lista, el atributo
+# IMPLICA un cambio de tipo. Así "sabores" tras hablar de bombas de vacío pasa a
+# lubricantes (una bomba no tiene sabores) pero tras hablar de lubricantes solo
+# filtra. Esto sustituye al caso especial que había escrito a mano.
+_ATRIBUTOS_CLIENTE: tuple[tuple[tuple[str, ...], str, tuple[str, ...], str | None], ...] = (
+    (("sabor", "sabores", "saborizado", "comestible"), "sabor",
+     ("lubricante", "cosmetica"), "lubricante"),
+    (("base de agua", "base agua", "a base de agua"), "agua",
+     ("lubricante", "cosmetica"), "lubricante"),
+    (("silicona", "de silicona"), "silicona", (), None),
+    (("desensibilizante", "anestesico", "relajante anal"), "desensibilizante",
+     ("lubricante", "cosmetica"), "lubricante"),
+    (("realista", "textura piel"), "realista", ("dildo", "funda"), "dildo"),
+    (("ventosa", "con ventosa"), "ventosa", ("dildo",), "dildo"),
+    (("vidrio", "cristal"), "vidrio", ("dildo", "plug"), None),
+    (("doble", "doble estimulacion"), "doble", (), None),
+    (("primera vez", "principiante", "para empezar", "iniciacion"), "principiante", (), None),
+    (("recargable",), "recargable", (), None),
+    (("calor", "caliente"), "calor", ("lubricante", "cosmetica"), "lubricante"),
+    (("frio", "efecto frio"), "frio", ("lubricante", "cosmetica"), "lubricante"),
+)
+
+# "que vibre" / "con vibración" sin nombrar el tipo.
+_CLAVES_PIDE_VIBRACION = ("que vibre", "con vibracion", "vibracion", "vibre", "vibrante")
+
+
+def interpretar_mensaje(texto: str) -> dict:
+    """Restricciones que aporta ESTE mensaje (vacío si no habla de productos).
+
+    No mira el historial: solo lo que dice el cliente ahora. Combinar con lo
+    anterior es tarea de `fusionar_restricciones`.
+    """
+    t = normalizar(texto)
+    if not t.strip():
+        return {}
+    encontradas: dict = {}
+    for claves, aporte in _VOCABULARIO_CLIENTE:
+        for campo, valor in aporte.items():
+            if campo in encontradas:
+                continue  # ya resuelto por una clave más específica
+            if _alguna(claves, t):
+                encontradas[campo] = valor
+    atributos: list[str] = []
+    implicitos: list[tuple[str, tuple[str, ...], str | None]] = []
+    for claves, attr, solo_para, tipo_implicito in _ATRIBUTOS_CLIENTE:
+        if _alguna(claves, t):
+            atributos.append(attr)
+            implicitos.append((attr, solo_para, tipo_implicito))
+    if atributos:
+        encontradas["atributos"] = sorted(set(atributos))
+        encontradas["_implicitos"] = implicitos
+    if _alguna(_CLAVES_PIDE_VIBRACION, t):
+        encontradas["vibra"] = True
+    return encontradas
+
+
+def fusionar_restricciones(previas: dict | None, nuevas: dict) -> dict:
+    """Combina lo que ya sabíamos con lo que aporta el mensaje nuevo.
+
+    LA REGLA, que sustituye a todos los parches por palabra:
+      - un TIPO distinto = cambio de tema → reemplaza todo.
+      - cualquier otra faceta (zona, control, atributo, género) = refinamiento →
+        se suma a lo que ya había.
+
+    Un atributo cuyo `solo_para` no incluya el tipo activo también cuenta como
+    cambio de tema ("sabores" cuando veníamos de bombas de vacío).
+    """
+    previas = dict(previas or {})
+    previas.pop("_implicitos", None)
+    nuevas = dict(nuevas or {})
+    implicitos = nuevas.pop("_implicitos", [])
+    if not nuevas:
+        return previas
+
+    tipo_previo = previas.get("tipo")
+    tipo_nuevo = nuevas.get("tipo")
+
+    # Un atributo incompatible con el tipo activo implica cambio de tipo.
+    if not tipo_nuevo and tipo_previo:
+        for _attr, solo_para, tipo_implicito in implicitos:
+            if solo_para and tipo_previo not in solo_para and tipo_implicito:
+                tipo_nuevo = nuevas["tipo"] = tipo_implicito
+                break
+    # Sin tipo previo, un atributo puede aportarlo ("sabores" en frío).
+    if not tipo_nuevo and not tipo_previo:
+        for _attr, _solo_para, tipo_implicito in implicitos:
+            if tipo_implicito:
+                tipo_nuevo = nuevas["tipo"] = tipo_implicito
+                break
+
+    if tipo_nuevo and tipo_nuevo != tipo_previo:
+        return nuevas  # cambio de tema: se descarta el contexto anterior
+
+    fusion = dict(previas)
+    for campo, valor in nuevas.items():
+        if campo == "atributos":
+            fusion["atributos"] = sorted(set(fusion.get("atributos", [])) | set(valor))
+        else:
+            fusion[campo] = valor
+    return fusion
+
+
+# Puente con la "categoría funcional" que todavía usan el estado de conversación,
+# Qdrant y el prompt. Se mantiene mientras dure la transición.
+_TIPO_A_CATEGORIA_LEGACY = {
+    "vibrador": "vibradores", "succionador": "succionadores",
+    "plug": "anal", "bolas": "anal", "enema": "anal", "arnes": "anal",
+    "dildo": "dildos", "anillo": "anillos-vibradores", "funda": "fundas-pene",
+    "masturbador": "masturbadores", "bomba": "bombas-pene",
+    "lubricante": "lubricantes-y-cuidado", "cosmetica": "lubricantes-y-cuidado",
+    "lenceria": "lenceria", "bondage": "pareja-y-bondage",
+    "juego": "juegos-y-accesorios", "accesorio": "juegos-y-accesorios",
+}
+
+
+def categoria_legacy(restricciones: dict) -> str | None:
+    return _TIPO_A_CATEGORIA_LEGACY.get((restricciones or {}).get("tipo") or "")
+
+
 async def clasificar(nombre: str, descripcion: str | None = "",
                      cat_origen: str | None = "",
                      permitir_llm: bool = True) -> tuple[Facetas, str]:

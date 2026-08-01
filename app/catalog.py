@@ -1202,7 +1202,8 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
 
 async def clasificar_intencion_cliente(user_text: str,
                                  history: list[dict] | None = None,
-                                 categoria_estado: str | None = None) -> dict:
+                                 categoria_estado: str | None = None,
+                                 restricciones_previas: dict | None = None) -> dict:
     """Clasifica la intención del cliente de forma determinística.
 
     categoria_estado: categoría persistida del turno anterior
@@ -1436,6 +1437,15 @@ async def clasificar_intencion_cliente(user_text: str,
         # Producto específico → mostrar directo (no preguntar calificación).
         calificado = True
 
+    # ── RESTRICCIONES ACUMULADAS (ver app/facetas.py) ──
+    # Es el modelo nuevo: la intención del cliente como conjunto de facetas que se
+    # refina entre turnos, en vez de una única categoría que se sobrescribe. Se
+    # calcula en paralelo a la clasificación de arriba mientras dura la
+    # transición; la recuperación de productos ya usa esto.
+    from app import facetas as _facetas
+    restricciones = _facetas.fusionar_restricciones(
+        restricciones_previas, _facetas.interpretar_mensaje(user_text))
+
     return {
         "intencion": intencion,
         "categoria_funcional": categoria_funcional,
@@ -1445,6 +1455,7 @@ async def clasificar_intencion_cliente(user_text: str,
         "sustantivo": sustantivo,
         "subtipo_detectado": subtipo_detectado,
         "es_especifico": es_especifico,
+        "restricciones": restricciones,
     }
 
 
