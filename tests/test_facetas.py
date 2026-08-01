@@ -210,10 +210,15 @@ def test_lubricante_de_piel_sensible_no_se_va_a_zona_cuerpo():
 
 
 def test_blix_de_fruta_queda_marcado_como_sabor():
-    """El nombre no dice "lubricante", así que el tipo lo decide el LLM — pero el
-    atributo sale de reglas y `clasificar` lo conserva sobre el resultado del LLM.
+    """El nombre no dice "lubricante", así que las reglas no le ponen tipo y el
+    atributo `sabor` (acotado a lubricantes) todavía no aplica. Lo decide el LLM,
+    y `clasificar` vuelve a pasar los acotados con ese tipo ya conocido.
     """
     f = facetas.clasificar_por_reglas("BLIX CEREZA 30 ML")
+    assert f.tipo is None, "si esto cambia, el atributo debería salir ya de reglas"
+
+    f.tipo = "lubricante"
+    facetas.aplicar_atributos_acotados("BLIX CEREZA 30 ML", f)
     assert "sabor" in f.atributos
 
 
@@ -234,3 +239,25 @@ def test_cliente_pide_hibrido_y_se_traduce_a_atributo():
     r = facetas.fusionar_restricciones({"tipo": "lubricante"},
                                        facetas.interpretar_mensaje("hibrido"))
     assert r["tipo"] == "lubricante" and "hibrido" in r["atributos"]
+
+
+def test_un_anillo_no_gana_sabor_por_su_descripcion():
+    """Regresión medida contra el catálogo de producción: las claves de fruta
+    matcheaban la DESCRIPCIÓN de productos que no son lubricantes ("compatible
+    con lubricantes de sabores") y los marcaban como saborizados."""
+    f = facetas.clasificar_por_reglas(
+        "Anillo Mejorador de Erección Commander",
+        "Compatible con lubricantes de fresa o cereza", "")
+    assert f.tipo == "anillo"
+    assert "sabor" not in f.atributos
+
+
+def test_un_succionador_no_gana_neutro_por_su_descripcion():
+    f = facetas.clasificar_por_reglas(
+        "CamToyz Web Cam Kit", "Acabado en tono neutro", "")
+    assert "neutro" not in f.atributos
+
+
+def test_el_sabor_por_fruta_sigue_marcando_los_lubricantes():
+    f = facetas.clasificar_por_reglas("Lubricante Anal Lube - Aroma Cereza 6oz")
+    assert f.tipo == "lubricante" and "sabor" in f.atributos

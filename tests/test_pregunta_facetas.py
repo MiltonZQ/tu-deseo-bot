@@ -168,7 +168,7 @@ def test_las_ramas_existen_en_el_vocabulario_cerrado():
             elif grupo == "generos":
                 assert clave in facetas.GENEROS, f"género desconocido: {clave}"
             else:
-                assert clave in facetas._ATRIBUTOS, f"atributo desconocido: {clave}"
+                assert clave in facetas.ATRIBUTOS, f"atributo desconocido: {clave}"
 
 
 # ── La compuerta: cuándo se pregunta y cuándo no ──
@@ -419,5 +419,6 @@ def test_atributos_del_panel_descarta_los_desconocidos():
 
 
 def test_el_vocabulario_publico_de_atributos_coincide_con_las_reglas():
-    assert set(facetas.ATRIBUTOS) == set(facetas._ATRIBUTOS)
+    assert set(facetas.ATRIBUTOS) == (set(facetas._ATRIBUTOS)
+                                      | set(facetas._ATRIBUTOS_ACOTADOS))
     assert list(facetas.ATRIBUTOS) == sorted(facetas.ATRIBUTOS)

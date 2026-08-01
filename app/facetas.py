@@ -195,17 +195,10 @@ _ATRIBUTOS = {
     "ventosa": ("ventosa",),
     "vidrio": ("vidrio", "cristal"),
     "doble": ("doble", "doble estimulacion", "doble penetracion"),
-    # Los saborizados del catálogo casi nunca llevan la palabra "sabor": se
-    # llaman por la fruta ("BLIX CEREZA 30 ML"). Sin estas claves quedaban sin
-    # marcar y la rama "con sabores" del menú salía con 2 productos de 20.
-    # OJO: "menta" NO va aquí — es la clave de `frio`, y esos lubricantes se
-    # venden por el efecto, no por el sabor.
-    "sabor": ("sabor", "sabores", "comestible", "cereza", "fresa", "chocolate",
-              "maracuya", "sandia", "mango", "lychee", "chicle", "whisky", "bombom"),
+    "sabor": ("sabor", "sabores", "comestible"),
     "agua": ("base de agua", "base agua", "h2o", "hidrosoluble", "acuoso"),
     "silicona": ("silicona",),
     "hibrido": ("hibrido", "hibrida"),
-    "neutro": ("neutro", "neutra", "sin sabor", "sin olor"),
     "desensibilizante": ("desensibiliz", "anestesico", "relajante anal"),
     "calor": ("caliente", "sensacion caliente", "calor"),
     "frio": ("frio", "menta", "efecto frio"),
@@ -214,10 +207,29 @@ _ATRIBUTOS = {
     "impermeable": ("impermeable", "sumergible", "waterproof"),
 }
 
+# Atributos que solo se buscan EN EL NOMBRE y solo para ciertos tipos.
+#
+# Los saborizados casi nunca llevan la palabra "sabor": se llaman por la fruta
+# ("BliX Cereza 30 Ml"). Pero esas mismas palabras aparecen en descripciones de
+# productos que no son lubricantes —un anillo "compatible con lubricantes de
+# sabores", una bomba, un kit de webcam "de tono neutro"— y ahí marcaban el
+# producto entero. Medido contra el catálogo de producción: 3 falsos positivos
+# de 32 cambios. Acotar por tipo Y mirar solo el nombre los elimina.
+#
+# "menta" NO está entre los sabores: es la clave de `frio`, y esos lubricantes
+# se venden por el efecto, no por el sabor.
+_ATRIBUTOS_ACOTADOS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "sabor": (("cereza", "fresa", "chocolate", "maracuya", "sandia", "mango",
+               "lychee", "chicle", "whisky", "bombom"),
+              ("lubricante", "cosmetica")),
+    "neutro": (("neutro", "neutra", "sin sabor", "sin olor"),
+               ("lubricante", "cosmetica")),
+}
+
 # Vocabulario público de atributos, para el panel y para quien tenga que
 # validar una entrada manual. A diferencia de TIPOS/ZONAS/CONTROLES/GENEROS,
 # esta lista sí crece: son características, no una taxonomía cerrada.
-ATRIBUTOS = tuple(sorted(_ATRIBUTOS))
+ATRIBUTOS = tuple(sorted(set(_ATRIBUTOS) | set(_ATRIBUTOS_ACOTADOS)))
 
 
 # ── GÉNERO/USO ──
@@ -314,8 +326,22 @@ def clasificar_por_reglas(nombre: str, descripcion: str | None = "",
             genero = valor
             break
 
-    return Facetas(tipo=tipo, zona=zona, vibra=vibra, control=control,
-                   genero_uso=genero, atributos=atributos, confianza=confianza)
+    f = Facetas(tipo=tipo, zona=zona, vibra=vibra, control=control,
+                genero_uso=genero, atributos=atributos, confianza=confianza)
+    aplicar_atributos_acotados(nombre, f)
+    return f
+
+
+def aplicar_atributos_acotados(nombre: str, f: Facetas) -> None:
+    """Añade a `f` los atributos de `_ATRIBUTOS_ACOTADOS` que correspondan.
+
+    Va aparte porque hay que aplicarlo dos veces: tras las reglas y, cuando el
+    tipo lo decide el LLM, otra vez con ese tipo ya conocido.
+    """
+    n = normalizar(nombre)
+    for attr, (claves, tipos_validos) in _ATRIBUTOS_ACOTADOS.items():
+        if f.tipo in tipos_validos and attr not in f.atributos and _alguna(claves, n):
+            f.atributos = sorted(f.atributos + [attr])
 
 
 # ── Respaldo con LLM para los productos que las reglas no deciden ──
@@ -614,4 +640,9 @@ async def clasificar(nombre: str, descripcion: str | None = "",
     f_llm.atributos = f.atributos
     if f.vibra:
         f_llm.vibra = True
+    # Los atributos acotados dependen del tipo, y aquí el tipo lo acaba de
+    # decidir el LLM. Sin este segundo pase, un "BliX Cereza 30 Ml" —cuyo nombre
+    # no dice "lubricante", así que las reglas no lo clasifican— se quedaba sin
+    # el atributo `sabor` y no aparecía en esa rama del menú.
+    aplicar_atributos_acotados(nombre, f_llm)
     return f_llm, "llm"
