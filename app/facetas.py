@@ -214,6 +214,12 @@ _ATRIBUTOS = {
     "impermeable": ("impermeable", "sumergible", "waterproof"),
 }
 
+# Vocabulario público de atributos, para el panel y para quien tenga que
+# validar una entrada manual. A diferencia de TIPOS/ZONAS/CONTROLES/GENEROS,
+# esta lista sí crece: son características, no una taxonomía cerrada.
+ATRIBUTOS = tuple(sorted(_ATRIBUTOS))
+
+
 # ── GÉNERO/USO ──
 _REGLAS_GENERO: tuple[tuple[tuple[str, ...], str], ...] = (
     (("para pareja", "parejas", "en pareja", "we vibe", "we-vibe", "chorus",

@@ -401,3 +401,23 @@ def test_seguir_en_el_mismo_tipo_si_respeta_lo_ya_mostrado():
         "mas diseños", _estado(calificado=True, productos_mostrados=[1, 2, 3]),
         productos=PRODS)
     assert vistos and vistos[0] == [1, 2, 3]
+
+
+# ── Panel: los atributos son editables a mano ──
+#
+# Eran la materia prima del menú pero no se podían corregir: la celda era texto
+# plano y el POST releía los atributos de la DB y los reescribía igual. Un
+# lubricante que se llama "Cereza" no aparecía en la rama "con sabores" y no
+# había forma de arreglarlo sin tocar reglas y correr el backfill.
+
+def test_atributos_del_panel_descarta_los_desconocidos():
+    from app import admin
+    assert admin._atributos_validos("sabor,agua") == ["agua", "sabor"]
+    assert admin._atributos_validos("sabor,inventado,  agua ") == ["agua", "sabor"]
+    assert admin._atributos_validos("") == [], "vacío es 'sin atributos', no un error"
+    assert admin._atributos_validos("SABOR") == ["sabor"]
+
+
+def test_el_vocabulario_publico_de_atributos_coincide_con_las_reglas():
+    assert set(facetas.ATRIBUTOS) == set(facetas._ATRIBUTOS)
+    assert list(facetas.ATRIBUTOS) == sorted(facetas.ATRIBUTOS)

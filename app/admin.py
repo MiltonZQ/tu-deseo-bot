@@ -1037,13 +1037,29 @@ async def productos_page(request: Request, q: str = Query(""), tipo: str = Query
             for o in ("",) + tuple(opciones))
         return f'<select name="{nombre}" id="{nombre}-{pid}">{ops}</select>'
 
+    def _attrs(valores_actuales, pid):
+        """Casillas de atributos.
+
+        Antes esta celda era texto plano y `guardar_facetas` reescribía los
+        atributos tal como estaban en la DB, así que no había forma de
+        corregirlos sin tocar las reglas y correr el backfill. Son la materia
+        prima de la pregunta de clarificación (app/preguntas.py): un lubricante
+        sin `sabor` no aparece en esa rama por mucho que se llame "Cereza".
+        """
+        actuales = set(valores_actuales or [])
+        casillas = "".join(
+            f'<label class="attr"><input type="checkbox" class="attr-{pid}" '
+            f'value="{html.escape(a)}"{" checked" if a in actuales else ""}>'
+            f'{html.escape(a)}</label>'
+            for a in F.ATRIBUTOS)
+        return f'<div class="attrs">{casillas}</div>'
+
     filas = []
     for p in productos:
         pid = p["id"]
         img = (f'<img src="{html.escape(p["imagen_url"])}" alt="" '
                f'style="width:44px;height:44px;object-fit:cover;border-radius:8px">'
                if p.get("imagen_url") else "—")
-        attrs = ", ".join(p.get("atributos") or []) or "—"
         origen = p.get("clasificado_por") or "—"
         if p.get("revisado_por_humano"):
             origen = '<strong style="color:#7b1fa2">manual ✓</strong>'
@@ -1063,7 +1079,7 @@ async def productos_page(request: Request, q: str = Query(""), tipo: str = Query
   <td><input type="checkbox" id="vibra-{pid}" {"checked" if p.get("vibra") else ""}></td>
   <td>{_sel("control", p.get("control"), F.CONTROLES, pid)}</td>
   <td>{_sel("genero_uso", p.get("genero_uso"), F.GENEROS, pid)}</td>
-  <td><small>{html.escape(attrs)}</small></td>
+  <td>{_attrs(p.get("atributos"), pid)}</td>
   <td><small>{origen}</small></td>
   <td><button class="btn" onclick="guardar({pid})">Guardar</button></td>
 </tr>""")
@@ -1108,6 +1124,9 @@ color:#6a1b9a;text-decoration:none;font-size:12px}}
 table.prod{{width:100%;border-collapse:collapse;font-size:13px}}
 table.prod td,table.prod th{{padding:6px;border-bottom:1px solid #eee;vertical-align:middle}}
 table.prod select{{padding:4px;font-size:12px;max-width:120px}}
+.attrs{{display:flex;flex-wrap:wrap;gap:2px 8px;max-width:230px}}
+.attrs label.attr{{font-size:11px;white-space:nowrap;color:#555}}
+.attrs input{{margin:0 2px 0 0;vertical-align:middle}}
 </style>
 <table class="prod">
 <tr><th></th><th>Producto</th><th>Tipo</th><th>Zona</th><th>Vibra</th><th>Control</th>
@@ -1117,10 +1136,16 @@ table.prod select{{padding:4px;font-size:12px;max-width:120px}}
 <script>
 async function guardar(id) {{
   const v = (n) => document.getElementById(n + '-' + id).value;
+  const marcados = Array.from(document.querySelectorAll('.attr-' + id + ':checked'))
+                        .map(c => c.value);
   const body = new URLSearchParams({{
     tipo: v('tipo'), zona: v('zona'), control: v('control'),
     genero_uso: v('genero_uso'),
-    vibra: document.getElementById('vibra-' + id).checked ? '1' : ''
+    vibra: document.getElementById('vibra-' + id).checked ? '1' : '',
+    // Coma en vez de repetir el campo: se lee con un solo Form(str) y no
+    // depende de cómo el framework agrupe los valores repetidos. La cadena
+    // vacía significa "sin atributos", que es distinto de "no tocar".
+    atributos: marcados.join(',')
   }});
   const r = await fetch('/admin/productos/' + id + '/facetas', {{method:'POST', body}});
   toast(r.ok ? 'Guardado' : 'Error al guardar', r.ok);
@@ -1130,24 +1155,33 @@ async function guardar(id) {{
     return _layout(contenido, "productos")
 
 
+def _atributos_validos(crudo: str) -> list[str]:
+    """Atributos de una edición manual, quedándose solo con los conocidos.
+
+    Un atributo inventado no lo consulta nadie (las búsquedas usan el
+    vocabulario de facetas.py) y ensuciaría los recuentos con los que se
+    construye la pregunta al cliente.
+    """
+    from app import facetas as F
+    return sorted({a.strip().lower() for a in (crudo or "").split(",") if a.strip()}
+                  & set(F.ATRIBUTOS))
+
+
 @router.post("/productos/{producto_id}/facetas", response_class=JSONResponse)
 async def guardar_facetas(request: Request, producto_id: int,
                           tipo: str = Form(""), zona: str = Form(""),
                           control: str = Form(""), genero_uso: str = Form(""),
-                          vibra: str = Form("")):
+                          vibra: str = Form(""), atributos: str = Form("")):
     """Guarda una corrección manual y la blinda contra el próximo sync."""
     _require_login(request)
     from app import facetas as F
-    async with db._pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT atributos FROM productos WHERE id = $1", producto_id)
     f = F.Facetas(
         tipo=tipo or None,
         zona=zona or "ninguna",
         vibra=bool(vibra),
         control=control or "ninguno",
         genero_uso=genero_uso or "unisex",
-        atributos=list((row or {}).get("atributos") or []),
+        atributos=_atributos_validos(atributos),
     )
     await db.set_facetas_producto(producto_id, f, origen="manual")
     return {"ok": True}
