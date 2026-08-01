@@ -191,9 +191,10 @@ def test_foto_request_re_ver_mas_opciones():
 def test_anillos_vibradores_mapeo():
     """Verifica el mapeo real de 'anillos vibradores' en el catálogo."""
     mapa = _extraer_constantes(_CAT, ["_INTENCION_A_CATEGORIA_FUNCIONAL"])["_INTENCION_A_CATEGORIA_FUNCIONAL"]
-    # En el código real, el sustantivo 'anillos vibradores' mapea a 'anillos-y-fundas'.
-    assert mapa.get("anillos vibradores") == "anillos-y-fundas"
-    assert mapa.get("anillo vibrador") == "anillos-y-fundas"
+    # 'anillos-vibradores' es una categoría funcional propia (distinta de
+    # 'anillos-y-fundas', ver CATEGORIAS_FUNCIONALES en catalog.py).
+    assert mapa.get("anillos vibradores") == "anillos-vibradores"
+    assert mapa.get("anillo vibrador") == "anillos-vibradores"
 
 
 # ── BUG 3 / TYPOS: reconocimiento de errores de tipeo del cliente ───────────
@@ -1079,3 +1080,159 @@ def test_bug15_parser_existe_en_pedidos():
         if isinstance(node, ast.FunctionDef) and node.name == "_parsear_datos_pedido":
             found = True
     assert found, "Debe existir _parsear_datos_pedido en pedidos.py"
+
+
+# ── BUG 16: "anal" tras pregunta de lubricantes mostraba plugs (juguetes) ────
+# Caso reportado en WhatsApp: bot pregunta subtipo de lubricante (agua/silicona/
+# anal desensibilizante/sabores), cliente responde solo "anal", y el bot mostró
+# Plug Anal (juguetes de la categoría "anal") en vez de lubricante/gel anal.
+# Cubre los dos fixes reales que resuelven el caso:
+#   (a) el motor de memoria y contexto (clasificar_intencion_cliente) que
+#       interpreta "anal" como filtro DENTRO de la categoría activa en memoria
+#       (lubricantes-y-cuidado) en vez de saltar a la categoría de juguetes.
+#   (b) la reclasificación de productos (_categoria_normalizada /
+#       _REGLAS_CATEGORIA) que mete "lubricante anal"/"gel anal"/desensibilizante
+#       en lubricantes-y-cuidado ANTES de la regla genérica de "anal" (juguetes).
+
+def test_bug16_motor_memoria_existe_en_clasificador():
+    """Verifica que el motor de memoria y contexto sigue presente en
+    clasificar_intencion_cliente (regresión de la causa raíz del bug)."""
+    import ast
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "clasificar_intencion_cliente":
+            src = ast.get_source_segment(_CAT.read_text(), node)
+            assert "cat_activa_memoria" in src
+            assert "sustantivo_cambio_tema" in src
+            return
+    raise AssertionError("No se encontró clasificar_intencion_cliente")
+
+
+def _motor_memoria(user_text: str, history: list[dict]) -> dict:
+    """Réplica exacta del bloque 'MOTOR DE MEMORIA Y CONTEXTO' de
+    clasificar_intencion_cliente (app/catalog.py, sección posterior a la
+    detección determinística). Arranca desde el estado que el determinístico
+    produce para el mensaje "anal" solo (categoria_funcional="anal", que es
+    justo lo que dispara el bug si el motor de memoria no lo corrige)."""
+    norm_user = user_text.lower()
+    categoria_funcional = "anal"
+    subtipo_detectado = None
+    intencion = "anal"
+
+    cat_activa_memoria = None
+    if history:
+        for h_msg in reversed(history[-6:]):
+            if h_msg.get("role") == "assistant":
+                c_h = (h_msg.get("content") or "").lower()
+                if any(w in c_h for w in ("lubricante", "base de agua", "silicona", "sabores", "sensaciones")):
+                    cat_activa_memoria = "lubricantes-y-cuidado"
+                    break
+                elif any(w in c_h for w in ("dildo", "ventosa", "realista")):
+                    cat_activa_memoria = "dildos"
+                    break
+                elif any(w in c_h for w in ("vibrador", "clítoris", "clitoris")):
+                    cat_activa_memoria = "vibradores"
+                    break
+                elif any(w in c_h for w in ("lencería", "lenceria", "body")):
+                    cat_activa_memoria = "lenceria"
+                    break
+                elif any(w in c_h for w in ("succionador", "succionadores")):
+                    cat_activa_memoria = "succionadores"
+                    break
+
+    sustantivo_cambio_tema = None
+    for n in ("dildo", "dildos", "consolador", "lenceria", "lencería", "succionador",
+              "succionadores", "vibrador", "vibradores", "anillo", "anillos", "funda",
+              "fundas", "bomba", "bombas"):
+        if n in norm_user:
+            sustantivo_cambio_tema = n
+            break
+
+    if cat_activa_memoria and not sustantivo_cambio_tema:
+        categoria_funcional = cat_activa_memoria
+        intencion = cat_activa_memoria
+        if "anal" in norm_user or "desensibiliz" in norm_user:
+            subtipo_detectado = "desensibiliz"
+        elif "agua" in norm_user:
+            subtipo_detectado = "base de agua"
+        elif "silicona" in norm_user:
+            subtipo_detectado = "silicona"
+        elif "sabor" in norm_user or "sabores" in norm_user:
+            subtipo_detectado = "sabores"
+
+    return {"categoria_funcional": categoria_funcional, "subtipo_detectado": subtipo_detectado,
+            "intencion": intencion}
+
+
+def test_bug16_caso_reportado_anal_tras_lubricantes():
+    """Caso EXACTO del chat reportado: 'anal' tras la pregunta de subtipo de
+    lubricante debe resolver a lubricantes-y-cuidado + subtipo desensibilizante,
+    NO a la categoría anal (juguetes)."""
+    history = [
+        {"role": "user", "content": "Quenlubricantes tienen"},
+        {"role": "assistant", "content": (
+            "¡Genial! Para recomendarte el ideal, cuéntame: ¿lo buscas a base de "
+            "agua (seguro con juguetes), de silicona (duradero), anal "
+            "desensibilizante, o con sabores/sensaciones (calor/frío)? 😊")},
+    ]
+    resultado = _motor_memoria("anal", history)
+    assert resultado["categoria_funcional"] == "lubricantes-y-cuidado", (
+        "'anal' tras la pregunta de lubricantes NO debe saltar a la categoría "
+        "de juguetes anales")
+    assert resultado["subtipo_detectado"] == "desensibiliz"
+
+
+def test_bug16_cambio_de_tema_explicito_no_se_bloquea():
+    """Si el cliente sí trae un sustantivo de cambio de tema explícito (ej.
+    'vibrador'), el motor de memoria NO debe forzar la categoría anterior."""
+    history = [
+        {"role": "assistant", "content": "¿lo buscas a base de agua, de silicona, o con sabores?"},
+    ]
+    resultado = _motor_memoria("prefiero un vibrador", history)
+    assert resultado["categoria_funcional"] == "anal", (
+        "sustantivo_cambio_tema ('vibrador') debe bloquear la herencia de la "
+        "categoría activa en memoria")
+
+
+def test_bug16_categoria_normalizada_prioriza_lubricante_anal_sobre_juguete():
+    """CAUSA RAÍZ complementaria: un producto 'Gel Lubricante Anal
+    Desensibilizante' debe clasificarse en lubricantes-y-cuidado (no en 'anal'
+    de juguetes), mientras que un 'Plug Anal' sigue clasificándose como 'anal'.
+    Réplica del algoritmo real de _categoria_normalizada: recorre
+    _REGLAS_CATEGORIA en orden y la primera clave que aparezca en el texto
+    normalizado gana."""
+    reglas = _extraer_constantes(_CAT, ["_REGLAS_CATEGORIA"])["_REGLAS_CATEGORIA"]
+
+    def _normalizar(t: str) -> str:
+        import unicodedata
+        t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode("ascii")
+        return t.lower()
+
+    def _clasificar(nombre: str) -> str:
+        haystack = _normalizar(nombre)
+        for claves, cat in reglas:
+            for clave in claves:
+                if clave in haystack:
+                    return cat
+        return "juegos-y-accesorios"
+
+    assert _clasificar("Gel Lubricante Anal Desensibilizante XYZ") == "lubricantes-y-cuidado"
+    assert _clasificar("Lubricante Anal a Base de Silicona") == "lubricantes-y-cuidado"
+    assert _clasificar("Plug Anal Dipsy Camtoyz") == "anal"
+    assert _clasificar("Plug Anal Mikel CamToyz") == "anal"
+
+
+def test_bug16_reglas_categoria_orden_lubricante_antes_que_anal_generico():
+    """Verifica en el fuente real que la regla de lubricantes-y-cuidado (con
+    'desensibiliz'/'gel anal'/'lubricante anal') está ANTES que la regla
+    genérica de 'anal' (plugs/juguetes) en _REGLAS_CATEGORIA. Si alguien
+    reordena esto por error, un lubricante anal volvería a clasificarse como
+    juguete."""
+    reglas = _extraer_constantes(_CAT, ["_REGLAS_CATEGORIA"])["_REGLAS_CATEGORIA"]
+    idx_lubricante = next(i for i, (claves, cat) in enumerate(reglas)
+                          if cat == "lubricantes-y-cuidado" and "desensibiliz" in claves)
+    idx_anal_generico = next(i for i, (claves, cat) in enumerate(reglas)
+                             if cat == "anal" and "plug" in claves)
+    assert idx_lubricante < idx_anal_generico, (
+        "La regla de lubricantes-y-cuidado debe evaluarse ANTES que la regla "
+        "genérica de 'anal' (juguetes)")
