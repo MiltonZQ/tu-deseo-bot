@@ -197,3 +197,30 @@ def test_el_texto_avisa_cuando_se_relajo():
         prods, {"intencion": "vibradores", "relajado": "tipo",
                 "restricciones": {"tipo": "vibrador", "zona": "anal"}})
     assert "No tengo exactamente" in txt, txt
+
+
+# ── Panel de productos ──
+
+def test_el_panel_expone_la_vista_y_el_guardado():
+    import ast as _ast
+    src = (_ROOT / "app" / "admin.py").read_text()
+    tree = _ast.parse(src)
+    rutas = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.AsyncFunctionDef, _ast.FunctionDef)):
+            for dec in node.decorator_list:
+                if isinstance(dec, _ast.Call) and dec.args:
+                    a = dec.args[0]
+                    if isinstance(a, _ast.Constant):
+                        rutas.add(a.value)
+    assert "/productos" in rutas, rutas
+    assert "/productos/{producto_id}/facetas" in rutas, rutas
+    assert '("productos", "Productos", "productos")' in src, "falta el enlace en el menú"
+
+
+def test_una_edicion_manual_se_marca_como_revisada():
+    """Sin esto, el siguiente sync pisaría la corrección del operador."""
+    src = (_ROOT / "app" / "admin.py").read_text()
+    i = src.index("async def guardar_facetas")
+    bloque = src[i:i + 1400]
+    assert 'origen="manual"' in bloque, bloque[:400]

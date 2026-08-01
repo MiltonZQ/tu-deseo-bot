@@ -63,6 +63,34 @@ async def lifespan(_app: FastAPI):
     except Exception:
         log.exception("No se pudo cargar el catálogo (no bloquea el arranque)")
 
+    # Calcular las facetas de los productos que aún no las tienen (ver
+    # app/facetas.py). Va en background para no retrasar el arranque: las reglas
+    # resuelven la gran mayoría al instante y solo los dudosos consultan al LLM.
+    # Sin esto, tras un despliegue los productos quedarían sin clasificar y la
+    # búsqueda por restricciones no encontraría nada.
+    async def _clasificar_catalogo_pendiente():
+        try:
+            from app import facetas, woocommerce
+            pendientes = await db.get_productos_sin_clasificar(limit=2000)
+            if not pendientes:
+                return
+            log.info("Calculando facetas de %d productos…", len(pendientes))
+            con_llm = 0
+            for p in pendientes:
+                f, origen = await facetas.clasificar(
+                    p["nombre"], p.get("descripcion"), p.get("categoria"),
+                    permitir_llm=False)
+                if f.tipo:
+                    await db.set_facetas_producto(p["id"], f, origen=origen)
+            # Los que las reglas no deciden (unos pocos) sí van al LLM.
+            con_llm = await woocommerce._clasificar_pendientes_con_llm(limite=80)
+            log.info("Facetas calculadas: %d por reglas, %d por LLM",
+                     len(pendientes) - con_llm, con_llm)
+        except Exception:
+            log.exception("No se pudieron calcular las facetas (no bloquea el arranque)")
+
+    asyncio.create_task(_clasificar_catalogo_pendiente())
+
     if config.WOOCOMMERCE_SYNC_ENABLED and config.WOOCOMMERCE_AUTO_SYNC:
         try:
             from app import woocommerce

@@ -215,6 +215,7 @@ ICONS = {
     "abonos": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
     "escalados": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
     "pausados": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>',
+    "productos": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>',
     "crm": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
     "logout": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
 }
@@ -223,6 +224,7 @@ NAV_ITEMS = [
     ("dashboard", "Dashboard", "dashboard"),
     ("pedidos", "Pedidos", "pedidos"),
     ("conversaciones", "Conversaciones", "conversaciones"),
+    ("productos", "Productos", "productos"),
     ("abonos", "Abonos", "abonos"),
     ("escalados", "Escalados", "escalados"),
     ("pausados", "Pausados", "pausados"),
@@ -1000,6 +1002,137 @@ async def pausados_page(request: Request):
 
 
 # ── CRM ──
+
+@router.get("/productos", response_class=HTMLResponse)
+async def productos_page(request: Request, q: str = Query(""), tipo: str = Query(""),
+                         zona: str = Query(""), sin: str = Query("")):
+    """Vista de productos con sus facetas y edición manual.
+
+    Existe para que una clasificación equivocada se corrija en segundos desde
+    aquí y no con un deploy. Lo que se guarda a mano queda marcado como revisado
+    y la sincronización de WooCommerce ya no lo pisa.
+    """
+    _require_login(request)
+    try:
+        productos = await db.listar_productos_panel(
+            buscar=q, tipo=tipo, zona=zona, solo_sin_clasificar=bool(sin))
+        tipos = await db.contar_por_faceta("tipo")
+        zonas = await db.contar_por_faceta("zona")
+    except Exception:
+        productos, tipos, zonas = [], [], []
+
+    from app import facetas as F
+
+    def _sel(nombre, valor_actual, opciones, pid):
+        ops = "".join(
+            f'<option value="{html.escape(o)}"'
+            f'{" selected" if o == (valor_actual or "") else ""}>{html.escape(o)}</option>'
+            for o in ("",) + tuple(opciones))
+        return f'<select name="{nombre}" id="{nombre}-{pid}">{ops}</select>'
+
+    filas = []
+    for p in productos:
+        pid = p["id"]
+        img = (f'<img src="{html.escape(p["imagen_url"])}" alt="" '
+               f'style="width:44px;height:44px;object-fit:cover;border-radius:8px">'
+               if p.get("imagen_url") else "—")
+        attrs = ", ".join(p.get("atributos") or []) or "—"
+        origen = p.get("clasificado_por") or "—"
+        if p.get("revisado_por_humano"):
+            origen = '<strong style="color:#7b1fa2">manual ✓</strong>'
+        elif origen == "llm":
+            origen = '<span style="color:#ef6c00">llm</span>'
+        sin_clasificar = ' style="background:#fff3e0"' if not p.get("tipo") else ""
+        filas.append(f"""<tr{sin_clasificar}>
+  <td>{img}</td>
+  <td><strong>{html.escape(p["nombre"][:58])}</strong><br>
+      <small>${p.get("precio", 0):,} · {html.escape(p.get("stock_status") or "")}</small></td>
+  <td>{_sel("tipo", p.get("tipo"), F.TIPOS, pid)}</td>
+  <td>{_sel("zona", p.get("zona"), F.ZONAS, pid)}</td>
+  <td><input type="checkbox" id="vibra-{pid}" {"checked" if p.get("vibra") else ""}></td>
+  <td>{_sel("control", p.get("control"), F.CONTROLES, pid)}</td>
+  <td>{_sel("genero_uso", p.get("genero_uso"), F.GENEROS, pid)}</td>
+  <td><small>{html.escape(attrs)}</small></td>
+  <td><small>{origen}</small></td>
+  <td><button class="btn" onclick="guardar({pid})">Guardar</button></td>
+</tr>""")
+
+    def _chips(campo, valores, actual):
+        out = [f'<a class="chip{"" if actual else " on"}" href="/admin/productos">todos</a>']
+        for v, n in valores:
+            on = " on" if v == actual else ""
+            out.append(f'<a class="chip{on}" href="/admin/productos?{campo}={v}">{html.escape(v)} ({n})</a>')
+        return " ".join(out)
+
+    sin_clasificar_n = sum(1 for p in productos if not p.get("tipo"))
+    aviso = (f'<p style="background:#fff3e0;padding:10px;border-radius:8px">'
+             f'{sin_clasificar_n} producto(s) sin clasificar. Corre '
+             f'<code>scripts/clasificar_catalogo.py</code> o edítalos aquí.</p>'
+             if sin_clasificar_n else "")
+
+    contenido = f"""
+<h1>Productos</h1>
+<p>Así ve el bot cada producto. Si algo está mal clasificado, corrígelo aquí:
+queda marcado como revisado y la sincronización no lo vuelve a tocar.</p>
+{aviso}
+<form method="get" action="/admin/productos" style="margin:12px 0">
+  <input name="q" value="{html.escape(q)}" placeholder="Buscar por nombre…" style="padding:8px;min-width:220px">
+  <button class="btn">Buscar</button>
+  <a class="chip" href="/admin/productos?sin=1">solo sin clasificar</a>
+</form>
+<div style="margin:8px 0"><small>tipo:</small> {_chips("tipo", tipos, tipo)}</div>
+<div style="margin:8px 0"><small>zona:</small> {_chips("zona", zonas, zona)}</div>
+<style>
+.chip{{display:inline-block;padding:3px 9px;margin:2px;border-radius:12px;background:#f0e6f5;
+color:#6a1b9a;text-decoration:none;font-size:12px}}
+.chip.on{{background:#6a1b9a;color:#fff}}
+table.prod{{width:100%;border-collapse:collapse;font-size:13px}}
+table.prod td,table.prod th{{padding:6px;border-bottom:1px solid #eee;vertical-align:middle}}
+table.prod select{{padding:4px;font-size:12px;max-width:120px}}
+</style>
+<table class="prod">
+<tr><th></th><th>Producto</th><th>Tipo</th><th>Zona</th><th>Vibra</th><th>Control</th>
+    <th>Género</th><th>Atributos</th><th>Origen</th><th></th></tr>
+{"".join(filas) or '<tr><td colspan="10">Sin productos.</td></tr>'}
+</table>
+<script>
+async function guardar(id) {{
+  const v = (n) => document.getElementById(n + '-' + id).value;
+  const body = new URLSearchParams({{
+    tipo: v('tipo'), zona: v('zona'), control: v('control'),
+    genero_uso: v('genero_uso'),
+    vibra: document.getElementById('vibra-' + id).checked ? '1' : ''
+  }});
+  const r = await fetch('/admin/productos/' + id + '/facetas', {{method:'POST', body}});
+  toast(r.ok ? 'Guardado' : 'Error al guardar', r.ok);
+}}
+</script>
+"""
+    return _layout(contenido, "productos")
+
+
+@router.post("/productos/{producto_id}/facetas", response_class=JSONResponse)
+async def guardar_facetas(request: Request, producto_id: int,
+                          tipo: str = Form(""), zona: str = Form(""),
+                          control: str = Form(""), genero_uso: str = Form(""),
+                          vibra: str = Form("")):
+    """Guarda una corrección manual y la blinda contra el próximo sync."""
+    _require_login(request)
+    from app import facetas as F
+    async with db._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT atributos FROM productos WHERE id = $1", producto_id)
+    f = F.Facetas(
+        tipo=tipo or None,
+        zona=zona or "ninguna",
+        vibra=bool(vibra),
+        control=control or "ninguno",
+        genero_uso=genero_uso or "unisex",
+        atributos=list((row or {}).get("atributos") or []),
+    )
+    await db.set_facetas_producto(producto_id, f, origen="manual")
+    return {"ok": True}
+
 
 @router.get("/crm", response_class=HTMLResponse)
 async def crm_page(request: Request, status: str = Query("")):

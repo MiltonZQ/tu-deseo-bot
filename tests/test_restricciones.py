@@ -149,3 +149,48 @@ def test_el_clasificador_devuelve_restricciones_acumuladas():
         assert r2["restricciones"].get("tipo") == "vibrador", r2["restricciones"]
         assert r2["restricciones"].get("zona") == "anal", r2["restricciones"]
     asyncio.run(_run())
+
+
+# ── Coherencia entre lo que el bot OFRECE y lo que sabe filtrar ──
+# El bug del reporte empezó aquí: el bot ofrecía "anal/próstata" como opción para
+# vibradores, pero el buscador no sabía cumplir esa combinación. Una opción que
+# se ofrece y no se entiende es una promesa que el sistema no puede sostener.
+
+RESPUESTAS_A_LAS_PREGUNTAS = [
+    # (lo que el bot ofrece, lo que responde el cliente, faceta que debe salir)
+    ("vibradores", "para ella", "genero_uso"),
+    ("vibradores", "clitoris", "zona"),
+    ("vibradores", "punto g", "zona"),
+    ("vibradores", "pene", "zona"),
+    ("vibradores", "anillos", "tipo"),
+    ("vibradores", "anal", "zona"),
+    ("vibradores", "prostata", "zona"),
+    ("vibradores", "en pareja", "genero_uso"),
+    ("dildos", "realista", "atributos"),
+    ("dildos", "con ventosa", "atributos"),
+    ("dildos", "vidrio", "atributos"),
+    ("dildos", "doble", "atributos"),
+    ("lubricantes", "base de agua", "atributos"),
+    ("lubricantes", "silicona", "atributos"),
+    ("lubricantes", "desensibilizante", "atributos"),
+    ("lubricantes", "sabores", "atributos"),
+    ("anal", "primera vez", "atributos"),
+    ("anal", "prostata", "zona"),
+    ("anal", "con control remoto", "control"),
+    ("lenceria", "body", "tipo"),
+    ("lenceria", "suspensorio", "tipo"),
+    ("succionadores", "con app", "control"),
+    ("bondage", "esposas", "tipo"),
+    ("bondage", "antifaz", "tipo"),
+    ("bondage", "fustas", "tipo"),
+]
+
+
+def test_toda_opcion_ofrecida_se_entiende():
+    fallos = []
+    for menu, respuesta, campo in RESPUESTAS_A_LAS_PREGUNTAS:
+        r = leer(respuesta)
+        if campo not in r:
+            fallos.append(f"menú {menu}: el cliente responde {respuesta!r} y no se "
+                          f"reconoce {campo} (se obtuvo {r})")
+    assert not fallos, "\n  " + "\n  ".join(fallos)

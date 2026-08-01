@@ -297,6 +297,47 @@ async def set_facetas_producto(producto_id: int, facetas, origen: str = "reglas"
     return bool(res) and not res.endswith(" 0")
 
 
+async def listar_productos_panel(buscar: str = "", tipo: str = "", zona: str = "",
+                                 solo_sin_clasificar: bool = False,
+                                 limit: int = 300) -> list[dict]:
+    """Productos para la vista del panel, con filtros por faceta."""
+    where, params, idx = ["TRUE"], [], 1
+    if buscar:
+        where.append(f"nombre ILIKE '%' || ${idx} || '%'")
+        params.append(buscar)
+        idx += 1
+    if tipo:
+        where.append(f"tipo = ${idx}")
+        params.append(tipo)
+        idx += 1
+    if zona:
+        where.append(f"zona = ${idx}")
+        params.append(zona)
+        idx += 1
+    if solo_sin_clasificar:
+        where.append("tipo IS NULL")
+    sql = (
+        "SELECT id, nombre, precio, imagen_url, tipo, zona, vibra, control, "
+        "genero_uso, atributos, clasificado_por, revisado_por_humano, stock_status "
+        "FROM productos WHERE " + " AND ".join(where) +
+        f" ORDER BY (tipo IS NULL) DESC, nombre LIMIT {int(limit)}"
+    )
+    async with _pool.acquire() as conn:
+        return [dict(r) for r in await conn.fetch(sql, *params)]
+
+
+async def contar_por_faceta(campo: str) -> list[tuple[str, int]]:
+    """Cuántos productos hay por cada valor de una faceta (para los filtros)."""
+    if campo not in ("tipo", "zona", "genero_uso", "control"):
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT {campo} AS v, COUNT(*) AS n FROM productos "
+            f"WHERE {campo} IS NOT NULL GROUP BY {campo} ORDER BY n DESC"
+        )
+    return [(r["v"], r["n"]) for r in rows]
+
+
 async def get_productos_sin_clasificar(limit: int = 1000) -> list[dict]:
     """Productos a los que aún no se les calcularon las facetas."""
     async with _pool.acquire() as conn:
