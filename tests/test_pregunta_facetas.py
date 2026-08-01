@@ -100,3 +100,72 @@ def test_facetas_disponibles_sin_restricciones_no_consulta():
         res = asyncio.run(catalog.facetas_disponibles({}))
     assert res == {"atributos": {}, "zonas": {}, "generos": {}}
     assert not llamadas, "sin ancla, contar el catálogo entero no dice nada"
+
+
+# ── El menú: qué se le pregunta al cliente ──
+
+from app import facetas, preguntas  # noqa: E402
+
+DISPONIBLE = {"atributos": {"neutro": 5, "sabor": 6, "calor": 3, "silicona": 1},
+              "zonas": {"anal": 4, "ninguna": 16}, "generos": {}}
+
+
+def test_solo_ofrece_ramas_con_stock():
+    texto = preguntas.construir("lubricante", DISPONIBLE)
+    assert "sabores" in texto and "anal" in texto
+    assert "silicona" not in texto, "1 producto no es una rama del menú"
+
+
+def test_respeta_el_maximo_de_ramas():
+    """Más de 4 opciones en un mensaje de WhatsApp no se leen, se saltan."""
+    abundante = {"atributos": {a: 9 for a in
+                               ("neutro", "sabor", "calor", "frio", "silicona", "hibrido")},
+                 "zonas": {"anal": 9}, "generos": {}}
+    texto = preguntas.construir("lubricante", abundante)
+    ofrecidas = [etq for _c, _g, etq in preguntas._MENUS["lubricante"]
+                 if etq.strip("*") in texto or etq in texto]
+    assert len(ofrecidas) == preguntas.MAX_RAMAS
+
+
+def test_sin_ramas_suficientes_no_pregunta():
+    """Con una sola rama viva no hay nada que preguntar: se lista y ya."""
+    assert preguntas.construir("lubricante", {"atributos": {"sabor": 9},
+                                              "zonas": {}, "generos": {}}) is None
+
+
+def test_tipo_sin_menu_no_pregunta():
+    assert preguntas.construir("enema", DISPONIBLE) is None
+    assert preguntas.construir(None, DISPONIBLE) is None
+
+
+def test_recuentos_vacios_no_preguntan():
+    assert preguntas.construir("lubricante", {"atributos": {}, "zonas": {}, "generos": {}}) is None
+
+
+def test_la_respuesta_del_cliente_filtra_de_verdad():
+    """Cada rama del menú debe ser interpretable por el vocabulario cliente.
+
+    Si no, se pregunta algo que luego no se sabe leer: el cliente responde
+    "híbrido", el mensaje no aporta ninguna restricción, y se le lista lo mismo
+    que si no hubiera contestado.
+    """
+    for tipo, menu in preguntas._MENUS.items():
+        for clave, grupo, _etiqueta in menu:
+            leido = facetas.interpretar_mensaje(clave)
+            assert leido, f"[{tipo}] la rama {clave!r} no la entiende interpretar_mensaje"
+            campo = {"atributos": "atributos", "zonas": "zona", "generos": "genero_uso"}[grupo]
+            assert campo in leido, (
+                f"[{tipo}] la rama {clave!r} debería aportar {campo}, aportó {leido}")
+
+
+def test_las_ramas_existen_en_el_vocabulario_cerrado():
+    """Una rama mal escrita nunca tendría recuento y jamás se ofrecería."""
+    for tipo, menu in preguntas._MENUS.items():
+        assert tipo in facetas.TIPOS
+        for clave, grupo, _etiqueta in menu:
+            if grupo == "zonas":
+                assert clave in facetas.ZONAS, f"zona desconocida: {clave}"
+            elif grupo == "generos":
+                assert clave in facetas.GENEROS, f"género desconocido: {clave}"
+            else:
+                assert clave in facetas._ATRIBUTOS, f"atributo desconocido: {clave}"
