@@ -1335,3 +1335,60 @@ def test_bug17_override_existe_en_recuperar_candidatos():
             assert 'clasif["calificado"] = False' in bloque
             return
     raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+# ── BUG 18: Qdrant incompleto devolvía menos de 5 fotos (ej. succionadores) ──
+# Caso reportado: "tienen succionadores" mostró solo 1 foto en vez de 5. Al
+# reconectar Qdrant (búsqueda semántica), el Intento Q filtraba por umbral de
+# score y, si encontraba menos candidatos que el límite pedido, devolvía ese
+# puñado incompleto de una vez SIN completar con el fallback SQL determinístico
+# (que sí tiene los 5 productos de la categoría). El fix solo retorna temprano
+# cuando Qdrant alcanza el límite; si no, completa los huecos con SQL.
+
+def test_bug18_qdrant_incompleto_se_completa_con_sql():
+    """Verifica en el fuente que el retorno temprano de Qdrant exige alcanzar
+    el límite pedido, y que los 4 intentos SQL (A, C, B, D) combinan sus
+    resultados con los de Qdrant en vez de descartarlos."""
+    tree = ast.parse(_CAT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_productos_para_recomendar":
+            src = ast.get_source_segment(_CAT.read_text(), node)
+            assert "len(filtrados_q) >= limit" in src, (
+                "El retorno temprano de Qdrant debe exigir alcanzar el límite pedido")
+            assert src.count("return _combinar_con_qdrant(candidatos)") == 4, (
+                "Los 4 intentos SQL (A, C, B, D) deben combinar con Qdrant, no "
+                "descartar lo que ya había encontrado")
+            return
+    raise AssertionError("No se encontró get_productos_para_recomendar")
+
+
+def test_bug18_combinar_con_qdrant_prioriza_qdrant_y_respeta_limite():
+    """Réplica de _combinar_con_qdrant: los resultados de Qdrant van primero
+    (más relevantes semánticamente), se completan con SQL, y el total nunca
+    excede el límite pedido."""
+    filtrados_q = [{"id": 1}, {"id": 2}]
+    candidatos_sql = [{"id": 3}, {"id": 4}, {"id": 5}, {"id": 6}]
+    limit = 5
+
+    def _combinar(candidatos_sql):
+        if not filtrados_q:
+            return candidatos_sql
+        return (filtrados_q + candidatos_sql)[:limit]
+
+    combinado = _combinar(candidatos_sql)
+    assert [p["id"] for p in combinado] == [1, 2, 3, 4, 5]
+    assert len(combinado) == limit
+
+
+def test_bug18_sin_candidatos_qdrant_no_cambia_comportamiento():
+    """Si Qdrant no encontró nada (filtrados_q vacío), _combinar_con_qdrant debe
+    devolver los candidatos SQL tal cual, sin alterar el comportamiento previo."""
+    filtrados_q: list = []
+    candidatos_sql = [{"id": 1}, {"id": 2}, {"id": 3}]
+
+    def _combinar(candidatos_sql):
+        if not filtrados_q:
+            return candidatos_sql
+        return (filtrados_q + candidatos_sql)[:5]
+
+    assert _combinar(candidatos_sql) == candidatos_sql

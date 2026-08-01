@@ -1302,8 +1302,8 @@ async def get_productos_para_recomendar(
         return out[:limit]
 
     # Intento Q: Qdrant semantico filtrado por reglas negocio
+    filtrados_q: list[dict] = []
     if qdrant_candidatos_cache:
-        filtrados_q = []
         for p in qdrant_candidatos_cache:
             if p.get("id") in exclude_set:
                 continue
@@ -1333,35 +1333,53 @@ async def get_productos_para_recomendar(
             filtrados_q.append(p)
         if filtrados_q:
             filtrados_q.sort(key=lambda x: (-x.get("_score",0), len(x.get("nombre",""))))
-            log.info("Qdrant filtrado %d/%d candidatos validos", len(filtrados_q), len(qdrant_candidatos_cache))
-            return filtrados_q[:limit]
+            if len(filtrados_q) >= limit:
+                log.info("Qdrant filtrado %d/%d candidatos validos", len(filtrados_q), len(qdrant_candidatos_cache))
+                return filtrados_q[:limit]
+            # Qdrant encontró candidatos pero MENOS que el límite pedido (ej: solo 1
+            # de 5 succionadores por el umbral de score semántico). En vez de
+            # devolver un puñado incompleto, se completan los huecos con el SQL
+            # determinístico de abajo (excluyendo los ya elegidos por Qdrant).
+            log.info("Qdrant filtrado %d/%d candidatos validos (< limit=%d) — se completa con SQL",
+                     len(filtrados_q), len(qdrant_candidatos_cache), limit)
+            exclude_set = exclude_set | {p["id"] for p in filtrados_q}
+
+    def _combinar_con_qdrant(candidatos_sql: list[dict]) -> list[dict]:
+        if not filtrados_q:
+            return candidatos_sql
+        return (filtrados_q + candidatos_sql)[:limit]
 
     # Intento A: categoría + género + con imagen + activo (más estricto)
     candidatos = _filtrar(await _query(con_imagen=True, con_activo=True),
                           exige_cat=True, exige_gen=True)
     if candidatos:
-        return candidatos
+        return _combinar_con_qdrant(candidatos)
 
     # Intento C: categoría + género + con imagen, sin exigir activo
     candidatos = _filtrar(await _query(con_imagen=True, con_activo=False),
                           exige_cat=True, exige_gen=True)
     if candidatos:
         log.info("get_productos_para_recomendar: intento C (sin activo) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
-        return candidatos
+        return _combinar_con_qdrant(candidatos)
 
     # Intento B: categoría + género, sin exigir imagen (candidatos correctos aunque falte foto)
     candidatos = _filtrar(await _query(con_imagen=False, con_activo=True),
                           exige_cat=True, exige_gen=True)
     if candidatos:
         log.info("get_productos_para_recomendar: intento B (sin imagen) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
-        return candidatos
+        return _combinar_con_qdrant(candidatos)
 
     # Intento D: categoría + género, sin exigir imagen ni activo
     candidatos = _filtrar(await _query(con_imagen=False, con_activo=False),
                           exige_cat=True, exige_gen=True)
     if candidatos:
         log.info("get_productos_para_recomendar: intento D (sin imagen ni activo) cat=%s género=%s → %d", categoria_funcional, genero, len(candidatos))
-        return candidatos
+        return _combinar_con_qdrant(candidatos)
+
+    # Ningún intento SQL encontró candidatos NUEVOS que completar — si Qdrant al
+    # menos había encontrado algo, mejor devolver ese puñado que nada.
+    if filtrados_q:
+        return filtrados_q[:limit]
 
     # Intento E-bis: RELAJAR LA CATEGORÍA por género. Cuando la intersección
     # (categoría + género) es vacía (ej: "vibradores" + "hombre" — los productos
