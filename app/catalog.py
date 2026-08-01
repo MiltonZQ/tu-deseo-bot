@@ -769,7 +769,11 @@ _GENERO_KEYWORDS_CLIENTE = [
     (("chimbo", "pene", "para el", "para él", "para mi pene", "hombre", "masculino",
       "prostata", "próstata", "miembro", "verga", "gallo", "pito",
       "anillos vibradores", "anillo vibrador", "anillos de pene", "anillo de pene",
-      "masturbador", "masturbadores", "huevo masturb"), "hombre"),
+      "masturbador", "masturbadores", "huevo masturb",
+      # Lencería masculina: _REGLAS_GENERO ya marca estos PRODUCTOS como hombre,
+      # esto alinea la lectura del mensaje del cliente. Sin ellos, "suspensorio"
+      # dejaba género=None y la categoría lencería podía traer prendas de mujer.
+      "suspensorio", "suspensorios", "suspensor", "suspensores", "pechera"), "hombre"),
     (("pareja", "en pareja", "los dos", "mi novia", "mi esposa", "mi novio", "mi esposo",
       "we vibe", "chorus"), "pareja"),
     (("anal", "el culo", "por atras", "por atrás", "cola", "recto"), "anal"),
@@ -795,7 +799,7 @@ _SUBTIPO_KEYWORDS = (
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
     # Lencería
-    "arnes", "arnés", "liguero", "pechera", "encaje", "body", "disfraz",
+    "arnes", "arnés", "liguero", "pechera", "encaje", "body", "bodies", "bodys", "disfraz",
     "suspensorio", "conjunto",
     # Bondage / BDSM (pareja-y-bondage)
     "esposas", "esposa", "antifaz", "antifaces", "fustas", "fusta",
@@ -824,7 +828,8 @@ _SUBTIPO_A_CATEGORIA = {
     "prostat": "anal", "próstata": "anal",
     "ducha": "anal", "enema": "anal",
     "liguero": "lenceria", "pechera": "lenceria", "encaje": "lenceria",
-    "body": "lenceria", "disfraz": "lenceria", "suspensorio": "lenceria",
+    "body": "lenceria", "bodies": "lenceria", "bodys": "lenceria",
+    "disfraz": "lenceria", "suspensorio": "lenceria",
     "conjunto": "lenceria",
     "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
     "antifaz": "pareja-y-bondage", "antifaces": "pareja-y-bondage",
@@ -1061,6 +1066,23 @@ _FOTO_REQUEST_RE = _re_mod.compile(
 )
 
 
+# OJO: se comparan contra texto ya pasado por _normalizar_texto (ASCII sin
+# acentos), así que los patrones se normalizan también. Escritos con "ñ"/tildes
+# nunca matcheaban: "mas diseños" → "mas disenos" y la comparación fallaba.
+_VER_MAS_PATRONES = tuple(_normalizar_texto(p) for p in (
+    "ver mas", "ver más", "mas diseños", "más diseños", "mas modelos", "más modelos",
+    "otros diseños", "otros modelos", "mas opciones", "más opciones",
+    "quiero ver mas", "ver mas diseños", "otras opciones",
+))
+
+
+def _es_ver_mas(user_text: str) -> bool:
+    """El cliente pide más opciones de lo que ya está viendo (no describe un
+    producto nuevo)."""
+    t = _normalizar_texto(user_text)
+    return any(p in t for p in _VER_MAS_PATRONES)
+
+
 def _genero_desde_texto_cliente(texto: str) -> str | None:
     """Detecta el género/uso que el cliente expresa en su mensaje (None si no aclara).
 
@@ -1267,6 +1289,35 @@ async def clasificar_intencion_cliente(user_text: str,
             subtipo_detectado = "sabores"
         tiene_subtipo = subtipo_detectado is not None
 
+    # HERENCIA DE SUBTIPO DESDE LA MEMORIA DE CONVERSACIÓN.
+    # Mismo criterio que la herencia de intención/género de arriba, pero acotada a
+    # los "ver más": ahí el cliente pide más de lo mismo y el mensaje ("Mas
+    # diseños") no lleva subtipo propio, así que sin esto se perdía el filtro y el
+    # sistema rellenaba con cualquier producto de la categoría (pedía suspensorios
+    # y recibía bodies de mujer). Fuera de ese caso NO se hereda: si el cliente
+    # nombra otra cosa, mandar lo que él acaba de pedir, no lo del turno anterior.
+    if not subtipo_detectado and categoria_funcional and history and _es_ver_mas(user_text):
+        for h_msg in reversed(history[-8:]):
+            if h_msg.get("role") != "user":
+                continue
+            norm_h = _normalizar_texto(_corregir_typos(h_msg.get("content") or ""))
+            for s in _SUBTIPO_KEYWORDS:
+                if s not in norm_h:
+                    continue
+                # Heredar solo si el subtipo pertenece a la categoría activa, para
+                # no arrastrarlo tras un cambio de tema ("suspensorio" no aplica si
+                # ahora pide dildos). Los subtipos ambiguos (calor, cola, clitor) no
+                # están en el mapeo y dependen justamente del contexto: se heredan.
+                cat_del_subtipo = _SUBTIPO_A_CATEGORIA.get(s)
+                if cat_del_subtipo is None or cat_del_subtipo == categoria_funcional:
+                    subtipo_detectado = s
+                    log.info("Subtipo %r heredado de la conversación (cat=%s)",
+                             s, categoria_funcional)
+                break
+            if subtipo_detectado:
+                break
+        tiene_subtipo = subtipo_detectado is not None
+
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
     if categoria_funcional in CATEGORIAS_PUNTUALES or (cat_activa_memoria and not sustantivo_cambio_tema):
         calificado = True
@@ -1344,12 +1395,22 @@ async def get_productos_para_recomendar(
     """
     exclude_set = set(exclude_ids or [])
 
+    # Query semántica: normalmente el texto del cliente, que describe lo que busca.
+    # Pero un "ver más" ("Mas diseños") no describe ningún producto — su embedding
+    # contra el catálogo es ruido puro. En ese caso se usa el contexto real de la
+    # búsqueda; si no hay contexto, se salta Qdrant y resuelve el SQL, que es
+    # determinístico y ya respeta exclude_ids.
+    query_semantica = (user_text or "").strip()
+    if query_semantica and _es_ver_mas(query_semantica):
+        contexto = [p for p in (subtipo, categoria_funcional, genero) if p]
+        query_semantica = " ".join(contexto).replace("-", " ") if contexto else ""
+
     qdrant_candidatos_cache: list[dict] = []
-    if config.QDRANT_ENABLED and user_text and user_text.strip():
+    if config.QDRANT_ENABLED and query_semantica:
         try:
             from app import vector_store
             qdrant_candidatos_cache = await vector_store.search_semantic_products(
-                query=user_text,
+                query=query_semantica,
                 categoria_funcional=categoria_funcional,
                 genero=genero,
                 exclude_ids=exclude_ids,

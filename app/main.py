@@ -518,11 +518,9 @@ def _es_respuesta_afirmativa(user_text: str) -> bool:
     return False
 
 
-def _es_ver_mas(user_text: str) -> bool:
-    t = catalog._normalizar_texto(user_text)
-    patrones = ("ver mas", "ver más", "mas diseños", "más diseños", "mas modelos", "más modelos",
-                "otros diseños", "mas opciones", "más opciones", "quiero ver mas", "ver mas diseños")
-    return any(p in t for p in patrones)
+# Definido en catalog.py para que la recuperación de candidatos también pueda
+# reconocer un "ver más" (ahí decide si tiene sentido la búsqueda semántica).
+_es_ver_mas = catalog._es_ver_mas
 
 
 # Patrones que indican que el cliente está en FASE DE VENTA/PAGO (no explorando

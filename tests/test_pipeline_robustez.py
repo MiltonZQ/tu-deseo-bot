@@ -270,3 +270,79 @@ def test_variantes_singular_plural_no_bloquean_la_correccion():
     como ambigüedad (era lo que impedía corregir el caso del reporte)."""
     assert catalog._misma_familia("multiorgasmo", "multiorgasmos") is True
     assert catalog._misma_familia("lovense", "satisfyer") is False
+
+
+# ── "ver más" mantiene el subtipo del turno anterior ────────────────────────
+# Caso reportado: el cliente pidió lencería → "Suspensorio" (5 suspensorios
+# masculinos correctos) → "Mas diseños" y recibió 5 bodies de MUJER. El mensaje
+# "Mas diseños" no lleva la palabra "suspensorio", así que el subtipo se perdía y
+# la búsqueda traía cualquier producto de la categoría.
+
+_HIST_SUSPENSORIO = [
+    {"role": "user", "content": "Tienen lenceria"},
+    {"role": "assistant", "content": (
+        "¿buscas lencería para ella (body, baby doll, disfraz) o para él "
+        "(suspensorio, pechera, conjunto masculino)? 😊")},
+    {"role": "user", "content": "Suspensorio"},
+    {"role": "assistant", "content": "Mira estos suspensorios masculinos 👇"},
+]
+
+_HIST_VIDRIO = [
+    {"role": "user", "content": "Tienen dildos"},
+    {"role": "assistant", "content": "¿realista, con ventosa, de vidrio/cristal, o doble?"},
+    {"role": "user", "content": "vidrio"},
+    {"role": "assistant", "content": "Te muestro una opción de dildo de vidrio 👇"},
+]
+
+
+def test_ver_mas_hereda_subtipo_caso_reportado():
+    """'Mas diseños' tras 'Suspensorio' debe seguir buscando suspensorios."""
+    r = _clasificar("Mas diseños", _HIST_SUSPENSORIO)
+    assert r["categoria_funcional"] == "lenceria"
+    assert r["subtipo_detectado"] == "suspensorio", (
+        "el 'ver más' perdió el subtipo y traería cualquier lencería")
+
+
+def test_ver_mas_hereda_subtipo_en_otras_categorias():
+    """Mismo bug con dildos: 'vidrio' → 'Mas diseños' no debe traer otros dildos."""
+    r = _clasificar("Mas diseños", _HIST_VIDRIO)
+    assert r["categoria_funcional"] == "dildos"
+    assert r["subtipo_detectado"] == "vidrio"
+
+
+def test_pedir_otra_cosa_no_hereda_el_subtipo_anterior():
+    """Si el cliente nombra otro producto, mandar lo que pidió — no lo del turno
+    anterior. La herencia solo aplica a los 'ver más'."""
+    for texto, esperado in (("muestrame bodies", "bodies"), ("quiero un body", "body")):
+        r = _clasificar(texto, _HIST_SUSPENSORIO)
+        assert r["subtipo_detectado"] == esperado, (
+            f"{texto!r} no debe heredar 'suspensorio': dio {r['subtipo_detectado']!r}")
+
+
+def test_cambio_de_categoria_no_arrastra_subtipo():
+    """Tras ver suspensorios, pedir dildos no debe arrastrar 'suspensorio'."""
+    r = _clasificar("tienen dildos", _HIST_SUSPENSORIO)
+    assert r["categoria_funcional"] == "dildos"
+    assert r["subtipo_detectado"] is None
+
+
+def test_ver_mas_sin_historial_no_inventa_subtipo():
+    assert _clasificar("Mas diseños", [])["subtipo_detectado"] is None
+
+
+def test_suspensorio_implica_genero_hombre():
+    """'Suspensorio' en el mensaje del cliente debe marcar género hombre, igual
+    que _REGLAS_GENERO ya hace con esos productos. Antes daba None, y la
+    categoría lencería podía devolver prendas de mujer."""
+    for texto in ("Suspensorio", "quiero un suspensorio", "tienen pechera"):
+        assert _clasificar(texto, [])["genero"] == "hombre", texto
+
+
+def test_es_ver_mas_reconoce_mas_disenos():
+    """Regresión de un bug preexistente: los patrones se comparan contra texto ya
+    normalizado a ASCII, así que los que tenían 'ñ' nunca matcheaban."""
+    for texto in ("Mas diseños", "más diseños", "mas modelos", "ver mas",
+                  "quiero ver mas opciones", "otros diseños"):
+        assert catalog._es_ver_mas(texto), f"{texto!r} debería ser un 'ver más'"
+    for texto in ("quiero un body", "tienen lenceria", "hola"):
+        assert not catalog._es_ver_mas(texto), f"{texto!r} NO es un 'ver más'"
