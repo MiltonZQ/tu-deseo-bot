@@ -454,6 +454,23 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
         precio_fmt = f"{int(p.get('precio', 0)):,}".replace(",", ".")
         lineas.append(f"{_numero_lista(idx)} *{p['nombre'][:60]}* — ${precio_fmt}")
         marcadores.append(f"[FOTO:{p['id']}]")
+    # Si se cedió en alguna restricción, decirlo. Callarlo es lo que hacía que un
+    # cliente pidiera "vibrador anal" y recibiera otra cosa sin explicación.
+    aviso = ""
+    relajado = info.get("relajado")
+    if relajado and relajado != "todo":
+        pedido = info.get("restricciones") or {}
+        _COMO_SE_DICE = {
+            "vibra": "con vibración",
+            "control": "con ese tipo de control",
+            "zona": f"para {pedido.get('zona', 'esa zona')}",
+            "genero_uso": "para ese uso",
+            "atributos": "con esas características",
+            "tipo": f"de {cat_nombre}",
+        }
+        aviso = (f"No tengo exactamente {cat_nombre} {_COMO_SE_DICE.get(relajado, '')} "
+                 f"en este momento, pero mira estas opciones muy parecidas 👇\n")
+
     if info.get("hay_mas"):
         intro = (f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Buena elección! Te muestro estas opciones de {cat_nombre} 👇")
@@ -462,7 +479,7 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
         intro = (f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Perfecto! Estas son las opciones de {cat_nombre} que tenemos 👇")
         cta = "¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
-    return f"{intro}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
+    return f"{aviso}{intro}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
 
 
 async def _enviar_fotos_productos(
@@ -701,7 +718,9 @@ async def _recuperar_candidatos(
     "si", "ok", "dame", "los rojos" muestran productos en vez de re-preguntar.
     """
     clasif = await catalog.clasificar_intencion_cliente(
-        user_text, history, (estado or {}).get("categoria_funcional"))
+        user_text, history, (estado or {}).get("categoria_funcional"),
+        (estado or {}).get("restricciones"))
+    restricciones = clasif.get("restricciones") or {}
 
     # Fusionar con estado previo (el estado recalifica categoría/género si el
     # nuevo mensaje los aclara; si no, conserva lo persistido).
@@ -831,10 +850,23 @@ async def _recuperar_candidatos(
             candidatos = especificos
             log.info("Producto específico encontrado por nombre: %d", len(candidatos))
 
+    # ── RECUPERACIÓN POR RESTRICCIONES (camino principal) ──
+    # Filtra en SQL sobre las facetas guardadas (tipo, zona, vibra, control…) en
+    # vez de bajar el catálogo entero y clasificarlo en Python. Es lo que permite
+    # expresar "vibrador anal" como intersección y no como un cajón.
+    relajado = None
+    if not candidatos and debe_mostrar and restricciones.get("tipo"):
+        res = await catalog.buscar_por_restricciones(
+            restricciones, exclude_ids=exclude, limit=5)
+        if res.productos:
+            candidatos = res.productos
+            relajado = res.relajado
+            log.info("Restricciones %s → %d productos%s", restricciones,
+                     len(candidatos), f" (relajando {relajado})" if relajado else "")
+
     if not candidatos and debe_mostrar and cat_func:
-        # Excluir productos ya mostrados en la conversación para no repetir fotos.
-        # Pasar el subtipo detectado para priorizar productos que lo cumplan
-        # (exactitud: "doble" → dildos dobles primero, "ventosa" → con ventosa).
+        # Camino anterior, aún activo para los productos que todavía no tienen
+        # facetas calculadas (hasta que corra el backfill).
         candidatos = await catalog.get_productos_para_recomendar(
             categoria_funcional=cat_func,
             genero=genero,
@@ -970,8 +1002,54 @@ async def _recuperar_candidatos(
         "sin_stock_subtipo": bool(busqueda_ejecutada and _subtipo_actual and not candidatos
                                   and not exclude and not _es_soft_actual),
         "debe_mostrar": debe_mostrar and bool(candidatos),
+        "restricciones": restricciones,
+        "relajado": relajado,
     }
     return candidatos, info
+
+
+# Restricciones DURAS: si un producto no las cumple, no se envía. Son las que el
+# cliente nombró explícitamente y definen de qué estamos hablando. Las demás
+# (control, atributos, género) son preferencias: relajarlas devuelve algo
+# parecido, relajar estas devuelve otra cosa.
+_RESTRICCIONES_DURAS = ("tipo", "zona")
+
+
+def _validar_envio(productos: list[dict], restricciones: dict,
+                   relajado: str | None) -> list[dict]:
+    """Descarta los productos que NO cumplen las restricciones duras.
+
+    Es la última red antes de enviar. Aunque falle la clasificación, la búsqueda
+    o el LLM, aquí no pasa un producto que contradiga lo que el cliente pidió.
+    Se corrigió porque un cliente pidió "vibrador anal" y recibió enemas de
+    limpieza: ningún paso comprobaba si lo que se iba a enviar cumplía la
+    petición.
+
+    Un campo relajado a propósito NO se valida — ya se decidió ceder ahí, y el
+    mensaje al cliente lo dice.
+    """
+    if not productos or not restricciones:
+        return productos
+    validos, descartados = [], []
+    for p in productos:
+        ok = True
+        for campo in _RESTRICCIONES_DURAS:
+            esperado = restricciones.get(campo)
+            if not esperado or campo == relajado:
+                continue
+            actual = p.get(campo)
+            if actual and actual != esperado:
+                ok = False
+                descartados.append(f"{p.get('nombre', '?')[:34]} ({campo}={actual})")
+                break
+        if ok:
+            validos.append(p)
+    if descartados:
+        log.warning("Validación previa al envío: %d producto(s) descartados por no "
+                    "cumplir %s → %s", len(descartados),
+                    {k: v for k, v in restricciones.items() if k in _RESTRICCIONES_DURAS},
+                    descartados)
+    return validos
 
 
 async def _process_message(payload: dict) -> None:
@@ -1397,6 +1475,16 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         except Exception:
             log.exception("Error enviando imagen de medios de pago a %s", wa_id)
 
+    # PUERTA DE VALIDACIÓN — última red antes de enviar. Ningún producto que
+    # contradiga lo que el cliente pidió (tipo/zona) sale de aquí, aunque hayan
+    # fallado la clasificación, la búsqueda o el LLM.
+    antes_de_validar = len(final_productos)
+    final_productos = _validar_envio(
+        final_productos, info.get("restricciones") or {}, info.get("relajado"))
+    if antes_de_validar and not final_productos:
+        log.warning("Ningún producto pasó la validación para %s — no se envían fotos", wa_id)
+        reply = _SIN_RESULTADO_MSG
+
     # Enviar fotos (candidatos ya validados + filtrados por el filtro final).
     enviados_ids = await _enviar_fotos_productos(wa_id, final_productos,
                                                  offset=offset_numeracion)
@@ -1422,6 +1510,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             genero=info["genero"],
             calificado=info["calificado"] or bool(enviados_ids) or recien_califico,
             add_productos_mostrados=enviados_ids,
+            restricciones=info.get("restricciones") or None,
         )
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen

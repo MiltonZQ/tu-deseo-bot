@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterable
 
@@ -1796,6 +1797,116 @@ async def get_productos_para_recomendar(
     if not candidatos:
         log.warning("get_productos_para_recomendar: 0 candidatos tras todos los intentos cat=%s género=%s", categoria_funcional, genero)
     return candidatos
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Recuperación por restricciones (ver app/facetas.py)
+# ══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class Resultado:
+    """Productos encontrados y, si hubo que ceder, QUÉ restricción se soltó.
+
+    `relajado` es la pieza que faltaba: antes, cuando la intersección quedaba
+    vacía, los fallbacks rellenaban con lo que hubiera cerca sin decirlo, y por
+    eso "vibrador anal" devolvía enemas de limpieza. Ahora quien redacta el
+    mensaje sabe que hay que avisar ("no tengo vibradores anales, pero estos
+    plugs anales sí vibran").
+    """
+    productos: list[dict] = field(default_factory=list)
+    relajado: str | None = None
+    restricciones: dict = field(default_factory=dict)
+
+
+# Orden en que se ceden las restricciones cuando no hay resultados exactos. De
+# lo más accesorio a lo más esencial: el color del control importa menos que la
+# zona del cuerpo. `tipo` NO está en la lista — cambiar el tipo de producto es
+# responder otra pregunta, y se maneja aparte y siempre avisando.
+_ESCALERA_RELAJACION = ("atributos", "control", "genero_uso", "vibra", "zona")
+
+
+async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] | None,
+                                   limit: int) -> list[dict]:
+    """Una consulta SQL con las restricciones dadas. Filtra en la DB, no en Python."""
+    where = ["(stock_status IS NULL OR stock_status <> 'outofstock')",
+             "imagen_url IS NOT NULL AND imagen_url != ''"]
+    params: list = []
+    idx = 1
+    for campo in ("tipo", "zona", "control", "genero_uso"):
+        valor = restricciones.get(campo)
+        if valor:
+            where.append(f"{campo} = ${idx}")
+            params.append(valor)
+            idx += 1
+    if restricciones.get("vibra"):
+        where.append("vibra = TRUE")
+    atributos = restricciones.get("atributos") or []
+    if atributos:
+        where.append(f"atributos @> ${idx}::text[]")
+        params.append(list(atributos))
+        idx += 1
+    if exclude_ids:
+        where.append(f"NOT (id = ANY(${idx}::bigint[]))")
+        params.append(list(exclude_ids))
+        idx += 1
+    sql = (
+        "SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, "
+        "permalink, tipo, zona, vibra, control, genero_uso, atributos "
+        "FROM productos WHERE " + " AND ".join(where) +
+        f" ORDER BY (activo IS TRUE) DESC, LENGTH(nombre) ASC LIMIT {int(limit)}"
+    )
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        return [dict(r) for r in await conn.fetch(sql, *params)]
+
+
+async def buscar_por_restricciones(restricciones: dict,
+                                   exclude_ids: list[int] | None = None,
+                                   limit: int = 5) -> Resultado:
+    """Busca productos que cumplan las restricciones, cediendo de forma explícita.
+
+    1. Intenta la combinación exacta.
+    2. Si no hay nada, suelta UNA restricción por vez siguiendo
+       `_ESCALERA_RELAJACION` y devuelve cuál soltó.
+    3. Si tras soltarlas todas sigue sin haber nada, devuelve vacío. Nunca
+       rellena con productos de otro tipo en silencio: eso es lo que hacía que
+       un cliente pidiera un vibrador anal y recibiera un enema.
+    """
+    restricciones = {k: v for k, v in (restricciones or {}).items()
+                     if k != "_implicitos" and v}
+    if not restricciones:
+        return Resultado(restricciones=restricciones)
+
+    exactos = await _consultar_restricciones(restricciones, exclude_ids, limit)
+    if exactos:
+        return Resultado(productos=exactos, restricciones=restricciones)
+
+    for campo in _ESCALERA_RELAJACION:
+        if campo not in restricciones:
+            continue
+        aflojadas = {k: v for k, v in restricciones.items() if k != campo}
+        if not aflojadas.get("tipo") and not aflojadas.get("zona"):
+            continue  # soltar eso dejaría la búsqueda sin ancla
+        encontrados = await _consultar_restricciones(aflojadas, exclude_ids, limit)
+        if encontrados:
+            log.info("Restricción relajada: %s (quedan %s) → %d productos",
+                     campo, aflojadas, len(encontrados))
+            return Resultado(productos=encontrados, relajado=campo,
+                             restricciones=aflojadas)
+
+    # Último recurso: solo el tipo, o solo la zona. Sigue reportándose.
+    for campo_ancla in ("tipo", "zona"):
+        if restricciones.get(campo_ancla):
+            solo = {campo_ancla: restricciones[campo_ancla]}
+            encontrados = await _consultar_restricciones(solo, exclude_ids, limit)
+            if encontrados:
+                otro = "zona" if campo_ancla == "tipo" else "tipo"
+                log.info("Solo se pudo respetar %s=%s → %d productos",
+                         campo_ancla, restricciones[campo_ancla], len(encontrados))
+                return Resultado(productos=encontrados, relajado=otro,
+                                 restricciones=solo)
+
+    log.warning("Sin productos para %s (ni relajando)", restricciones)
+    return Resultado(relajado="todo", restricciones=restricciones)
 
 
 async def contar_productos(categoria_funcional: str | None, genero: str | None) -> int:
