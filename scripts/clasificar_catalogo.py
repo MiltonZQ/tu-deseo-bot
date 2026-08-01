@@ -24,66 +24,50 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import db, facetas  # noqa: E402
-
-
-async def _cargar(solo_nuevos: bool) -> list[dict]:
-    sql = "SELECT id, nombre, descripcion, categoria FROM productos"
-    if solo_nuevos:
-        sql += " WHERE tipo IS NULL"
-    sql += " ORDER BY nombre"
-    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
-        return [dict(r) for r in await conn.fetch(sql)]
+from app import clasificacion, db  # noqa: E402
 
 
 async def main(dry_run: bool, solo_nuevos: bool, sin_llm: bool) -> int:
+    """Envoltorio de consola sobre `app.clasificacion.reclasificar_catalogo`.
+
+    El núcleo vive en la app porque también lo usa el endpoint de mantenimiento
+    `/maintenance/reclasificar-facetas` (útil cuando no hay shell en el
+    contenedor). Aquí solo se imprime el informe.
+    """
     await db.init_pool()
-    productos = await _cargar(solo_nuevos)
-    if not productos:
+    res = await clasificacion.reclasificar_catalogo(
+        dry_run=dry_run, solo_nuevos=solo_nuevos, permitir_llm=not sin_llm)
+
+    if not res["total"]:
         print("No hay productos que clasificar.")
         return 0
 
-    print(f"Clasificando {len(productos)} productos"
+    print(f"Clasificando {res['total']} productos"
           f"{' (solo reglas)' if sin_llm else ''}"
           f"{' — SIN ESCRIBIR' if dry_run else ''}…\n")
 
-    resultados: list[tuple[dict, facetas.Facetas, str]] = []
-    for p in productos:
-        f, origen = await facetas.clasificar(
-            p["nombre"], p.get("descripcion"), p.get("categoria"),
-            permitir_llm=not sin_llm,
-        )
-        resultados.append((p, f, origen))
-        if not dry_run and f.tipo:
-            await db.set_facetas_producto(p["id"], f, origen=origen)
+    if res["detalle"]:
+        print(f"── CAMBIOS ({res['cambios']}) " + "─" * 50)
+        por_campo: dict[str, int] = collections.defaultdict(int)
+        for c in res["detalle"]:
+            for campo in c["campos"]:
+                por_campo[campo] += 1
+            cambios_txt = ", ".join(
+                f"{campo}: {c['antes'][campo]!r}→{c['despues'][campo]!r}"
+                for campo in c["campos"])
+            print(f"  {c['nombre'][:46]:48} {cambios_txt}")
+        print("\n  por campo: " + "  ".join(f"{k}={v}" for k, v in
+                                            sorted(por_campo.items())))
+    else:
+        print("Sin cambios respecto a lo que ya está guardado.")
 
-    # ── Informe agrupado, para revisar de un vistazo ──
-    por_tipo: dict[str, list] = collections.defaultdict(list)
-    for p, f, origen in resultados:
-        por_tipo[f.tipo or "SIN CLASIFICAR"].append((p, f, origen))
-
-    for tipo in sorted(por_tipo, key=lambda t: (t == "SIN CLASIFICAR", t)):
-        items = por_tipo[tipo]
-        print(f"\n── {tipo}  ({len(items)}) " + "─" * max(0, 46 - len(tipo)))
-        for p, f, origen in sorted(items, key=lambda x: x[0]["nombre"]):
-            marca = "[LLM]" if origen == "llm" else "     "
-            vib = "vibra" if f.vibra else "     "
-            attrs = ",".join(f.atributos[:3])
-            print(f"  {marca} {f.zona:9} {vib} {f.genero_uso:7} "
-                  f"{f.control:7} {p['nombre'][:44]:46} {attrs}")
-
-    n_llm = sum(1 for _, _, o in resultados if o == "llm")
-    n_sin = sum(1 for _, f, _ in resultados if not f.tipo)
-    print("\n" + "═" * 78)
-    print(f"total {len(resultados)}   por reglas {len(resultados) - n_llm}   "
-          f"por LLM {n_llm}   sin clasificar {n_sin}")
-    print("por zona: " + "  ".join(
-        f"{z}={n}" for z, n in collections.Counter(
-            f.zona for _, f, _ in resultados).most_common()))
-    print(f"vibran: {sum(1 for _, f, _ in resultados if f.vibra)}")
+    print("\n" + "=" * 78)
+    print(f"total {res['total']}   por reglas {res['por_reglas']}   "
+          f"por LLM {res['por_llm']}   sin clasificar {res['sin_clasificar']}   "
+          f"protegidos por revisión humana {res['protegidos_por_revision_humana']}")
     if dry_run:
         print("\nDRY-RUN: no se escribió nada. Quita --dry-run para guardar.")
-    return n_sin
+    return res["sin_clasificar"]
 
 
 if __name__ == "__main__":

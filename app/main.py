@@ -209,6 +209,34 @@ async def reset_contact_memory(
     return {"cleared_wa_ids": [wa_id], "deleted": deleted}
 
 
+@app.post("/maintenance/reclasificar-facetas")
+async def reclasificar_facetas(
+    dry_run: bool = True,
+    solo_nuevos: bool = False,
+    sin_llm: bool = False,
+    detalle: bool = False,
+    x_reload_token: str = Header(None),
+):
+    """Recalcula las facetas de todo el catálogo con las reglas actuales.
+
+    Sin esto, un cambio en `app/facetas.py` no llega a los productos ya
+    cargados: las reglas nuevas solo aplican a lo que entra por el sync. Antes
+    solo se podía hacer con `scripts/clasificar_catalogo.py`, o sea con shell en
+    el contenedor.
+
+    `dry_run=true` por defecto — a propósito: reescribir la clasificación de
+    todo el catálogo se revisa antes de hacerse.
+    """
+    if not config.RELOAD_TOKEN or x_reload_token != config.RELOAD_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from app import clasificacion
+    res = await clasificacion.reclasificar_catalogo(
+        dry_run=dry_run, solo_nuevos=solo_nuevos, permitir_llm=not sin_llm)
+    if not detalle:
+        res = {k: v for k, v in res.items() if k != "detalle"}
+    return res
+
+
 @app.post("/maintenance/reset-all-conversations")
 async def reset_all_conversations(
     x_reload_token: str = Header(None),
