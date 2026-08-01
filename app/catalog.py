@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from functools import lru_cache
 from typing import Iterable
 
 from app import config, db
@@ -484,11 +485,41 @@ def _corregir_typos(texto: str | None) -> str:
     return _ALIASES_TYPO_RE.sub(_reemp, texto)
 
 
+# Claves que deben coincidir como PALABRA COMPLETA (admitiendo plural). El resto se
+# comparan con límite de palabra solo a la IZQUIERDA, porque muchas son raíces
+# deliberadas: "lubricant" debe pillar lubricante/lubricantes, "prostat" próstata,
+# "succio" succión/succionador, "anal" anales.
+#
+# Comparar con `in` pelado (como se hacía) mete la clave DENTRO de otras palabras y
+# clasifica mal. Casos reales del catálogo:
+#   "funda"     dentro de "profunda"     → vibradores de mujer marcados como hombre
+#   "culo"      dentro de "testículos"   → producto marcado como anal
+#   "anal"      dentro de "canal"        → producto marcado como anal
+#   "sado"      dentro de "pensado"      → producto marcado como bondage
+#   "dado"      dentro de "cuidado"      → producto marcado como juego de mesa
+#   "pene"      al inicio de "penetración" → producto marcado como hombre
+# El último es prefijo (arranca palabra), por eso "pene" exige palabra completa.
+_CLAVES_PALABRA_COMPLETA = frozenset({"pene"})
+
+
+@lru_cache(maxsize=None)
+def _patron_clave(clave: str) -> "re.Pattern[str]":
+    patron = r"\b" + re.escape(clave)
+    if clave in _CLAVES_PALABRA_COMPLETA:
+        patron += r"(?:es|s)?\b"
+    return re.compile(patron)
+
+
+def _clave_en_texto(clave: str, haystack: str) -> bool:
+    """True si la clave aparece en el texto empezando palabra (no dentro de otra)."""
+    return bool(_patron_clave(clave).search(haystack))
+
+
 def _aplicar_reglas_categoria(haystack: str) -> str | None:
     """Primera categoría funcional cuya palabra clave aparece en el texto."""
     for claves, cat_funcional in _REGLAS_CATEGORIA:
         for clave in claves:
-            if clave in haystack:
+            if _clave_en_texto(clave, haystack):
                 return cat_funcional
     return None
 
@@ -562,7 +593,7 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
         return "unisex"
     for claves, genero in _REGLAS_GENERO:
         for clave in claves:
-            if clave in haystack:
+            if _clave_en_texto(clave, haystack):
                 return genero
     return "unisex"
 

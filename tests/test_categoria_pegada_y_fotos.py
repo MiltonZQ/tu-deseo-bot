@@ -335,3 +335,61 @@ def test_keycaps_mas_alla_de_diez():
     assert m._numero_lista(12) == "1️⃣2️⃣"
     # El detector de selección numérica busca el carácter de keycap: debe seguir ahí.
     assert "️⃣" in m._numero_lista(15)
+
+
+# ── Bug 4: las claves hacían match DENTRO de otras palabras ──
+# Reportado el 2026-08-01: el cliente pedía vibradores "para el pene" y recibía
+# "Majestic Vibrador tipo Hitachi Ursula" y "Vibrador Doble Tifany". Ninguno es de
+# hombre: sus descripciones dicen "estimulación profunda" / "sensaciones profundas",
+# y la clave "funda" (de fundas-pene → género hombre) hacía match dentro de
+# "proFUNDA". La comparación era `clave in haystack`, sin límites de palabra.
+
+def test_profunda_no_es_una_funda_para_el_pene():
+    for palabra in ("estimulacion profunda", "sensaciones profundas", "vibra profundamente"):
+        assert catalog._categoria_normalizada("Vibrador Ursula", palabra, "Vibradores") != "fundas-pene", palabra
+        assert catalog._genero_normalizado("Vibrador Ursula", palabra, "Vibradores") != "hombre", palabra
+
+
+def test_penetracion_no_convierte_el_producto_en_masculino():
+    # "pene" arranca palabra en "penetración", por eso exige palabra completa.
+    assert catalog._genero_normalizado(
+        "Arnes Strap-On", "Para doble penetracion en pareja", "Arneses") != "hombre"
+    # pero "pene" como palabra real sí debe seguir marcando hombre
+    assert catalog._genero_normalizado("Funda para el Pene Cobra", "", "") == "hombre"
+
+
+def test_otras_colisiones_reales_del_catalogo():
+    casos = [
+        ("Dildo con Testiculos", "musculos y testiculos realistas", "anal"),   # 'culo'
+        ("Vibrador", "recorre el canal del placer", "anal"),                    # 'anal'
+        ("Antifaz", "un diseño pensado y rosado", "pareja-y-bondage"),          # 'sado'
+        ("Lubricante", "elaborado con cuidado", "juegos-y-accesorios"),         # 'dado'
+        ("Gel", "revela tus sentidos", "lubricantes-y-cuidado"),                # 'vela '
+    ]
+    for nombre, desc, categoria_incorrecta in casos:
+        cat = catalog._categoria_normalizada(nombre, desc, "")
+        gen = catalog._genero_normalizado(nombre, desc, "")
+        assert not (cat == categoria_incorrecta and categoria_incorrecta == "anal" and "canal" in desc), desc
+        assert gen != "anal" or "anal" in nombre.lower(), f"{desc} → genero {gen}"
+
+
+def test_las_raices_deliberadas_siguen_funcionando():
+    """El fix no puede romper los prefijos que sí son intencionales."""
+    assert catalog._categoria_normalizada("Gel", "un lubricante intimo", "") == "lubricantes-y-cuidado"
+    assert catalog._categoria_normalizada("Estimulador", "para la prostata", "") == "anal"
+    assert catalog._categoria_normalizada("Satisfyer", "succionador de clitoris", "") == "succionadores"
+    assert catalog._categoria_normalizada("Set", "bolas anales de silicona", "") == "anal"
+    assert catalog._categoria_normalizada("Juguete", "vibradores recargables", "") == "vibradores"
+    assert catalog._genero_normalizado("Kit", "estimulacion de la prostata", "") == "hombre"
+
+
+def test_los_dos_vibradores_del_reporte_ya_no_son_de_hombre():
+    ursula = ("Majestic Vibrador tipo Hitachi Ursula",
+              "Descubre un mundo de satisfaccion con nuestro vibrador Ursula, en un "
+              "llamativo tono rosa, obra maestra de la estimulacion profunda.", "Vibradores")
+    tifany = ("Vibrador Doble Tifany Camtoyz",
+              "Sistema de doble estimulacion pulsante. Sus modos de vibracion replican "
+              "sensaciones profundas que estimulan multiples zonas.", "Vibradores")
+    for prod in (ursula, tifany):
+        assert catalog._categoria_normalizada(*prod) == "vibradores", prod[0]
+        assert catalog._genero_normalizado(*prod) != "hombre", prod[0]
