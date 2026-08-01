@@ -1144,8 +1144,14 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
 
 
 async def clasificar_intencion_cliente(user_text: str,
-                                 history: list[dict] | None = None) -> dict:
+                                 history: list[dict] | None = None,
+                                 categoria_estado: str | None = None) -> dict:
     """Clasifica la intención del cliente de forma determinística.
+
+    categoria_estado: categoría persistida del turno anterior
+    (conversation_state.categoria_funcional). Es la fuente confiable de "qué
+    estaba viendo el cliente" y el motor de memoria la prefiere sobre adivinarla
+    leyendo el texto del bot.
 
     Devuelve:
       {
@@ -1249,25 +1255,34 @@ async def clasificar_intencion_cliente(user_text: str,
     # (ej: lubricantes-y-cuidado) y el mensaje actual NO trae un sustantivo explícito de cambio de tema,
     # la respuesta corta del usuario (ej: "anal", "agua", "sabores") se interpreta como filtro dentro
     # de la categoría activa en memoria, sin cambiar de tema a juguetes anales o categorías diferentes.
-    cat_activa_memoria = None
-    if history:
+    #
+    # La categoría persistida del turno anterior es el dato CONFIABLE y manda sobre
+    # todo lo demás. La heurística de abajo (adivinar leyendo el texto del bot) es
+    # solo un respaldo para cuando no hay estado, ej. el primer turno.
+    cat_activa_memoria = categoria_estado
+    if not cat_activa_memoria and history:
         for h_msg in reversed(history[-6:]):
             if h_msg.get("role") == "assistant":
                 c_h = (h_msg.get("content") or "").lower()
-                if any(w in c_h for w in ("lubricante", "base de agua", "silicona", "sabores", "sensaciones")):
+                # ORDEN: de específico a genérico, igual que _REGLAS_CATEGORIA. Los
+                # succionadores van antes que los vibradores porque casi todos se
+                # describen como "succionador de clítoris", y la rama de vibradores
+                # (que también busca "clítoris") se los llevaba: por eso un "si"
+                # tras ver succionadores terminaba trayendo vibradores Lovense.
+                if any(w in c_h for w in ("succionador", "succionadores", "air pulse", "satisfyer pro")):
+                    cat_activa_memoria = "succionadores"
+                    break
+                elif any(w in c_h for w in ("lubricante", "base de agua", "silicona", "sabores", "sensaciones")):
                     cat_activa_memoria = "lubricantes-y-cuidado"
                     break
                 elif any(w in c_h for w in ("dildo", "ventosa", "realista")):
                     cat_activa_memoria = "dildos"
                     break
-                elif any(w in c_h for w in ("vibrador", "clítoris", "clitoris")):
-                    cat_activa_memoria = "vibradores"
-                    break
-                elif any(w in c_h for w in ("lencería", "lenceria", "body")):
+                elif any(w in c_h for w in ("lencería", "lenceria", "body", "suspensorio")):
                     cat_activa_memoria = "lenceria"
                     break
-                elif any(w in c_h for w in ("succionador", "succionadores")):
-                    cat_activa_memoria = "succionadores"
+                elif any(w in c_h for w in ("vibrador", "clítoris", "clitoris")):
+                    cat_activa_memoria = "vibradores"
                     break
 
     sustantivo_cambio_tema = None

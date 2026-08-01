@@ -1720,3 +1720,96 @@ def test_bug23_flag_conectado_en_el_codigo_real():
             assert "busqueda_ejecutada and _subtipo_actual" in src
             return
     raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+# ── BUG 24: "si" borraba el contexto y desalineaba texto vs fotos ────────────
+# El cliente vio 5 succionadores, respondió "si", y recibió 5 vibradores Lovense
+# bajo un texto que listaba succionadores inventados. La categoría se corrompió
+# (ver tests en test_pipeline_robustez.py) y eso disparó dos amplificadores que
+# se cubren aquí: el reset del estado, y el forzado de candidatos sin ajustar el
+# texto que ya había escrito el LLM.
+
+def test_bug24_respuesta_afirmativa_no_dispara_reset():
+    """Réplica de la condición de cambio de tema: un 'si' nunca debe resetear el
+    estado (borraba también la lista de productos ya mostrados)."""
+    def _reset(estado_tiene_cat, nueva_cat_clara, cat_nueva, cat_estado, es_afirmativa):
+        return bool(estado_tiene_cat and nueva_cat_clara
+                    and cat_nueva != cat_estado and not es_afirmativa)
+
+    # Caso del bug: "si" mal clasificado como vibradores → NO debe resetear.
+    assert _reset(True, True, "vibradores", "succionadores", True) is False
+    # Cambio de tema real ("ahora quiero dildos") → sí resetea.
+    assert _reset(True, True, "dildos", "succionadores", False) is True
+    # Misma categoría → no resetea.
+    assert _reset(True, True, "succionadores", "succionadores", False) is False
+
+
+def test_bug24_guarda_afirmativa_conectada_en_el_codigo():
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            idx = src.index("reset_state = False")
+            bloque = src[idx:idx + 700]
+            assert "not _es_respuesta_afirmativa(user_text)" in bloque, (
+                "el disparo de reset_state debe excluir las respuestas afirmativas")
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+def test_bug24_texto_determinista_coincide_con_las_fotos():
+    """Réplica de _texto_desde_candidatos: los nombres, precios y [FOTO:ID] del
+    texto salen de los mismos candidatos que se envían, así que no pueden
+    desalinearse."""
+    def _texto(candidatos, info):
+        cat = (info.get("intencion") or info.get("categoria_funcional") or "productos").replace("-", " ")
+        lineas, marcadores = [], []
+        for idx, p in enumerate(candidatos[:5], 1):
+            precio = f"{int(p.get('precio', 0)):,}".replace(",", ".")
+            lineas.append(f"{idx}️⃣ *{p['nombre'][:60]}* — ${precio}")
+            marcadores.append(f"[FOTO:{p['id']}]")
+        return "intro\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\ncta"
+
+    candidatos = [
+        {"id": 101, "nombre": "Succionador de Clítoris Tenera 2", "precio": 629800},
+        {"id": 102, "nombre": "Satisfyer Penguin Succionador Clitorial", "precio": 384800},
+    ]
+    texto = _texto(candidatos, {"intencion": "succionadores"})
+    ids_en_texto = re.findall(r"\[FOTO:(\d+)\]", texto)
+    assert ids_en_texto == [str(p["id"]) for p in candidatos]
+    for p in candidatos:
+        assert p["nombre"] in texto, "cada foto enviada debe estar nombrada en el texto"
+
+
+def test_bug24_texto_del_llm_se_reemplaza_si_no_corresponde():
+    """Cuando se fuerzan los candidatos del sistema y el LLM ya había escrito su
+    propia lista de productos, esa lista no describe lo que se va a enviar: debe
+    reemplazarse (caso real: texto de succionadores + fotos de Lovense)."""
+    def _decidir(reply, se_forzaron_candidatos):
+        if se_forzaron_candidatos and (_LISTA_PRODUCTOS_RE.search(reply)
+                                       or _OFRECE_PRODUCTOS_RE.search(reply)):
+            return "reemplazar"
+        return "mantener"
+
+    inventado = ("¡Genial! Aquí tienes 5 opciones de succionadores 👇\n"
+                 "1️⃣ Satisfyer Pro 2 — $250.000 — 11 modos succión")
+    assert _decidir(inventado, True) == "reemplazar"
+    # Sin forzado (el LLM emitió marcadores válidos), se respeta su redacción.
+    assert _decidir(inventado, False) == "mantener"
+    # Texto sin lista de productos: no hay nada que desalinear.
+    assert _decidir("¡Claro! ¿Buscas algo en particular?", True) == "mantener"
+
+
+def test_bug24_reemplazo_conectado_en_el_codigo():
+    src = _MAIN.read_text()
+    assert "_texto_desde_candidatos" in src
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_message":
+            fn_src = ast.get_source_segment(src, node)
+            idx = fn_src.index("Fotos forzadas desde candidatos")
+            bloque = fn_src[idx:idx + 900]
+            assert "_texto_desde_candidatos" in bloque, (
+                "al forzar candidatos hay que rearmar el texto para que coincida")
+            return
+    raise AssertionError("No se encontró _handle_message")

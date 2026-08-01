@@ -346,3 +346,71 @@ def test_es_ver_mas_reconoce_mas_disenos():
         assert catalog._es_ver_mas(texto), f"{texto!r} debería ser un 'ver más'"
     for texto in ("quiero un body", "tienen lenceria", "hola"):
         assert not catalog._es_ver_mas(texto), f"{texto!r} NO es un 'ver más'"
+
+
+# ── "si" tras succionadores traía vibradores Lovense ────────────────────────
+# Caso reportado: el bot escribió "Succionador de Clítoris Tenera 2"; el motor de
+# memoria adivinaba la categoría buscando palabras en ese texto y la rama de
+# vibradores (que también busca "clítoris") se evaluaba ANTES que la de
+# succionadores, cortando con break. Resultado: "si" → categoría vibradores →
+# reset del estado → 5 vibradores Lovense con un texto de succionadores inventados.
+
+_HIST_SUCCIONADORES = [
+    {"role": "user", "content": "tienen succionadores"},
+    {"role": "assistant", "content": (
+        "¡Buena elección! Te muestro 5 opciones de succionadores para mujer 👇\n"
+        "1️⃣ Succionador de Clítoris Tenera 2 — $629.800 — control por app\n"
+        "2️⃣ Satisfyer Penguin Succionador Clitorial — $384.800 — diseño chic")},
+]
+
+
+def test_si_tras_succionadores_no_cambia_a_vibradores():
+    """Caso EXACTO reportado: 'si' debe seguir en succionadores."""
+    r = _clasificar("si", _HIST_SUCCIONADORES)
+    assert r["categoria_funcional"] == "succionadores", (
+        "'clítoris' en el texto del bot no debe clasificar la conversación como "
+        "vibradores: un succionador de clítoris es un succionador")
+
+
+def test_categoria_del_estado_manda_sobre_la_heuristica_de_texto():
+    """La categoría persistida es el dato confiable; la heurística que lee el
+    texto del bot es solo respaldo para cuando no hay estado."""
+    r = asyncio.run(catalog.clasificar_intencion_cliente(
+        "si", _HIST_SUCCIONADORES, "succionadores"))
+    assert r["categoria_funcional"] == "succionadores"
+
+
+def test_estado_evita_que_una_descripcion_ambigua_desvie_la_categoria():
+    """Aunque el texto del bot mencione otra cosa, el estado guardado manda."""
+    hist_ambiguo = [
+        {"role": "user", "content": "tienen succionadores"},
+        {"role": "assistant", "content": "Este modelo también funciona como vibrador de clítoris 😊"},
+    ]
+    r = asyncio.run(catalog.clasificar_intencion_cliente(
+        "si", hist_ambiguo, "succionadores"))
+    assert r["categoria_funcional"] == "succionadores"
+
+
+def test_heuristica_de_respaldo_ordena_de_especifico_a_generico():
+    """Sin estado, la heurística debe seguir acertando: succionadores antes que
+    vibradores, y lencería (suspensorio) antes que la rama genérica."""
+    casos = [
+        ("Te muestro succionadores de clítoris 👇", "succionadores"),
+        ("Mira estos suspensorios masculinos 👇", "lenceria"),
+        ("Estos vibradores con punto G te van a gustar", "vibradores"),
+        ("¿lo buscas a base de agua o de silicona?", "lubricantes-y-cuidado"),
+    ]
+    for texto_bot, esperado in casos:
+        hist = [{"role": "user", "content": "hola"},
+                {"role": "assistant", "content": texto_bot}]
+        r = _clasificar("si", hist)
+        assert r["categoria_funcional"] == esperado, (
+            f"{texto_bot!r} → {r['categoria_funcional']!r}, esperado {esperado!r}")
+
+
+def test_cambio_de_tema_explicito_sigue_funcionando_con_estado():
+    """El estado no debe congelar la conversación: si el cliente nombra otra
+    categoría, se le hace caso."""
+    r = asyncio.run(catalog.clasificar_intencion_cliente(
+        "ahora quiero ver dildos", _HIST_SUCCIONADORES, "succionadores"))
+    assert r["categoria_funcional"] == "dildos"

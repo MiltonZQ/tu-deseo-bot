@@ -416,6 +416,33 @@ _SIN_RESULTADO_MSG = (
 )
 
 
+def _texto_desde_candidatos(candidatos: list[dict], info: dict,
+                            mas_disenos: bool = False) -> str:
+    """Redacta la lista de productos desde los candidatos reales del catálogo.
+
+    Nombres, precios y marcadores [FOTO:ID] salen del mismo sitio del que salen
+    las fotos, así que texto y fotos no pueden desalinearse. Se usa cuando el
+    cliente pide "ver más" y como reemplazo si el LLM redacta productos que no
+    corresponden a los que se van a enviar.
+    """
+    cat_nombre = (info.get("intencion") or info.get("categoria_funcional")
+                  or "productos").replace("-", " ")
+    lineas, marcadores = [], []
+    for idx, p in enumerate(candidatos[:5], 1):
+        precio_fmt = f"{int(p.get('precio', 0)):,}".replace(",", ".")
+        lineas.append(f"{idx}️⃣ *{p['nombre'][:60]}* — ${precio_fmt}")
+        marcadores.append(f"[FOTO:{p['id']}]")
+    if info.get("hay_mas"):
+        intro = (f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
+                 if mas_disenos else f"¡Buena elección! Te muestro estas opciones de {cat_nombre} 👇")
+        cta = "¿Cuál te gusta o deseas ver más diseños? 😊"
+    else:
+        intro = (f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
+                 if mas_disenos else f"¡Perfecto! Estas son las opciones de {cat_nombre} que tenemos 👇")
+        cta = "¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
+    return f"{intro}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
+
+
 async def _enviar_fotos_productos(
     wa_id: str,
     candidatos: list[dict],
@@ -640,7 +667,8 @@ async def _recuperar_candidatos(
     categoría NUEVA y distinta dispara mostrar fotos de esa categoría. Así
     "si", "ok", "dame", "los rojos" muestran productos en vez de re-preguntar.
     """
-    clasif = await catalog.clasificar_intencion_cliente(user_text, history)
+    clasif = await catalog.clasificar_intencion_cliente(
+        user_text, history, (estado or {}).get("categoria_funcional"))
 
     # Fusionar con estado previo (el estado recalifica categoría/género si el
     # nuevo mensaje los aclara; si no, conserva lo persistido).
@@ -663,8 +691,13 @@ async def _recuperar_candidatos(
     # con lubricantes en los candidatos.
     reset_state = False
     nueva_cat_clara = bool(clasif["categoria_funcional"] and clasif["intencion"])
+    # Una respuesta afirmativa ("si", "ok", "dale") NUNCA es cambio de tema: el
+    # cliente está aceptando lo que se le ofreció. Sin esta guarda, un "si" mal
+    # clasificado borraba el estado entero — incluida la lista de productos ya
+    # mostrados — y el turno arrancaba de cero en otra categoría.
     if (estado_tiene_cat and nueva_cat_clara
-            and clasif["categoria_funcional"] != estado.get("categoria_funcional")):
+            and clasif["categoria_funcional"] != estado.get("categoria_funcional")
+            and not _es_respuesta_afirmativa(user_text)):
         log.info("Cambio de tema detectado: %s -> %s — reseteando estado",
                  estado.get("categoria_funcional"), clasif["categoria_funcional"])
         reset_state = True
@@ -1133,21 +1166,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         cat_nombre = cat_nombre.replace("-", " ")
         raw_reply = f"Te mostré todas las opciones de {cat_nombre} disponibles 😊 ¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
     elif es_ver_mas_pedido:
-        cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
-        cat_nombre = cat_nombre.replace("-", " ")
-        lineas = []
-        marcadores = []
-        for idx, p in enumerate(candidatos[:5], 1):
-            precio_fmt = f"{int(p.get('precio',0)):,}".replace(",", ".")
-            lineas.append(f"{idx}️⃣ *{p['nombre'][:60]}* — ${precio_fmt}")
-            marcadores.append(f"[FOTO:{p['id']}]")
-        if info.get("hay_mas"):
-            intro = f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
-            cta = "¿Cuál te gusta o deseas ver más diseños? 😊"
-        else:
-            intro = f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
-            cta = "¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
-        raw_reply = f"{intro}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
+        raw_reply = _texto_desde_candidatos(candidatos, info, mas_disenos=True)
     else:
         raw_reply = await openai_client.complete(
         user_text, history,
@@ -1199,6 +1218,17 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
                 len(candidatos),
             )
             final_productos = candidatos[:5]
+            # GARANTÍA TEXTO = FOTOS. Si el LLM además redactó su propia lista de
+            # productos, esa lista no describe lo que se va a enviar (pasó en
+            # producción: texto de succionadores con fotos de vibradores Lovense).
+            # Se reemplaza por el texto armado desde los candidatos reales.
+            if _LISTA_PRODUCTOS_RE.search(reply) or _OFRECE_PRODUCTOS_RE.search(reply):
+                log.warning(
+                    "El texto del LLM no corresponde a los productos que se enviarán "
+                    "— reemplazado por el texto determinista del catálogo",
+                )
+                reply = _texto_desde_candidatos(final_productos, info)
+                foto_ids, reply = _extraer_marcadores_foto(reply)
     else:
         # No debía mostrar fotos: el LLM solo califica. Si por error emitió
         # marcadores, validarlos igualmente contra candidatos (vacío = nada).
