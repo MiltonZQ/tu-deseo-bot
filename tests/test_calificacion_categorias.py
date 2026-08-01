@@ -1392,3 +1392,59 @@ def test_bug18_sin_candidatos_qdrant_no_cambia_comportamiento():
         return (filtrados_q + candidatos_sql)[:5]
 
     assert _combinar(candidatos_sql) == candidatos_sql
+
+
+# ── BUG 19: marca/modelo NO listada pedía calificación en vez de mostrar ────
+# directo el producto. Pedido del negocio: "si el usuario llega preguntando
+# por marca, producto especifico ya se le debe mostrar exactamente esos
+# productos" — sin depender de mantener una lista fija de marcas al día.
+# Ver tests/test_pipeline_robustez.py para la verificación funcional real de
+# _tokens_no_reconocidos (ese archivo sí importa app.catalog).
+
+def test_bug19_busqueda_por_nombre_conectada_en_recuperar_candidatos():
+    """Verifica en el fuente que _recuperar_candidatos intenta la búsqueda por
+    nombre (_tokens_no_reconocidos) ANTES de la regla anti-bucle, y que el
+    bloque de es_especifico reutiliza ese resultado en vez de repetir la
+    consulta."""
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            assert "_tokens_no_reconocidos" in src
+            assert "producto_por_nombre" in src
+            # Reutiliza el resultado ya buscado en vez de una nueva consulta.
+            assert "especificos = producto_por_nombre or" in src
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+def test_bug19_busqueda_por_nombre_gateada_a_sin_categoria_activa():
+    """La búsqueda por nombre en primer contacto debe estar condicionada a NO
+    tener una categoría de conversación ya en curso (o haber detectado cambio
+    de tema) — así 'los rojos' a mitad de una conversación de dildos sigue
+    resolviéndose por el motor de memoria/anti-bucle existente, no por esta
+    búsqueda de nombre nueva."""
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            idx = src.index("producto_por_nombre: list[dict] = []")
+            bloque = src[idx:idx + 300]
+            assert "not estado_tiene_cat or reset_state" in bloque, (
+                "La búsqueda por nombre debe estar gateada a 'sin categoría activa "
+                "o cambio de tema detectado', para no interferir con conversaciones "
+                "de categoría ya en curso")
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")
+
+
+def test_bug19_info_expone_es_especifico():
+    """El dict info que devuelve _recuperar_candidatos debe exponer
+    es_especifico (antes no estaba, y hacía falta para futuras validaciones)."""
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            assert '"es_especifico"' in src
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")

@@ -630,6 +630,29 @@ async def _recuperar_candidatos(
         estado = None  # ignorar el estado viejo para la recuperación
         estado_tiene_cat = False
 
+    # BÚSQUEDA POR NOMBRE EN PRIMER CONTACTO: si el cliente menciona un término
+    # que NO es vocabulario conocido de categorías/subtipos (ej. "King Cock",
+    # "Icicles", "Tenera" — marcas/modelos que no están en ninguna lista fija)
+    # y no hay una conversación de categoría ya en curso, buscarlo por NOMBRE
+    # antes de decidir si toca calificar. Sin esto, una marca que el
+    # clasificador de categorías no reconoce podía terminar generando una
+    # pregunta de calificación genérica en vez de mostrar directo el producto
+    # que el cliente ya nombró explícitamente.
+    producto_por_nombre: list[dict] = []
+    if not clasif.get("es_especifico") and (not estado_tiene_cat or reset_state):
+        tokens_extra = catalog._tokens_no_reconocidos(user_text)
+        if tokens_extra:
+            exclude_previo = estado.get("productos_mostrados", []) if estado else []
+            producto_por_nombre = await catalog.buscar_producto_especifico(
+                user_text, limit=5, exclude_ids=exclude_previo)
+            if producto_por_nombre:
+                clasif["es_especifico"] = True
+                clasif["calificado"] = True
+                log.info(
+                    "Producto específico detectado por nombre (sin marca conocida) %r → %d resultados",
+                    tokens_extra, len(producto_por_nombre),
+                )
+
     # ── REGLA HÍBRIDA ANTI-BUCLE ──
     # Si ya hay categoría persistida (el bot preguntó en el turno anterior) y el
     # cliente responde sin introducir una categoría nueva/distinta, mostrar fotos
@@ -680,7 +703,7 @@ async def _recuperar_candidatos(
     # Satisfyer Pro 2), buscar por NOMBRE primero (más preciso que categoría).
     # Así "Lovense Lush" muestra Lovense, no vibradores genéricos al azar.
     if clasif.get("es_especifico") and debe_mostrar:
-        especificos = await catalog.buscar_producto_especifico(
+        especificos = producto_por_nombre or await catalog.buscar_producto_especifico(
             user_text, limit=5, exclude_ids=exclude)
         if especificos:
             candidatos = especificos
@@ -811,6 +834,7 @@ async def _recuperar_candidatos(
         "genero": genero,
         "calificado": clasif["calificado"] or (debe_mostrar and bool(candidatos)),
         "pide_fotos": clasif["pide_fotos"],
+        "es_especifico": bool(clasif.get("es_especifico")),
         "reset_state": reset_state,
         "categoria_agotada": categoria_agotada,
         "sin_mas_opciones": sin_mas,

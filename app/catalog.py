@@ -894,6 +894,60 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
 # a una categoría fija; se dejan al contexto (si el estado previo era lubricantes,
 # "calor" sigue siendo lubricantes; si era vibradores, sigue vibradores).
 
+# ── Vocabulario conocido del catálogo (para detectar marcas/modelos SIN lista
+# blanca) ──
+# Cualquier palabra del mensaje del cliente que NO esté aquí (sustantivos de
+# categoría, subtipos, sinónimos, género, atributos "soft") es candidata a ser
+# un nombre de marca/modelo (ej: "King Cock", "Icicles", "Tenera", "AYAMI") que
+# el cliente mencionó explícitamente. Se usa para buscar por NOMBRE sin
+# depender de mantener una lista fija de marcas (que siempre queda incompleta).
+# Palabras genéricas/de relleno que el cliente usa sin nombrar nada concreto
+# (ej: "tienen algo para X", "ese producto"). No son marca/modelo aunque no
+# estén en el vocabulario de categorías — se excluyen para no disparar
+# búsquedas por nombre innecesarias.
+_PALABRAS_GENERICAS_IGNORAR = frozenset({
+    "algo", "eso", "esto", "esa", "ese", "cosa", "cosas", "producto",
+    "productos", "articulo", "articulos", "artículo", "artículos", "marca",
+    "modelo", "tipo", "clase", "opcion", "opciones", "opción", "cual", "cuales",
+    "cuál", "cuáles", "algun", "alguna", "algún", "alguno", "algunos", "algunas",
+    "probar", "prueba", "pruebas", "recomiendas", "recomienda", "recomendar",
+    "necesito", "busco", "buscando", "gustaria", "gustaría", "bien", "mejor",
+    "gusta", "gustan", "vale", "verlo", "verla",
+})
+
+
+def _construir_vocabulario_conocido() -> frozenset[str]:
+    frases: list[str] = []
+    frases.extend(_INTENCION_A_CATEGORIA_FUNCIONAL.keys())
+    frases.extend(_NOUN_KEYWORDS)
+    frases.extend(_SUBTIPO_KEYWORDS)
+    frases.extend(_SUBTIPO_A_CATEGORIA.keys())
+    frases.extend(_SUBTIPOS_SOFT)
+    for claves, _genero in _GENERO_KEYWORDS_CLIENTE:
+        frases.extend(claves)
+    for sinonimos in _SUBTIPO_SINONIMOS.values():
+        frases.extend(sinonimos)
+    palabras: set[str] = set()
+    for frase in frases:
+        for palabra in _normalizar_texto(frase).split():
+            if palabra:
+                palabras.add(palabra)
+    return frozenset(palabras)
+
+
+_VOCABULARIO_CONOCIDO = _construir_vocabulario_conocido()
+
+
+def _tokens_no_reconocidos(user_text: str) -> list[str]:
+    """Tokens del mensaje del cliente que NO son vocabulario conocido del
+    catálogo (categoría/subtipo/género/atributo) ni relleno genérico.
+    Palabras de 4+ letras que sobreviven este filtro suelen ser nombres de
+    marca/modelo."""
+    tokens = _extract_search_tokens(user_text)
+    return [t for t in tokens
+            if len(t) >= 4 and t not in _VOCABULARIO_CONOCIDO and t not in _PALABRAS_GENERICAS_IGNORAR]
+
+
 # Petición explícita de fotos por parte del cliente.
 import re as _re_mod
 _FOTO_REQUEST_RE = _re_mod.compile(
