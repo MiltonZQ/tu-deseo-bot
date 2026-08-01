@@ -1884,6 +1884,44 @@ async def contar_por_restricciones(restricciones: dict) -> int:
         return 0
 
 
+async def facetas_disponibles(restricciones: dict) -> dict:
+    """Qué facetas tienen producto OFRECIBLE dentro de estas restricciones.
+
+    Devuelve {"atributos": {"sabor": 6, …}, "zonas": {…}, "generos": {…}}.
+
+    Es lo que permite preguntarle al cliente solo por ramas que existen. Ofrecer
+    "de silicona" cuando no queda ninguno es peor que no preguntar: el cliente la
+    elige, la consulta exacta da 0 filas, y `_ESCALERA_RELAJACION` suelta el
+    atributo devolviéndole justo lo que no pidió.
+
+    Cuenta sobre las mismas filas que devolvería la búsqueda (agregando en
+    Python, no en SQL): son pocos cientos de productos y así no hay dos WHERE
+    que puedan divergir.
+    """
+    vacio = {"atributos": {}, "zonas": {}, "generos": {}}
+    restricciones = {k: v for k, v in (restricciones or {}).items()
+                     if k != "_implicitos" and v}
+    if not restricciones:
+        return vacio
+    try:
+        filas = await _consultar_restricciones(restricciones, None, 500)
+    except Exception:
+        log.warning("No se pudieron contar las facetas disponibles", exc_info=True)
+        return vacio
+
+    atributos: dict[str, int] = {}
+    zonas: dict[str, int] = {}
+    generos: dict[str, int] = {}
+    for fila in filas:
+        for attr in fila.get("atributos") or []:
+            atributos[attr] = atributos.get(attr, 0) + 1
+        if zona := fila.get("zona"):
+            zonas[zona] = zonas.get(zona, 0) + 1
+        if genero := fila.get("genero_uso"):
+            generos[genero] = generos.get(genero, 0) + 1
+    return {"atributos": atributos, "zonas": zonas, "generos": generos}
+
+
 async def buscar_por_restricciones(restricciones: dict,
                                    exclude_ids: list[int] | None = None,
                                    limit: int = 5,
