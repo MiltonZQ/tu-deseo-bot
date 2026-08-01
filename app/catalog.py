@@ -884,7 +884,9 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "control por app": ["con app", "control por app", "control app", "app control", "app", "con aplicacion"],
     "control app": ["con app", "control por app", "control app", "app control", "app"],
     "control remoto": ["control remoto", "control por app", "con app", "app control"],
+    "desensibiliz": ["anal", "desensibilizante", "desensibiliz", "anestesico", "anestésico", "relajante anal", "lubricante anal"],
 }
+
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
 # juguetes con calentamiento. "cola" puede ser plug anal o lencería. "clitor"/
 # "clitori" suelen ser vibradores pero también succionadores. Estos NO se mapean
@@ -1063,9 +1065,55 @@ async def clasificar_intencion_cliente(user_text: str,
             if not intencion:
                 intencion = subtipo_detectado
 
+    # ── MOTOR DE MEMORIA Y CONTEXTO (Memory-First Resolution) ──
+    # Si en la memoria conversacional reciente la categoría activa era una categoría concreta
+    # (ej: lubricantes-y-cuidado) y el mensaje actual NO trae un sustantivo explícito de cambio de tema,
+    # la respuesta corta del usuario (ej: "anal", "agua", "sabores") se interpreta como filtro dentro
+    # de la categoría activa en memoria, sin cambiar de tema a juguetes anales o categorías diferentes.
+    cat_activa_memoria = None
+    if history:
+        for h_msg in reversed(history[-6:]):
+            if h_msg.get("role") == "assistant":
+                c_h = (h_msg.get("content") or "").lower()
+                if any(w in c_h for w in ("lubricante", "base de agua", "silicona", "sabores", "sensaciones")):
+                    cat_activa_memoria = "lubricantes-y-cuidado"
+                    break
+                elif any(w in c_h for w in ("dildo", "ventosa", "realista")):
+                    cat_activa_memoria = "dildos"
+                    break
+                elif any(w in c_h for w in ("vibrador", "clítoris", "clitoris")):
+                    cat_activa_memoria = "vibradores"
+                    break
+                elif any(w in c_h for w in ("lencería", "lenceria", "body")):
+                    cat_activa_memoria = "lenceria"
+                    break
+                elif any(w in c_h for w in ("succionador", "succionadores")):
+                    cat_activa_memoria = "succionadores"
+                    break
+
+    sustantivo_cambio_tema = None
+    for n in ("dildo", "dildos", "consolador", "lenceria", "lencería", "succionador", "succionadores", "vibrador", "vibradores", "anillo", "anillos", "funda", "fundas", "bomba", "bombas"):
+        if n in norm_user:
+            sustantivo_cambio_tema = n
+            break
+
+    if cat_activa_memoria and not sustantivo_cambio_tema:
+        categoria_funcional = cat_activa_memoria
+        intencion = cat_activa_memoria
+        if "anal" in norm_user or "desensibiliz" in norm_user:
+            subtipo_detectado = "desensibiliz"
+        elif "agua" in norm_user:
+            subtipo_detectado = "base de agua"
+        elif "silicona" in norm_user:
+            subtipo_detectado = "silicona"
+        elif "sabor" in norm_user or "sabores" in norm_user:
+            subtipo_detectado = "sabores"
+        tiene_subtipo = subtipo_detectado is not None
+
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
-    if categoria_funcional in CATEGORIAS_PUNTUALES:
+    if categoria_funcional in CATEGORIAS_PUNTUALES or (cat_activa_memoria and not sustantivo_cambio_tema):
         calificado = True
+
 
     # ES_ESPECÍFICO: el cliente pide un producto concreto por marca/modelo (Lovense
     # Lush, Satisfyer Pro 2, Tenga Egg, We-Vibe Chorus...). En ese caso hay que

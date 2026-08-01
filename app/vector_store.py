@@ -196,10 +196,8 @@ async def search_semantic_products(
     qdrant_filter = {}
     if filter_conditions:
         qdrant_filter["must"] = filter_conditions
-    if exclude_ids:
-        qdrant_filter["must_not"] = [{"has_id": exclude_ids}]
-
-    search_payload = {"vector": vector, "limit": limit * 2, "with_payload": True}
+    exclude_set = set(int(i) for i in (exclude_ids or []) if str(i).isdigit())
+    search_payload = {"vector": vector, "limit": max(limit * 3, 20), "with_payload": True}
     if qdrant_filter:
         search_payload["filter"] = qdrant_filter
 
@@ -215,6 +213,9 @@ async def search_semantic_products(
             candidatos = []
             for res in results:
                 p = res.get("payload") or {}
+                pid = int(p.get("id", 0))
+                if pid in exclude_set:
+                    continue
                 score = res.get("score", 0.0)
                 if score < threshold:
                     continue
@@ -224,6 +225,7 @@ async def search_semantic_products(
                 candidatos.append(p)
                 if len(candidatos) >= limit:
                     break
+
             log.info("Qdrant '%s' -> %d candidatos thr %.2f cat=%s gen=%s via %s", query[:40], len(candidatos), threshold, categoria_funcional, genero, base)
             return candidatos
         except Exception as exc:
