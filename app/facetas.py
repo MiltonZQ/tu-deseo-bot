@@ -171,7 +171,17 @@ _ZONA_POR_TIPO = {
 }
 
 # Tipos que por naturaleza no se aplican a una zona concreta.
-_TIPOS_SIN_ZONA = {"lubricante", "cosmetica", "lenceria", "bondage", "juego", "accesorio"}
+#
+# EL LUBRICANTE NO ESTÁ AQUÍ: sí distingue anal de uso general, y esa distinción
+# es la que el cliente pide más ("lubricante anal"). Mientras estuvo en la lista,
+# `zona` se forzaba a "ninguna" y la petición no se podía filtrar: la consulta
+# exacta daba 0 filas y la escalera de relajación devolvía lubricantes cualesquiera.
+_TIPOS_SIN_ZONA = {"cosmetica", "lenceria", "bondage", "juego", "accesorio"}
+
+# Pero un lubricante solo admite ESAS dos zonas. Las demás que las reglas puedan
+# inferir del nombre ("piel sensible" → cuerpo) no describen para qué sirve y lo
+# sacarían de las búsquedas generales sin aportar nada.
+_ZONAS_PERMITIDAS_POR_TIPO = {"lubricante": {"anal", "ninguna"}}
 
 _CLAVES_VIBRA = ("vibrador", "vibradora", "vibra", "vibracion", "vibrante",
                  "vibrating", "pulsante", "modos de vibracion")
@@ -185,9 +195,17 @@ _ATRIBUTOS = {
     "ventosa": ("ventosa",),
     "vidrio": ("vidrio", "cristal"),
     "doble": ("doble", "doble estimulacion", "doble penetracion"),
-    "sabor": ("sabor", "sabores", "comestible"),
-    "agua": ("base de agua", "base agua", "h2o"),
+    # Los saborizados del catálogo casi nunca llevan la palabra "sabor": se
+    # llaman por la fruta ("BLIX CEREZA 30 ML"). Sin estas claves quedaban sin
+    # marcar y la rama "con sabores" del menú salía con 2 productos de 20.
+    # OJO: "menta" NO va aquí — es la clave de `frio`, y esos lubricantes se
+    # venden por el efecto, no por el sabor.
+    "sabor": ("sabor", "sabores", "comestible", "cereza", "fresa", "chocolate",
+              "maracuya", "sandia", "mango", "lychee", "chicle", "whisky", "bombom"),
+    "agua": ("base de agua", "base agua", "h2o", "hidrosoluble", "acuoso"),
     "silicona": ("silicona",),
+    "hibrido": ("hibrido", "hibrida"),
+    "neutro": ("neutro", "neutra", "sin sabor", "sin olor"),
     "desensibilizante": ("desensibiliz", "anestesico", "relajante anal"),
     "calor": ("caliente", "sensacion caliente", "calor"),
     "frio": ("frio", "menta", "efecto frio"),
@@ -266,6 +284,22 @@ def clasificar_por_reglas(nombre: str, descripcion: str | None = "",
     atributos = sorted(
         attr for attr, claves in _ATRIBUTOS.items() if _alguna(claves, completo)
     )
+
+    # Ningún nombre del catálogo dice "base de agua", pero un lubricante que no
+    # declara silicona ni híbrido lo es. Sin esta inferencia la rama "base de
+    # agua" del menú quedaba vacía (0 de 20 productos) y la pregunta al cliente
+    # no filtraba nada.
+    if tipo == "lubricante" and not ({"silicona", "hibrido"} & set(atributos)):
+        atributos = sorted(set(atributos) | {"agua"})
+
+    # Un desensibilizante es de uso anal aunque el nombre no lo diga: es para lo
+    # único que se vende. Es lo que hace filtrable "lubricante anal".
+    if tipo in ("lubricante", "cosmetica") and "desensibilizante" in atributos:
+        zona = "anal"
+
+    _permitidas = _ZONAS_PERMITIDAS_POR_TIPO.get(tipo or "")
+    if _permitidas and zona not in _permitidas:
+        zona = "ninguna"
 
     # GÉNERO
     genero = "unisex"
@@ -438,8 +472,14 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
 _ATRIBUTOS_CLIENTE: tuple[tuple[tuple[str, ...], str, tuple[str, ...], str | None], ...] = (
     (("sabor", "sabores", "saborizado", "comestible"), "sabor",
      ("lubricante", "cosmetica"), "lubricante"),
-    (("base de agua", "base agua", "a base de agua"), "agua",
+    (("base de agua", "base agua", "a base de agua", "con agua", "hidrosoluble"), "agua",
      ("lubricante", "cosmetica"), "lubricante"),
+    # Solo las palabras inequívocas. "normal" o "sencillo" también significan
+    # neutro para un cliente, pero como `tipo_implicito` es lubricante, un
+    # "quiero algo sencillo" hablando de vibradores cambiaría de tema.
+    (("neutro", "neutra", "sin sabor", "sin olor"), "neutro",
+     ("lubricante", "cosmetica"), "lubricante"),
+    (("hibrido", "hibrida"), "hibrido", ("lubricante", "cosmetica"), "lubricante"),
     (("silicona", "de silicona"), "silicona", (), None),
     (("desensibilizante", "anestesico", "relajante anal"), "desensibilizante",
      ("lubricante", "cosmetica"), "lubricante"),

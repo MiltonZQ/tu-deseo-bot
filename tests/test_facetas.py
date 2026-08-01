@@ -161,3 +161,76 @@ def test_no_hay_coincidencias_dentro_de_otras_palabras():
     assert f.tipo != "funda"
     f2 = facetas.clasificar_por_reglas("Arnes Strap-On", "Para doble penetracion", "")
     assert f2.zona != "pene"
+
+
+# ── Lubricantes: sin estas facetas, la pregunta de clarificación no filtra ──
+#
+# Antes de esto, un cliente al que se le preguntaba "¿base de agua, silicona,
+# anal o sabores?" recibía lo mismo respondiera lo que respondiera: ninguno de
+# los ~20 lubricantes tenía el atributo `agua`, `lubricante` estaba en
+# `_TIPOS_SIN_ZONA` (así que "anal" no era filtrable), y `hibrido`/`neutro` no
+# existían. La consulta exacta daba 0 filas y la escalera de relajación soltaba
+# el atributo, devolviendo lubricantes cualesquiera.
+
+def test_lubricante_generico_es_base_agua():
+    f = facetas.clasificar_por_reglas("LUBRICANTE NEUTRO ELIXIR 100ML")
+    assert f.tipo == "lubricante"
+    assert "agua" in f.atributos
+    assert "neutro" in f.atributos
+
+
+def test_lubricante_de_silicona_no_es_base_agua():
+    f = facetas.clasificar_por_reglas("LUBRICANTE SILICONA ELIXIR 30ML")
+    assert "silicona" in f.atributos and "agua" not in f.atributos
+
+
+def test_lubricante_hibrido_se_reconoce():
+    f = facetas.clasificar_por_reglas("LUBRICANTE INTIMO HIBRIDO ELIXIR")
+    assert "hibrido" in f.atributos and "agua" not in f.atributos
+
+
+def test_lubricante_anal_tiene_zona_anal():
+    f = facetas.clasificar_por_reglas("LUBRICANTE ANAL ELIXIR 30ML")
+    assert f.tipo == "lubricante" and f.zona == "anal"
+
+
+def test_desensibilizante_implica_zona_anal():
+    f = facetas.clasificar_por_reglas("LUBRICANTE DESENSIBILIZANTE ANESTESY 30ML")
+    assert f.zona == "anal" and "desensibilizante" in f.atributos
+
+
+def test_lubricante_de_piel_sensible_no_se_va_a_zona_cuerpo():
+    """Un lubricante solo distingue anal / uso general.
+
+    La regla de zona "piel"→cuerpo lo sacaría de las búsquedas por zona sin
+    describir para qué sirve.
+    """
+    f = facetas.clasificar_por_reglas("LUBRICANTE INTIMO PIEL SENSIBLE ACIDO HIALURONICO")
+    assert f.zona == "ninguna"
+
+
+def test_blix_de_fruta_queda_marcado_como_sabor():
+    """El nombre no dice "lubricante", así que el tipo lo decide el LLM — pero el
+    atributo sale de reglas y `clasificar` lo conserva sobre el resultado del LLM.
+    """
+    f = facetas.clasificar_por_reglas("BLIX CEREZA 30 ML")
+    assert "sabor" in f.atributos
+
+
+def test_menta_es_efecto_frio_no_sabor():
+    """Regresión: meter "menta" entre las claves de sabor marcaba como saborizado
+    un lubricante que se vende por su efecto frío."""
+    f = facetas.clasificar_por_reglas("Lubricante Frio Menta 30 Ml Sen Intimo")
+    assert "frio" in f.atributos and "sabor" not in f.atributos
+
+
+def test_cliente_pide_neutro_y_se_traduce_a_atributo():
+    r = facetas.fusionar_restricciones({"tipo": "lubricante"},
+                                       facetas.interpretar_mensaje("neutro"))
+    assert r["tipo"] == "lubricante" and "neutro" in r["atributos"]
+
+
+def test_cliente_pide_hibrido_y_se_traduce_a_atributo():
+    r = facetas.fusionar_restricciones({"tipo": "lubricante"},
+                                       facetas.interpretar_mensaje("hibrido"))
+    assert r["tipo"] == "lubricante" and "hibrido" in r["atributos"]
