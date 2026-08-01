@@ -128,3 +128,46 @@ def test_reset_sigue_vaciando_el_estado():
     sql, params = _upsert(reset=True)
     assert "productos_mostrados = '{}'" in sql, f"el reset debe vaciar la lista.\nSQL: {sql}"
     assert params == ("573001112233",)
+
+
+# ── Facetas de producto ──
+# El sync de WooCommerce corre periódicamente y reclasifica. Si pisara las
+# correcciones hechas a mano desde el panel, el operador tendría que volver a
+# corregir el mismo producto después de cada sync y perdería la confianza en el
+# panel. Por eso `revisado_por_humano` es una barrera dura.
+
+def _set_facetas(**kwargs) -> tuple[str, tuple]:
+    from app import facetas as F
+    conn = _ConnEspia()
+    original, db._pool = getattr(db, "_pool", None), _PoolEspia(conn)
+    try:
+        f = F.Facetas(tipo="plug", zona="anal", vibra=True, control="app",
+                      genero_uso="unisex", atributos=["silicona"])
+        asyncio.run(db.set_facetas_producto(123, f, **kwargs))
+    finally:
+        db._pool = original
+    assert conn.llamadas, "no se ejecutó ninguna query"
+    return conn.llamadas[-1]
+
+
+def test_el_sync_no_pisa_una_correccion_manual():
+    sql, _ = _set_facetas(origen="reglas")
+    assert "revisado_por_humano" in sql and "FALSE" in sql.upper(), (
+        f"el UPDATE automático debe excluir los productos revisados a mano.\nSQL: {sql}")
+
+
+def test_la_correccion_manual_si_puede_escribir_siempre():
+    sql, _ = _set_facetas(origen="manual")
+    cuerpo = sql.split("WHERE")[1] if "WHERE" in sql else ""
+    assert "revisado_por_humano = FALSE" not in cuerpo.replace("  ", " "), (
+        f"una edición manual no puede bloquearse a sí misma.\nSQL: {sql}")
+    assert "revisado_por_humano = TRUE" in sql, (
+        f"editar a mano debe marcar el producto como revisado.\nSQL: {sql}")
+
+
+def test_se_guardan_todas_las_facetas():
+    sql, params = _set_facetas(origen="reglas")
+    for col in ("tipo", "zona", "vibra", "control", "genero_uso", "atributos",
+                "clasificado_por"):
+        assert col in sql, f"falta {col}.\nSQL: {sql}"
+    assert "plug" in params and "anal" in params and True in params

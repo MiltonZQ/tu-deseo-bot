@@ -98,6 +98,44 @@ def _clean_html(text: str | None) -> str:
     return clean.strip()
 
 
+async def _clasificar_y_guardar(producto_id: int, nombre: str,
+                                descripcion: str | None, categoria: str | None,
+                                permitir_llm: bool = True) -> None:
+    """Calcula y guarda las facetas de un producto (ver app/facetas.py).
+
+    Nunca rompe la sincronización: si la clasificación falla, el producto queda
+    con las facetas que ya tuviera y el backfill lo recoge después.
+    `set_facetas_producto` respeta lo corregido a mano desde el panel.
+    """
+    try:
+        from app import facetas
+        f, origen = await facetas.clasificar(
+            nombre, descripcion, categoria, permitir_llm=permitir_llm)
+        if f.tipo:
+            await db.set_facetas_producto(producto_id, f, origen=origen)
+    except Exception:
+        log.warning("No se pudieron calcular las facetas de '%s'", nombre[:50])
+
+
+async def _clasificar_pendientes_con_llm(limite: int = 60) -> int:
+    """Resuelve con el LLM los productos que las reglas no supieron clasificar.
+
+    Corre UNA vez al final del sync y está acotado: sobre el catálogo real son
+    unos 6 de 246, pero el tope evita que un cambio masivo dispare el coste.
+    """
+    try:
+        pendientes = await db.get_productos_sin_clasificar(limit=limite)
+    except Exception:
+        return 0
+    for p in pendientes:
+        await _clasificar_y_guardar(
+            p["id"], p["nombre"], p.get("descripcion"), p.get("categoria"),
+            permitir_llm=True)
+    if pendientes:
+        log.info("Facetas resueltas con LLM para %d productos", len(pendientes))
+    return len(pendientes)
+
+
 async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
     """Sincroniza la tabla `productos` con los datos de WooCommerce.
 
@@ -186,6 +224,14 @@ async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
             )
             if res:
                 insertados += 1
+                # Facetas con REGLAS dentro del bucle: es gratis e instantáneo, y
+                # deja el producto consultable de inmediato. Los pocos que las
+                # reglas no deciden se resuelven abajo con el LLM, fuera del bucle,
+                # para no meter cientos de llamadas de red en la sincronización.
+                await _clasificar_y_guardar(
+                    res["id"], nombre, descripcion, categoria, permitir_llm=False)
+
+    await _clasificar_pendientes_con_llm()
 
     # Actualizar prompt de conocimiento
     await catalog.export_knowledge_md()
@@ -266,7 +312,7 @@ async def process_webhook_payload(payload: dict, event_topic: str) -> bool:
 
             activo = (payload.get("status") == "publish") and (stock_status == "instock")
 
-            await conn.execute(
+            fila = await conn.fetchrow(
                 """
                 INSERT INTO productos (
                     woo_id, nombre, descripcion, categoria, precio, precio_regular, precio_oferta,
@@ -287,11 +333,16 @@ async def process_webhook_payload(payload: dict, event_topic: str) -> bool:
                     permalink = EXCLUDED.permalink,
                     activo = EXCLUDED.activo,
                     updated_at = now()
+                RETURNING id
                 """,
                 woo_id, nombre, descripcion, categoria, precio, reg_p, sale_p,
                 sku_pos, stock_status, imagen_url, galeria_urls, permalink, activo
             )
             log.info("Webhook WooCommerce: Producto woo_id=%d ('%s') actualizado en DB", woo_id, nombre)
+
+        # Un solo producto: aquí sí vale la pena consultar al LLM si hace falta.
+        if fila:
+            await _clasificar_y_guardar(fila["id"], nombre, descripcion, categoria)
 
     # Actualizar catalogo.md en segundo plano
     await catalog.export_knowledge_md()

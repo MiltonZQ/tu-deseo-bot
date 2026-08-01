@@ -234,6 +234,75 @@ async def run_migrations() -> None:
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_productos_woo_id ON productos(woo_id)"
         )
+        # ── Facetas del producto (ver app/facetas.py) ──
+        # Se guardan en la DB en vez de recalcularse en cada consulta. Antes, cada
+        # mensaje del cliente bajaba las ~250 filas del catálogo y las clasificaba
+        # en Python (hasta 4 veces por consulta), y el resultado no quedaba en
+        # ningún sitio: corregir un producto mal clasificado exigía un deploy.
+        for _col, _tipo in (
+            ("tipo", "TEXT"),                       # qué ES: vibrador, plug, enema…
+            ("zona", "TEXT"),                       # dónde se usa: anal, clitoris…
+            ("vibra", "BOOLEAN"),                   # distingue "vibrador anal" de "plug anal"
+            ("control", "TEXT"),                    # app | remoto | manual | ninguno
+            ("genero_uso", "TEXT"),                 # hombre | mujer | pareja | unisex
+            ("atributos", "TEXT[] DEFAULT '{}'"),   # realista, ventosa, sabor…
+            ("clasificado_por", "TEXT"),            # reglas | llm | manual
+            ("revisado_por_humano", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ):
+            await conn.execute(
+                f"ALTER TABLE productos ADD COLUMN IF NOT EXISTS {_col} {_tipo}"
+            )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_productos_facetas ON productos(tipo, zona)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_productos_genero ON productos(genero_uso)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_productos_atributos ON productos USING GIN(atributos)"
+        )
+
+
+async def set_facetas_producto(producto_id: int, facetas, origen: str = "reglas") -> bool:
+    """Guarda las facetas de un producto. Devuelve True si escribió.
+
+    `origen` es 'reglas' | 'llm' | 'manual'.
+
+    BARRERA: una escritura automática (reglas/llm) NUNCA pisa un producto con
+    `revisado_por_humano = TRUE`. El sync de WooCommerce corre periódicamente y
+    reclasifica todo; sin esta barrera, cada corrección hecha desde el panel se
+    perdería en el siguiente sync y el operador dejaría de confiar en el panel.
+    Una edición manual sí escribe siempre, y marca el producto como revisado.
+    """
+    manual = origen == "manual"
+    sql = """
+        UPDATE productos SET
+            tipo = $2, zona = $3, vibra = $4, control = $5, genero_uso = $6,
+            atributos = $7::text[], clasificado_por = $8,
+            revisado_por_humano = {revisado},
+            updated_at = now()
+        WHERE id = $1{barrera}
+    """.format(
+        revisado="TRUE" if manual else "revisado_por_humano",
+        barrera="" if manual else " AND revisado_por_humano = FALSE",
+    )
+    async with _pool.acquire() as conn:
+        res = await conn.execute(
+            sql, producto_id, facetas.tipo, facetas.zona, facetas.vibra,
+            facetas.control, facetas.genero_uso, list(facetas.atributos), origen,
+        )
+    return bool(res) and not res.endswith(" 0")
+
+
+async def get_productos_sin_clasificar(limit: int = 1000) -> list[dict]:
+    """Productos a los que aún no se les calcularon las facetas."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, nombre, descripcion, categoria FROM productos "
+            "WHERE tipo IS NULL ORDER BY id LIMIT $1",
+            limit,
+        )
+    return [dict(r) for r in rows]
 
 
 async def seed_catalogo_if_empty(csv_path) -> int:
