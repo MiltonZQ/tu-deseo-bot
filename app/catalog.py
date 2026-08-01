@@ -1859,9 +1859,27 @@ async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] |
         return [dict(r) for r in await conn.fetch(sql, *params)]
 
 
+async def contar_por_restricciones(restricciones: dict) -> int:
+    """Cuántos productos ofrecibles cumplen EXACTAMENTE estas restricciones.
+
+    Es lo que decide si tiene sentido ofrecer "ver más": con 3 opciones en total
+    no se pregunta "¿deseas ver más diseños?", se pregunta cuál quiere.
+    """
+    restricciones = {k: v for k, v in (restricciones or {}).items()
+                     if k != "_implicitos" and v}
+    if not restricciones:
+        return 0
+    try:
+        filas = await _consultar_restricciones(restricciones, None, 500)
+        return len(filas)
+    except Exception:
+        return 0
+
+
 async def buscar_por_restricciones(restricciones: dict,
                                    exclude_ids: list[int] | None = None,
-                                   limit: int = 5) -> Resultado:
+                                   limit: int = 5,
+                                   permitir_relajar: bool = True) -> Resultado:
     """Busca productos que cumplan las restricciones, cediendo de forma explícita.
 
     1. Intenta la combinación exacta.
@@ -1879,6 +1897,13 @@ async def buscar_por_restricciones(restricciones: dict,
     exactos = await _consultar_restricciones(restricciones, exclude_ids, limit)
     if exactos:
         return Resultado(productos=exactos, restricciones=restricciones)
+
+    # Sin relajación (caso "ver más"): si ya se mostró todo lo que cumple, la
+    # respuesta correcta es "no queda más", no rellenar con otra cosa. Pasó en
+    # producción: había 3 vibradores anales, se mostraron los 3, y al pedir "ver
+    # más diseños" se soltaba la zona y llegaban vibradores genéricos.
+    if not permitir_relajar:
+        return Resultado(restricciones=restricciones)
 
     for campo in _ESCALERA_RELAJACION:
         if campo not in restricciones:

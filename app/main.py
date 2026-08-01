@@ -488,17 +488,35 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     relajado = info.get("relajado")
     if relajado and relajado != "todo":
         pedido = info.get("restricciones") or {}
-        _COMO_SE_DICE = {
-            "vibra": "con vibración",
-            "control": "con ese tipo de control",
-            "zona": f"para {pedido.get('zona', 'esa zona')}",
-            "genero_uso": "para ese uso",
-            "atributos": "con esas características",
-            "tipo": f"de {cat_nombre}",
+        _ZONAS_EN_TEXTO = {
+            "anal": "anales", "clitoris": "de clítoris", "vaginal": "vaginales",
+            "pene": "para el pene", "pezones": "para pezones", "cuerpo": "corporales",
         }
-        aviso = (f"No tengo exactamente {cat_nombre} {_COMO_SE_DICE.get(relajado, '')} "
-                 f"en este momento, pero mira estas opciones muy parecidas 👇\n")
+        _TIPOS_EN_TEXTO = {
+            "vibrador": "vibradores", "succionador": "succionadores", "plug": "plugs",
+            "dildo": "dildos", "anillo": "anillos", "funda": "fundas",
+            "masturbador": "masturbadores", "bomba": "bombas", "arnes": "arneses",
+            "enema": "duchas anales", "lubricante": "lubricantes", "bolas": "bolas",
+            "lenceria": "prendas", "bondage": "artículos de bondage", "juego": "juegos",
+        }
+        # Se describe lo que el cliente PIDIÓ, no la etiqueta interna: decir
+        # "No tengo exactamente anal para anal" (lo que salía antes) no es
+        # castellano ni le dice nada al cliente.
+        que_pidio = _TIPOS_EN_TEXTO.get(pedido.get("tipo") or "", cat_nombre)
+        if relajado == "zona" and pedido.get("zona"):
+            que_pidio += " " + _ZONAS_EN_TEXTO.get(pedido["zona"], "")
+        elif relajado == "vibra":
+            que_pidio += " con vibración"
+        elif relajado == "control":
+            que_pidio += " con ese tipo de control"
+        elif relajado == "tipo" and pedido.get("zona"):
+            que_pidio = _ZONAS_EN_TEXTO.get(pedido["zona"], que_pidio)
+        aviso = (f"No tengo exactamente {que_pidio.strip()} en este momento, "
+                 f"pero mira estas opciones muy parecidas 👇\n")
 
+    # El CTA depende de si QUEDAN opciones sin mostrar. Ofrecer "ver más diseños"
+    # cuando ya se mostró todo lleva al cliente a un callejón sin salida (y antes
+    # provocaba que el sistema rellenara con productos que no cumplían).
     if info.get("hay_mas"):
         intro = (f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Buena elección! Te muestro estas opciones de {cat_nombre} 👇")
@@ -506,8 +524,11 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     else:
         intro = (f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Perfecto! Estas son las opciones de {cat_nombre} que tenemos 👇")
-        cta = "¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
-    return f"{aviso}{intro}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
+        cta = "¿Cuál de estos te gustaría llevar? 😊"
+    # Con aviso, el aviso ES la entrada: encadenar los dos dejaba dos saludos
+    # seguidos ("No tengo exactamente… 👇" + "¡Buena elección!… 👇").
+    encabezado = aviso.rstrip("\n") if aviso else intro
+    return f"{encabezado}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
 
 
 async def _enviar_fotos_productos(
@@ -884,8 +905,12 @@ async def _recuperar_candidatos(
     # expresar "vibrador anal" como intersección y no como un cajón.
     relajado = None
     if not candidatos and debe_mostrar and restricciones.get("tipo"):
+        # En un "ver más" NO se relaja: el cliente pide más de LO MISMO. Si ya
+        # se mostró todo lo que cumple, la respuesta es "no queda más", no
+        # rellenar con productos de otra zona o tipo.
         res = await catalog.buscar_por_restricciones(
-            restricciones, exclude_ids=exclude, limit=5)
+            restricciones, exclude_ids=exclude, limit=5,
+            permitir_relajar=not _es_ver_mas(user_text))
         if res.productos:
             candidatos = res.productos
             relajado = res.relajado
@@ -996,8 +1021,21 @@ async def _recuperar_candidatos(
         except AttributeError:
             _es_soft_actual = False
 
+    # ¿Ofrecer "ver más"? Solo si quedan productos que CUMPLEN lo que pidió el
+    # cliente y todavía no vio. Con 3 opciones en total no se pregunta "¿deseas
+    # ver más diseños?" — se pregunta cuál quiere. Antes esto se calculaba con un
+    # recuento por categoría legacy que ignoraba las restricciones, así que el
+    # bot ofrecía más diseños de algo que ya había mostrado entero.
     try:
         if clasif.get("es_especifico"):
+            # Pidió un producto concreto por nombre: se muestran esos y ya.
+            total_en_categoria = len(candidatos)
+            hay_mas = False
+        elif restricciones.get("tipo") and not relajado:
+            total_en_categoria = await catalog.contar_por_restricciones(restricciones)
+            hay_mas = bool(candidatos) and total_en_categoria > (len(exclude) + len(candidatos))
+        elif relajado:
+            # Se cedió en algo para poder responder: no prometer más de lo mismo.
             total_en_categoria = len(candidatos)
             hay_mas = False
         else:

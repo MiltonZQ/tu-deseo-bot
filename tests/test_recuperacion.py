@@ -254,3 +254,63 @@ def test_el_panel_lista_solo_ofrecibles_por_defecto():
     bloque = fuente[i:i + 1500]
     assert "solo_ofrecibles = not todos" in bloque, (
         "por defecto el panel debe mostrar solo lo que el bot puede ofrecer")
+
+
+# ── "Ver más" no puede traer productos que no cumplen ──
+# Reportado: había 3 vibradores anales, se mostraron los 3, el bot igual ofreció
+# "¿deseas ver más diseños?" y al pedirlos soltó la zona y mandó vibradores
+# genéricos (Pigly, Pandora, Rocco) que no son anales.
+
+def test_ver_mas_no_relaja_y_agota_limpio():
+    """Si ya se mostró todo lo que cumple, no se rellena con otra cosa."""
+    ya_vistos = [4]  # el único vibrador anal del catálogo de prueba
+    res = _buscar({"tipo": "vibrador", "zona": "anal"},
+                  exclude_ids=ya_vistos, permitir_relajar=False)
+    assert res.productos == [], [p["nombre"] for p in res.productos]
+    assert res.relajado is None, "no debe reportar relajación: simplemente se agotó"
+
+
+def test_la_busqueda_normal_sigue_relajando():
+    """La relajación sigue viva para una búsqueda nueva (no es un 'ver más')."""
+    res = _buscar({"tipo": "succionador", "zona": "anal"}, permitir_relajar=True)
+    assert res.relajado, "una consulta nueva sí puede ceder, avisando"
+
+
+def test_contar_por_restricciones():
+    """Saber cuántos hay es lo que decide si se ofrece 'ver más'."""
+    conn = _Conn(CATALOGO)
+    orig, db._pool = getattr(db, "_pool", None), _Pool(conn)
+    try:
+        n = asyncio.run(catalog.contar_por_restricciones({"tipo": "vibrador", "zona": "anal"}))
+    finally:
+        db._pool = orig
+    assert n == 1, n
+
+
+def test_con_pocas_opciones_no_se_ofrece_ver_mas():
+    """Con 3 resultados en total, el CTA pregunta cuál quiere, no ofrece más."""
+    m = _main()
+    prods = [{"id": i, "nombre": f"Producto {i}", "precio": 50000} for i in (1, 2, 3)]
+    txt = m._texto_desde_candidatos(prods, {"intencion": "vibradores", "hay_mas": False})
+    assert "ver más diseños" not in txt.lower(), txt
+    assert "cuál" in txt.lower(), txt
+
+
+def test_con_mas_opciones_si_se_ofrece_ver_mas():
+    m = _main()
+    prods = [{"id": i, "nombre": f"Producto {i}", "precio": 50000} for i in range(1, 6)]
+    txt = m._texto_desde_candidatos(prods, {"intencion": "vibradores", "hay_mas": True})
+    assert "ver más diseños" in txt.lower(), txt
+
+
+def test_el_aviso_de_relajacion_es_legible():
+    """Salía 'No tengo exactamente anal para anal en este momento'."""
+    m = _main()
+    prods = [{"id": 1, "nombre": "Vibrador Pigly", "precio": 90900}]
+    txt = m._texto_desde_candidatos(prods, {
+        "intencion": "anal", "relajado": "zona", "hay_mas": False,
+        "restricciones": {"tipo": "vibrador", "zona": "anal"}})
+    assert "anal para anal" not in txt, txt
+    assert "vibradores anales" in txt, txt
+    # Un solo encabezado, no dos saludos encadenados.
+    assert "¡Buena elección!" not in txt and "¡Perfecto!" not in txt, txt
