@@ -565,52 +565,64 @@ async def upsert_conversation_state(
             )
             return
 
-        # Construir SET dinámico solo con los campos provistos.
-        # OJO: los placeholders arrancan en $2 porque $1 ya está tomado por wa_id
-        # en el VALUES ($1, ...) de abajo, y la llamada pasa `wa_id, *params`.
-        # Arrancar en $1 corría todos los índices y hacía fallar el UPDATE
-        # siempre ("the server expects N arguments, N+1 were passed" o un choque
-        # de tipos), así que el estado de conversación nunca se persistía.
+        # Construir INSERT y SET dinámicos con los campos provistos.
+        #
+        # CRÍTICO: cada campo va en LAS DOS RAMAS del upsert (columnas del INSERT y
+        # SET del ON CONFLICT). Antes el INSERT era fijo — `VALUES ($1, FALSE, '{}')` —
+        # y los campos solo se escribían en el SET, que Postgres ejecuta ÚNICAMENTE
+        # cuando hay conflicto. Resultado: en el PRIMER turno de un contacto (no hay
+        # fila todavía) se insertaba `productos_mostrados = '{}'` y los ids de las
+        # fotos recién enviadas se perdían. Al turno siguiente el filtro
+        # anti-repetición leía una lista vacía y el cliente recibía otra vez las
+        # mismas fotos al pedir "ver más". Afectaba a todo contacto nuevo.
+        #
+        # OJO con los placeholders: arrancan en $2 porque $1 es wa_id, y la llamada
+        # pasa `wa_id, *params`. Arrancar en $1 corre todos los índices y hace fallar
+        # el execute entero.
+        cols: list[str] = ["wa_id"]
+        vals: list[str] = ["$1"]
         sets: list[str] = []
         params: list = []
         idx = 2
+
+        def _campo(col: str, valor, expr_update: str, expr_insert: str) -> None:
+            nonlocal idx
+            cols.append(col)
+            vals.append(expr_insert)
+            sets.append(f"{col} = {expr_update}")
+            params.append(valor)
+            idx += 1
+
         if categoria_busqueda is not None:
-            sets.append(f"categoria_busqueda = ${idx}")
-            params.append(categoria_busqueda)
-            idx += 1
+            _campo("categoria_busqueda", categoria_busqueda, f"${idx}", f"${idx}")
         if categoria_funcional is not None:
-            sets.append(f"categoria_funcional = ${idx}")
-            params.append(categoria_funcional)
-            idx += 1
+            _campo("categoria_funcional", categoria_funcional, f"${idx}", f"${idx}")
         if genero is not None:
-            sets.append(f"genero = ${idx}")
-            params.append(genero)
-            idx += 1
+            _campo("genero", genero, f"${idx}", f"${idx}")
         if calificado is not None:
-            sets.append(f"calificado = ${idx}")
-            params.append(calificado)
-            idx += 1
+            _campo("calificado", calificado, f"${idx}", f"${idx}")
         if add_productos_mostrados:
-            # Añadir a los existentes con UNION (sin duplicados).
+            # UPDATE: unir con lo ya guardado, sin duplicados.
             # OJO: usar ${idx} (un solo $) como placeholder de asyncpg. Escribir
             # $$ activa el 'dollar-quoted string' de Postgres y rompe el SQL con
-            # 'unterminated dollar-quoted string', lo que hace que NUNCA se persistan
-            # los productos mostrados (causa raíz del bug de repetir fotos en 'ver más').
+            # 'unterminated dollar-quoted string'.
             # IMPORTANTE: calificar la columna como conversation_state.productos_mostrados
             # para evitar AmbiguousColumnError (en ON CONFLICT, Postgres no sabe si
-            # refiere a la fila existente o a EXCLUDED). Sin esto, la persistencia falla
-            # y productos_mostrados nunca se guarda → se repiten fotos.
-            sets.append(
-                f"productos_mostrados = ARRAY(SELECT DISTINCT unnest(conversation_state.productos_mostrados || ${idx}::bigint[]))"
+            # refiere a la fila existente o a EXCLUDED).
+            _campo(
+                "productos_mostrados",
+                list(add_productos_mostrados),
+                f"ARRAY(SELECT DISTINCT unnest(conversation_state.productos_mostrados || ${idx}::bigint[]))",
+                f"${idx}::bigint[]",
             )
-            params.append(list(add_productos_mostrados))
-            idx += 1
+        cols.append("updated_at")
+        vals.append("now()")
         sets.append("updated_at = now()")
 
         await conn.execute(
             f"""
-            INSERT INTO conversation_state (wa_id, calificado, productos_mostrados, updated_at)
-            VALUES ($1, FALSE, '{{}}', now())
+            INSERT INTO conversation_state ({', '.join(cols)})
+            VALUES ({', '.join(vals)})
             ON CONFLICT (wa_id) DO UPDATE SET {', '.join(sets)}
             """,
             wa_id, *params,

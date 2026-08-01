@@ -253,3 +253,85 @@ def test_un_fallo_de_envio_no_cancela_las_fotos_restantes():
                 "cada envío debe tener su propio try/except")
             return
     raise AssertionError("No se encontró _enviar_fotos_productos")
+
+
+# ── Numeración continua entre rondas ──
+# Al pedir "ver más", la segunda tanda numeraba otra vez desde 1️⃣, así que había
+# dos productos distintos con el mismo número. Como al final se le pide al cliente
+# "indícame los números", eso hacía ambiguo el pedido.
+
+def _main():
+    """Importa app.main con las dependencias web stubeadas.
+
+    main.py importa fastapi/starlette, que no están en el entorno de tests. Los
+    stubs solo necesitan sostener el import: las funciones bajo prueba
+    (_texto_desde_candidatos, _numero_lista) son puras.
+    """
+    import importlib
+
+    if "fastapi" not in sys.modules:
+        class _App:
+            def __init__(self, *a, **k):
+                pass
+
+            def _deco(self, *a, **k):
+                return lambda fn: fn
+
+            get = post = put = delete = middleware = _deco
+
+            def add_middleware(self, *a, **k):
+                pass
+
+            def include_router(self, *a, **k):
+                pass
+
+        def _param(*a, **k):
+            return None
+
+        fa = types.ModuleType("fastapi")
+        fa.FastAPI = _App
+        fa.Request = fa.BackgroundTasks = type("_X", (), {})
+        fa.HTTPException = type("HTTPException", (Exception,), {})
+        fa.Header = fa.Query = fa.Form = fa.Depends = fa.Cookie = fa.Body = _param
+        fa.status = types.SimpleNamespace(HTTP_302_FOUND=302, HTTP_401_UNAUTHORIZED=401)
+        fa.APIRouter = _App
+        resp = types.ModuleType("fastapi.responses")
+        resp.PlainTextResponse = resp.HTMLResponse = resp.JSONResponse = type("_R", (), {})
+        resp.RedirectResponse = type("_R", (), {})
+        fa.responses = resp
+        tmpl = types.ModuleType("fastapi.templating")
+        tmpl.Jinja2Templates = type("_T", (), {"__init__": lambda self, *a, **k: None})
+        st = types.ModuleType("starlette")
+        mw = types.ModuleType("starlette.middleware")
+        sess = types.ModuleType("starlette.middleware.sessions")
+        sess.SessionMiddleware = type("_M", (), {})
+        for name, mod in (("fastapi", fa), ("fastapi.responses", resp),
+                          ("fastapi.templating", tmpl), ("starlette", st),
+                          ("starlette.middleware", mw),
+                          ("starlette.middleware.sessions", sess)):
+            sys.modules[name] = mod
+    return importlib.import_module("app.main")
+
+
+def test_numeracion_continua_en_la_segunda_ronda():
+    m = _main()
+    prods = [{"id": i, "nombre": f"Producto {i}", "precio": 10000 * i} for i in (1, 2, 3)]
+    txt = m._texto_desde_candidatos(prods, {"intencion": "succionadores"}, offset=5)
+    assert "6️⃣" in txt and "7️⃣" in txt and "8️⃣" in txt, txt
+    assert "1️⃣" not in txt.replace("1️⃣0️⃣", ""), f"no debe reiniciar en 1: {txt}"
+
+
+def test_numeracion_primera_ronda_arranca_en_uno():
+    m = _main()
+    prods = [{"id": 1, "nombre": "Producto", "precio": 1000}]
+    assert "1️⃣" in m._texto_desde_candidatos(prods, {"intencion": "dildos"})
+
+
+def test_keycaps_mas_alla_de_diez():
+    m = _main()
+    assert m._numero_lista(1) == "1️⃣"
+    assert m._numero_lista(9) == "9️⃣"
+    assert m._numero_lista(10) == "🔟"
+    assert m._numero_lista(12) == "1️⃣2️⃣"
+    # El detector de selección numérica busca el carácter de keycap: debe seguir ahí.
+    assert "️⃣" in m._numero_lista(15)

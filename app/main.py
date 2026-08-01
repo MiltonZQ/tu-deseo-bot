@@ -416,8 +416,26 @@ _SIN_RESULTADO_MSG = (
 )
 
 
+_KEYCAPS = ("0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣")
+
+
+def _numero_lista(n: int) -> str:
+    """Numeración visual para las listas de producto.
+
+    1..10 usan el keycap correspondiente; a partir de 11 se concatenan los dígitos
+    (12 → 1️⃣2️⃣). Se mantiene siempre el carácter de keycap porque
+    `_es_seleccion_de_lista_mostrada` lo usa para reconocer que el bot mostró una
+    lista numerada en el turno anterior.
+    """
+    if n == 10:
+        return "🔟"
+    if 1 <= n < 10:
+        return _KEYCAPS[n]
+    return "".join(_KEYCAPS[int(d)] for d in str(n))
+
+
 def _texto_desde_candidatos(candidatos: list[dict], info: dict,
-                            mas_disenos: bool = False) -> str:
+                            mas_disenos: bool = False, offset: int = 0) -> str:
     """Redacta la lista de productos desde los candidatos reales del catálogo.
 
     Nombres, precios y marcadores [FOTO:ID] salen del mismo sitio del que salen
@@ -428,9 +446,13 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     cat_nombre = (info.get("intencion") or info.get("categoria_funcional")
                   or "productos").replace("-", " ")
     lineas, marcadores = [], []
-    for idx, p in enumerate(candidatos[:5], 1):
+    # offset: cuántos productos ya vio el cliente en esta misma búsqueda. La
+    # numeración CONTINÚA (6️⃣, 7️⃣…) en vez de reiniciar en 1️⃣, porque al final se
+    # le pide "indícame los números de los que quieres" y dos productos distintos
+    # con el mismo número hacen ambiguo el pedido.
+    for idx, p in enumerate(candidatos[:5], 1 + offset):
         precio_fmt = f"{int(p.get('precio', 0)):,}".replace(",", ".")
-        lineas.append(f"{idx}️⃣ *{p['nombre'][:60]}* — ${precio_fmt}")
+        lineas.append(f"{_numero_lista(idx)} *{p['nombre'][:60]}* — ${precio_fmt}")
         marcadores.append(f"[FOTO:{p['id']}]")
     if info.get("hay_mas"):
         intro = (f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
@@ -446,11 +468,12 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
 async def _enviar_fotos_productos(
     wa_id: str,
     candidatos: list[dict],
+    offset: int = 0,
 ) -> list[int]:
     enviados: list[int] = []
     fallidos: list[int] = []
     seen_ids: set[int] = set()
-    for idx, p in enumerate(candidatos, 1):
+    for idx, p in enumerate(candidatos, 1 + offset):
         if len(enviados) >= 5:
             break
         pid = p.get("id")
@@ -463,7 +486,7 @@ async def _enviar_fotos_productos(
         precio = p.get("precio", 0)
         precio_fmt = f"{int(precio):,}".replace(",", ".") if precio else "0"
         nombre = (p.get("nombre") or "")[:60]
-        caption = f"{idx}️⃣ *{nombre}*\n💰 ${precio_fmt}"
+        caption = f"{_numero_lista(idx)} *{nombre}*\n💰 ${precio_fmt}"
         # El try/except va DENTRO del bucle: antes envolvía el bucle entero, así que
         # la primera imagen que fallara (URL rota, formato que WhatsApp rechaza,
         # rate limit) cancelaba en silencio TODAS las fotos restantes. El cliente
@@ -1171,12 +1194,19 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
 
     es_ver_mas_pedido = _es_ver_mas(user_text) and info.get("debe_mostrar") and candidatos
     es_agotado = info.get("categoria_agotada")
+    # Numeración continua entre rondas: en un "ver más" los productos nuevos siguen
+    # desde donde quedó la ronda anterior. Solo se aplica cuando el TEXTO lo redacta
+    # el sistema; si lo escribe el LLM numera desde 1 por su cuenta y un offset en
+    # las fotos las desalinearía del texto.
+    offset_numeracion = 0
     if es_agotado:
         cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
         cat_nombre = cat_nombre.replace("-", " ")
         raw_reply = f"Te mostré todas las opciones de {cat_nombre} disponibles 😊 ¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
     elif es_ver_mas_pedido:
-        raw_reply = _texto_desde_candidatos(candidatos, info, mas_disenos=True)
+        offset_numeracion = len(ids_mostrados)
+        raw_reply = _texto_desde_candidatos(candidatos, info, mas_disenos=True,
+                                            offset=offset_numeracion)
     else:
         raw_reply = await openai_client.complete(
         user_text, history,
@@ -1253,7 +1283,9 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
                     "El texto del LLM no corresponde a los productos que se enviarán "
                     "— reemplazado por el texto determinista del catálogo",
                 )
-                reply = _texto_desde_candidatos(final_productos, info)
+                offset_numeracion = len(ids_mostrados)
+                reply = _texto_desde_candidatos(final_productos, info,
+                                                offset=offset_numeracion)
                 foto_ids, reply = _extraer_marcadores_foto(reply)
     else:
         # No debía mostrar fotos: el LLM solo califica. Si por error emitió
@@ -1366,7 +1398,8 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             log.exception("Error enviando imagen de medios de pago a %s", wa_id)
 
     # Enviar fotos (candidatos ya validados + filtrados por el filtro final).
-    enviados_ids = await _enviar_fotos_productos(wa_id, final_productos)
+    enviados_ids = await _enviar_fotos_productos(wa_id, final_productos,
+                                                 offset=offset_numeracion)
 
     if info["debe_mostrar"] and not enviados_ids and not pedido_creado_id:
         log.warning(
