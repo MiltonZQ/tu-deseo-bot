@@ -532,6 +532,29 @@ _RECHAZO_CROSS_SELLING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Selección de producto(s) por número de una lista YA enviada (ej: "el 2 y 3",
+# "dame el 1", "los numeros 2 y 4"). El cliente está eligiendo, no pidiendo ver
+# fotos de nuevo — reenviar el catálogo en este turno es ruido que confunde al
+# cliente justo cuando ya decidió qué comprar.
+_SELECCION_NUMERICA_RE = re.compile(
+    r"\b(?:el|los|las|la|numero|número)?\s*\d{1,2}\s*(?:(?:y|,|&|\+)\s*(?:el\s*)?\d{1,2}\s*)+\b|"
+    r"^\s*(?:el|la|dame\s+el|quiero\s+el)?\s*(?:numero|número)?\s*\d{1,2}\s*[\.,!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _es_seleccion_de_lista_mostrada(user_text: str, history: list[dict]) -> bool:
+    """El cliente elige por número ("el 2 y 3") de una lista que el bot ya
+    envió con emojis de numeración (1️⃣, 2️⃣...) en el turno anterior. Requiere
+    ver esa numeración reciente para no confundir cualquier número suelto
+    (ej: "tengo 25 años", una dirección) con una selección de producto."""
+    if not _SELECCION_NUMERICA_RE.search(user_text or ""):
+        return False
+    for m in reversed(history[-4:]):
+        if m.get("role") == "assistant" and "️⃣" in (m.get("content") or ""):
+            return True
+    return False
+
 
 def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     """Detecta si el cliente está en fase de venta/pago (no de exploración).
@@ -638,6 +661,17 @@ async def _recuperar_candidatos(
         debe_mostrar = False
         clasif["calificado"] = False
         log.info("Fase de venta detectada — fotos desactivadas este turno")
+
+    # REGLA ANTI-REENVÍO EN SELECCIÓN: si el cliente elige productos por número
+    # de una lista que el bot ya mostró (ej: "el 2 y 3"), NO reenviar fotos.
+    # Antes, calificado=True persistido hacía que CUALQUIER mensaje sin categoría
+    # nueva disparara mostrar_por_estado=True, y el sistema forzaba el reenvío de
+    # los mismos candidatos cuando el LLM (correctamente) no emitía marcadores
+    # [FOTO] en su respuesta de confirmación de venta.
+    if debe_mostrar and _es_seleccion_de_lista_mostrada(user_text, history):
+        debe_mostrar = False
+        clasif["calificado"] = False
+        log.info("Selección numérica de lista ya mostrada — fotos desactivadas este turno")
 
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []

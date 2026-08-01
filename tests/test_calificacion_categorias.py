@@ -1236,3 +1236,102 @@ def test_bug16_reglas_categoria_orden_lubricante_antes_que_anal_generico():
     assert idx_lubricante < idx_anal_generico, (
         "La regla de lubricantes-y-cuidado debe evaluarse ANTES que la regla "
         "genérica de 'anal' (juguetes)")
+
+
+# ── BUG 17: seleccionar productos por número reenviaba el catálogo completo ──
+# Caso reportado: bot muestra 5 dildos numerados (1️⃣-5️⃣), cliente responde
+# "El 2 y 3" (eligiendo), el LLM confirma la venta correctamente + ofrece
+# lubricante, PERO el sistema además reenvía las 5 fotos otra vez porque
+# calificado=True persistido hacía que cualquier mensaje sin categoría nueva
+# disparara mostrar_por_estado=True (y al no traer el LLM marcadores [FOTO],
+# se forzaban los candidatos del sistema como fallback).
+
+def _extraer_regex_concatenada(ruta: Path, nombre: str) -> str:
+    """Extrae el patrón de un re.compile(...) armado con strings concatenados
+    (mismo truco que test_foto_request_re_ver_mas_opciones)."""
+    tree = ast.parse(ruta.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == nombre:
+                    call = node.value
+                    if isinstance(call, ast.Call) and call.args:
+                        return ast.literal_eval(call.args[0])
+    raise AssertionError(f"No se pudo extraer {nombre} del fuente")
+
+
+def test_bug17_seleccion_numerica_re_detecta_casos_del_reporte():
+    """El regex real debe reconocer las formas de selección por número."""
+    pat = _extraer_regex_concatenada(_MAIN, "_SELECCION_NUMERICA_RE")
+    r = re.compile(pat, re.IGNORECASE)
+    for caso in ("El 2 y 3", "el 2 y 3", "2 y 3", "el 1", "dame el 1",
+                "quiero el 3", "los 2 y 4", "1,3", "3"):
+        assert r.search(caso), f"Debería detectar selección numérica en {caso!r}"
+
+
+def test_bug17_seleccion_numerica_re_no_falsos_positivos_en_mensajes_normales():
+    """No debe activarse con mensajes normales de exploración/datos sin relación
+    con elegir de una lista numerada."""
+    pat = _extraer_regex_concatenada(_MAIN, "_SELECCION_NUMERICA_RE")
+    r = re.compile(pat, re.IGNORECASE)
+    for caso in ("quiero un dildo realista", "vidrio", "mas diseños", "hola",
+                "vivo en bogota", "mi telefono es 3216549870", "quiero comprar",
+                "tienen anillos"):
+        assert not r.search(caso), f"No debería detectar selección numérica en {caso!r}"
+
+
+def _es_seleccion_de_lista_mostrada(user_text: str, history: list[dict], pat: str) -> bool:
+    """Réplica de _es_seleccion_de_lista_mostrada (app/main.py): solo cuenta
+    como selección si el patrón matchea Y el bot mostró una lista numerada
+    (1️⃣...) en los últimos 4 turnos."""
+    r = re.compile(pat, re.IGNORECASE)
+    if not r.search(user_text or ""):
+        return False
+    for m in reversed(history[-4:]):
+        if m.get("role") == "assistant" and "️⃣" in (m.get("content") or ""):
+            return True
+    return False
+
+
+def test_bug17_caso_reportado_no_reenvia_tras_lista_numerada():
+    """Caso EXACTO del chat: tras una lista numerada, 'El 2 y 3' debe marcarse
+    como selección (así el pipeline NO vuelve a mostrar fotos)."""
+    pat = _extraer_regex_concatenada(_MAIN, "_SELECCION_NUMERICA_RE")
+    history = [
+        {"role": "user", "content": "Mas diseños"},
+        {"role": "assistant", "content": (
+            "Mira estas opciones disponibles en dildos 👇\n"
+            "1️⃣ Consolador King Cock Cock-Light con Prepucio 6\" — $80,000\n"
+            "2️⃣ Consolador King Cock con Squirting 7\" — $60,000\n"
+            "3️⃣ DILDO REALISTA AYAMI 17CM CAMTOYZ — $100,000")},
+    ]
+    assert _es_seleccion_de_lista_mostrada("El 2 y 3", history, pat) is True
+
+
+def test_bug17_no_se_activa_sin_lista_numerada_reciente():
+    """Si el bot NO mostró una lista numerada recientemente, un número suelto
+    (ej. respondiendo otra pregunta) no debe interpretarse como selección de
+    producto — evita falsos positivos con datos como edad o cantidades."""
+    pat = _extraer_regex_concatenada(_MAIN, "_SELECCION_NUMERICA_RE")
+    history = [
+        {"role": "assistant", "content": "¿Cuántas unidades quieres?"},
+    ]
+    assert _es_seleccion_de_lista_mostrada("2", history, pat) is False
+
+
+def test_bug17_override_existe_en_recuperar_candidatos():
+    """Verifica que el override está conectado en _recuperar_candidatos (main.py),
+    con la misma prioridad que la regla de fase de venta."""
+    tree = ast.parse(_MAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_recuperar_candidatos":
+            src = ast.get_source_segment(_MAIN.read_text(), node)
+            assert "_es_seleccion_de_lista_mostrada" in src
+            # Debe desactivar debe_mostrar y despersistir calificado, igual que
+            # la regla de fase de venta.
+            idx = src.index("_es_seleccion_de_lista_mostrada(user_text, history):")
+            bloque = src[idx:idx + 200]
+            assert "debe_mostrar = False" in bloque
+            assert 'clasif["calificado"] = False' in bloque
+            return
+    raise AssertionError("No se encontró _recuperar_candidatos")
