@@ -199,8 +199,19 @@ def _catalogo(total=20, disponibles=None, productos=None):
     async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True):
         return catalog.Resultado(productos=list(productos), restricciones=restricciones)
 
+    # Los caminos de respaldo (búsqueda por nombre, corrección de typos) tocan el
+    # pool directamente; sin silenciarlos el test revienta con 'NoneType has no
+    # attribute acquire' en vez de decir qué falló.
+    async def sin_nombre(*a, **k):
+        return []
+
+    async def sin_typos(texto, *a, **k):
+        return texto
+
     return parchar(catalog, contar_por_restricciones=contar,
-                   facetas_disponibles=disp, buscar_por_restricciones=buscar)
+                   facetas_disponibles=disp, buscar_por_restricciones=buscar,
+                   buscar_producto_especifico=sin_nombre,
+                   corregir_typos_contra_catalogo=sin_typos)
 
 
 def _estado(**kwargs):
@@ -308,3 +319,85 @@ def test_la_respuesta_a_la_pregunta_muestra_productos():
             "con sabores", [], _estado(preguntas_hechas=["lubricante"])))
     assert cands, "tras responder la pregunta hay que mostrar, no re-preguntar"
     assert "sabor" in (info["restricciones"].get("atributos") or [])
+
+
+# ── Regresión: "Te mostré todas las opciones" sin haber mostrado ninguna ──
+#
+#   [3:43] cliente: tienen masturbadores      → bot lista 5 masturbadores
+#   [3:45] cliente: lubricantes tambien manejan
+#   [3:46] bot:     "Te mostré todas las opciones de lubricantes disponibles 😊"
+#
+# El estado guarda los productos ya mostrados para no repetirlos, y `exclude` se
+# arrastraba aunque el cliente hubiese cambiado de tema. Eso hacía dos daños:
+# excluía productos válidos del tema nuevo, y con `exclude` no vacío disparaba
+# `categoria_agotada`.
+#
+# El reset por cambio de tema tapa el caso cuando la clasificación aporta
+# categoría E intención, pero hay más de 20 palabras que cambian el `tipo` sin
+# aportar ambas ("tapon"→plug, "gel intimo"→lubricante, "strap on"→arnes,
+# "jenga"→juego), y ahí el reset no salta.
+
+ESTADO_MASTURBADORES = {"categoria_busqueda": "masturbadores",
+                        "categoria_funcional": "masturbadores", "genero": None,
+                        "calificado": True,
+                        "productos_mostrados": [101, 102, 103],
+                        "restricciones": {"tipo": "masturbador"},
+                        "preguntas_hechas": []}
+
+
+def _recuperar_espiando_exclude(mensaje, estado, productos=()):
+    """Corre un turno devolviendo (info, excludes con los que se consultó)."""
+    vistos = []
+
+    async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True):
+        vistos.append(list(exclude_ids or []))
+        return catalog.Resultado(productos=list(productos), restricciones=restricciones)
+
+    async def sin_recomendar(**k):
+        return []
+
+    with _catalogo(total=20):
+        with parchar(catalog, buscar_por_restricciones=buscar,
+                     get_productos_para_recomendar=sin_recomendar):
+            _c, info = asyncio.run(
+                main._recuperar_candidatos(mensaje, [], dict(estado)))
+    return info, vistos
+
+
+def test_cambiar_de_tipo_no_dice_que_ya_se_mostro_todo():
+    info, _ = _recuperar_espiando_exclude("muestrame tapones", ESTADO_MASTURBADORES)
+    assert info["restricciones"]["tipo"] == "plug"
+    assert not info["categoria_agotada"], \
+        "pidió plugs por primera vez: no se le ha mostrado ninguno"
+
+
+def test_cambiar_de_tipo_no_excluye_productos_del_tema_nuevo():
+    _info, vistos = _recuperar_espiando_exclude("muestrame tapones",
+                                                ESTADO_MASTURBADORES)
+    assert vistos and vistos[0] == [], \
+        f"se arrastró el exclude del tema viejo: {vistos}"
+
+
+def test_el_arrastre_no_depende_de_la_palabra():
+    """Las cuatro divergencias reales entre el vocabulario de tipos y el de
+    intenciones: si alguna vuelve a arrastrar el exclude, el bot le dirá al
+    cliente que ya le mostró algo que nunca vio."""
+    for mensaje, tipo in (("muestrame tapones", "plug"),
+                          ("quiero ver gel intimo", "lubricante"),
+                          ("fotos de strap on", "arnes"),
+                          ("me muestras jenga", "juego")):
+        info, vistos = _recuperar_espiando_exclude(mensaje, ESTADO_MASTURBADORES)
+        assert info["restricciones"]["tipo"] == tipo, mensaje
+        assert not info["categoria_agotada"], mensaje
+        # "gel intimo" tiene menú, así que ese turno pregunta y no llega a
+        # buscar. Lo que se comprueba es que ninguna búsqueda que sí ocurra
+        # arrastre los IDs del tema viejo.
+        assert all(e == [] for e in vistos), f"{mensaje}: {vistos}"
+
+
+def test_seguir_en_el_mismo_tipo_si_respeta_lo_ya_mostrado():
+    """La otra cara: dentro del mismo tema, el exclude tiene que seguir aplicando."""
+    _info, vistos = _recuperar_espiando_exclude(
+        "mas diseños", _estado(calificado=True, productos_mostrados=[1, 2, 3]),
+        productos=PRODS)
+    assert vistos and vistos[0] == [1, 2, 3]

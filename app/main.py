@@ -896,6 +896,24 @@ async def _recuperar_candidatos(
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
 
+    # Los productos ya mostrados pertenecen al tema anterior. Si el cliente
+    # cambió de tipo, arrastrarlos hace dos daños: excluye productos válidos del
+    # tema nuevo, y con `exclude` no vacío dispara `categoria_agotada`, que
+    # responde "ya te mostré todas las opciones" a alguien que acaba de pedirlas
+    # por primera vez.
+    #
+    # El reset por cambio de tema de arriba tapa el caso cuando la clasificación
+    # aporta categoría E intención, pero hay más de 20 palabras que cambian el
+    # `tipo` sin aportar ambas ("tapon"→plug, "gel intimo"→lubricante, "strap
+    # on"→arnes, "jenga"→juego): el vocabulario de facetas y el de intenciones no
+    # son el mismo. `fusionar_restricciones` ya trata un tipo distinto como
+    # cambio de tema, así que aquí solo se usa esa señal.
+    tipo_previo = ((estado or {}).get("restricciones") or {}).get("tipo")
+    if tipo_previo and restricciones.get("tipo") and restricciones["tipo"] != tipo_previo:
+        log.info("Tipo cambiado %s → %s — los productos mostrados no aplican",
+                 tipo_previo, restricciones["tipo"])
+        exclude = []
+
     # ── ¿VALE LA PENA PREGUNTAR ANTES DE LISTAR? ──
     # Una petición amplia ("lubricantes") sobre una categoría grande reparte 5
     # huecos entre 20 productos que no se parecen entre sí: el cliente recibe una
