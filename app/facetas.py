@@ -383,7 +383,11 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
     (("anillo", "anillos", "cockring"), {"tipo": "anillo"}),
     (("funda", "fundas", "extensor", "engrosador"), {"tipo": "funda"}),
     (("dildo", "dildos", "consolador", "consoladores"), {"tipo": "dildo"}),
-    (("vibrador", "vibradores", "vibradorcito"), {"tipo": "vibrador"}),
+    # "vibrador" aporta el tipo Y la vibración. Es lo que conserva el sentido de
+    # la petición si más adelante hay que ceder en el tipo: al pedir "vibrador
+    # para el pene" no hay ningún tipo=vibrador con zona=pene, pero sí anillos
+    # que vibran, y son la respuesta correcta.
+    (("vibrador", "vibradores", "vibradorcito"), {"tipo": "vibrador", "vibra": True}),
     (("lubricante", "lubricantes", "lubricacion", "gel intimo"), {"tipo": "lubricante"}),
     (("estimulante", "retardante", "afrodisiaco", "potenciador",
       "multiorgasmo", "multiorgasmos"), {"tipo": "cosmetica"}),

@@ -39,6 +39,14 @@ CATALOGO = [
          zona="clitoris", vibra=True, control="manual", genero_uso="mujer", atributos=[]),
     dict(id=6, nombre="Anillo Vibrador Candil", tipo="anillo", zona="pene",
          vibra=True, control="manual", genero_uso="hombre", atributos=[]),
+    dict(id=7, nombre="Anillo Vibrador Lovense Diamo", tipo="anillo", zona="pene",
+         vibra=True, control="app", genero_uso="hombre", atributos=[]),
+    dict(id=8, nombre="Funda para el Pene Drakon", tipo="funda", zona="pene",
+         vibra=False, control="ninguno", genero_uso="hombre", atributos=[]),
+    dict(id=9, nombre="Vibrador Pandora", tipo="vibrador", zona="vaginal",
+         vibra=True, control="manual", genero_uso="mujer", atributos=[]),
+    dict(id=10, nombre="Mini Vibrador Rocco", tipo="vibrador", zona="clitoris",
+         vibra=True, control="manual", genero_uso="mujer", atributos=[]),
 ]
 for _p in CATALOGO:
     _p.update(descripcion="", categoria="", precio=100000,
@@ -314,3 +322,46 @@ def test_el_aviso_de_relajacion_es_legible():
     assert "vibradores anales" in txt, txt
     # Un solo encabezado, no dos saludos encadenados.
     assert "¡Buena elección!" not in txt and "¡Perfecto!" not in txt, txt
+
+
+# ── La zona es más esencial que el tipo ──
+# Reportado: "vibradores" → "pene" devolvía Pigly, Pandora, Rocco… vibradores de
+# mujer. En el catálogo NO hay tipo=vibrador con zona=pene, así que se relajó;
+# pero se soltó la ZONA (la parte del cuerpo) en vez del TIPO (la forma), y
+# soltar la zona convierte la petición en otra cosa. Lo que el cliente quiere
+# —algo que vibre, para el pene— sí existe: son anillos vibradores.
+
+def test_vibrador_para_el_pene_devuelve_anillos_vibradores():
+    res = _buscar({"tipo": "vibrador", "zona": "pene", "vibra": True})
+    nombres = [p["nombre"] for p in res.productos]
+    assert res.productos, "hay anillos vibradores de pene: no puede quedar vacío"
+    assert all(p["zona"] == "pene" for p in res.productos), nombres
+    assert all(p["vibra"] for p in res.productos), nombres
+    assert res.relajado == "tipo", f"debe ceder en la forma, no en la zona: {res.relajado}"
+
+
+def test_nunca_devuelve_vibradores_de_mujer_a_quien_pidio_pene():
+    res = _buscar({"tipo": "vibrador", "zona": "pene", "vibra": True})
+    nombres = [p["nombre"] for p in res.productos]
+    for prohibido in ("Vibrador Pandora", "Mini Vibrador Rocco"):
+        assert prohibido not in nombres, f"{prohibido} no es para el pene: {nombres}"
+
+
+def test_pedir_un_vibrador_implica_que_vibre():
+    """Si se cede en el tipo, 'que vibre' es lo que conserva el sentido."""
+    from app import facetas
+    r = facetas.fusionar_restricciones({}, facetas.interpretar_mensaje("tienen vibradores"))
+    assert r.get("vibra") is True, r
+
+
+def test_la_zona_no_se_cede_nunca():
+    """La zona del cuerpo no está en la escalera: es más esencial que la forma.
+
+    Ceder en el tipo mantiene la petición (vibrador → anillo vibrador); ceder en
+    la zona la convierte en otra cosa, y fue lo que mandó vibradores de mujer a
+    quien pidió algo para el pene.
+    """
+    from app import catalog
+    escalera = catalog._ESCALERA_RELAJACION
+    assert "zona" not in escalera, f"la zona no puede cederse: {escalera}"
+    assert "tipo" in escalera, f"la forma del juguete sí es negociable: {escalera}"

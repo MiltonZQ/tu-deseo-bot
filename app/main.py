@@ -486,7 +486,7 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     # cliente pidiera "vibrador anal" y recibiera otra cosa sin explicación.
     aviso = ""
     relajado = info.get("relajado")
-    if relajado and relajado != "todo":
+    if relajado and relajado not in ("todo", "sin_resultado"):
         pedido = info.get("restricciones") or {}
         _ZONAS_EN_TEXTO = {
             "anal": "anales", "clitoris": "de clítoris", "vaginal": "vaginales",
@@ -1101,7 +1101,9 @@ def _validar_envio(productos: list[dict], restricciones: dict,
         ok = True
         for campo in _RESTRICCIONES_DURAS:
             esperado = restricciones.get(campo)
-            if not esperado or campo == relajado:
+            # La ZONA no se exime nunca, ni siquiera si se relajó: haber cedido en
+            # la forma del juguete no autoriza a cambiar la parte del cuerpo.
+            if not esperado or (campo == relajado and campo != "zona"):
                 continue
             actual = p.get(campo)
             if actual and actual != esperado:

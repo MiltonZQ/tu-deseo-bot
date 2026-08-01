@@ -41,7 +41,8 @@ fusionar = facetas.fusionar_restricciones
 
 def test_anal_refina_vibradores_no_lo_reemplaza():
     r1 = fusionar({}, leer("tienen vibradores"))
-    assert r1 == {"tipo": "vibrador"}
+    assert r1.get("tipo") == "vibrador"
+    assert r1.get("vibra") is True, "pedir un vibrador implica que vibre"
     r2 = fusionar(r1, leer("anal"))
     assert r2.get("tipo") == "vibrador", "no puede perderse el vibrador"
     assert r2.get("zona") == "anal"
@@ -142,7 +143,8 @@ def test_el_clasificador_devuelve_restricciones_acumuladas():
 
     async def _run():
         r1 = await catalog.clasificar_intencion_cliente("tienen vibradores", [], None, None)
-        assert r1["restricciones"] == {"tipo": "vibrador"}, r1["restricciones"]
+        assert r1["restricciones"].get("tipo") == "vibrador", r1["restricciones"]
+        assert r1["restricciones"].get("vibra") is True, r1["restricciones"]
         r2 = await catalog.clasificar_intencion_cliente(
             "anal", [], r1["categoria_funcional"], r1["restricciones"])
         # El caso exacto del reporte: no puede perderse "vibrador".

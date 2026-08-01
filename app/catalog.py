@@ -1818,11 +1818,19 @@ class Resultado:
     restricciones: dict = field(default_factory=dict)
 
 
-# Orden en que se ceden las restricciones cuando no hay resultados exactos. De
-# lo más accesorio a lo más esencial: el color del control importa menos que la
-# zona del cuerpo. `tipo` NO está en la lista — cambiar el tipo de producto es
-# responder otra pregunta, y se maneja aparte y siempre avisando.
-_ESCALERA_RELAJACION = ("atributos", "control", "genero_uso", "vibra", "zona")
+# Orden en que se ceden las restricciones cuando no hay resultados exactos, de lo
+# más accesorio a lo más esencial.
+#
+# LA ZONA DEL CUERPO NO ESTÁ EN LA LISTA: no se cede nunca. Ceder en la FORMA del
+# juguete mantiene la petición (un "vibrador para el pene" que no existe como tal
+# se responde con anillos vibradores, que sí); ceder en la ZONA la convierte en
+# otra cosa. Reportado en producción: al pedir "vibradores" → "pene" se soltaba la
+# zona y llegaban vibradores de mujer.
+#
+# Medido sobre las 42 combinaciones que los menús del bot pueden producir, con
+# las facetas reales del catálogo: con la zona en la escalera hay 1 respuesta que
+# contradice lo pedido; sin ella, ninguna.
+_ESCALERA_RELAJACION = ("atributos", "control", "genero_uso", "tipo", "vibra")
 
 
 async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] | None,
@@ -1918,20 +1926,23 @@ async def buscar_por_restricciones(restricciones: dict,
             return Resultado(productos=encontrados, relajado=campo,
                              restricciones=aflojadas)
 
-    # Último recurso: solo el tipo, o solo la zona. Sigue reportándose.
-    for campo_ancla in ("tipo", "zona"):
-        if restricciones.get(campo_ancla):
-            solo = {campo_ancla: restricciones[campo_ancla]}
-            encontrados = await _consultar_restricciones(solo, exclude_ids, limit)
-            if encontrados:
-                otro = "zona" if campo_ancla == "tipo" else "tipo"
-                log.info("Solo se pudo respetar %s=%s → %d productos",
-                         campo_ancla, restricciones[campo_ancla], len(encontrados))
-                return Resultado(productos=encontrados, relajado=otro,
-                                 restricciones=solo)
+    # Último recurso. Si el cliente nombró una ZONA, es lo único que se respeta:
+    # nunca se cae a "solo el tipo", porque eso devolvería productos de otra parte
+    # del cuerpo, que es exactamente el fallo que se corrigió.
+    ancla = "zona" if restricciones.get("zona") else "tipo"
+    if restricciones.get(ancla):
+        solo = {ancla: restricciones[ancla]}
+        encontrados = await _consultar_restricciones(solo, exclude_ids, limit)
+        if encontrados:
+            log.info("Solo se pudo respetar %s=%s → %d productos",
+                     ancla, restricciones[ancla], len(encontrados))
+            return Resultado(productos=encontrados,
+                             relajado="zona" if ancla == "tipo" else "tipo",
+                             restricciones=solo)
 
+    # Nada cumple ni cediendo lo cedible. Se responde con honestidad, sin fotos.
     log.warning("Sin productos para %s (ni relajando)", restricciones)
-    return Resultado(relajado="todo", restricciones=restricciones)
+    return Resultado(relajado="sin_resultado", restricciones=restricciones)
 
 
 async def contar_productos(categoria_funcional: str | None, genero: str | None) -> int:
