@@ -1005,7 +1005,8 @@ async def pausados_page(request: Request):
 
 @router.get("/productos", response_class=HTMLResponse)
 async def productos_page(request: Request, q: str = Query(""), tipo: str = Query(""),
-                         zona: str = Query(""), sin: str = Query("")):
+                         zona: str = Query(""), sin: str = Query(""),
+                         todos: str = Query("")):
     """Vista de productos con sus facetas y edición manual.
 
     Existe para que una clasificación equivocada se corrija en segundos desde
@@ -1013,13 +1014,19 @@ async def productos_page(request: Request, q: str = Query(""), tipo: str = Query
     y la sincronización de WooCommerce ya no lo pisa.
     """
     _require_login(request)
+    # Por defecto solo se listan los OFRECIBLES (con stock y con foto): son los
+    # únicos que el bot puede recomendar, así que son los únicos cuya
+    # clasificación llega a un cliente. Ver los agotados es opcional (?todos=1).
+    solo_ofrecibles = not todos
     try:
         productos = await db.listar_productos_panel(
-            buscar=q, tipo=tipo, zona=zona, solo_sin_clasificar=bool(sin))
-        tipos = await db.contar_por_faceta("tipo")
-        zonas = await db.contar_por_faceta("zona")
+            buscar=q, tipo=tipo, zona=zona, solo_sin_clasificar=bool(sin),
+            solo_ofrecibles=solo_ofrecibles)
+        tipos = await db.contar_por_faceta("tipo", solo_ofrecibles)
+        zonas = await db.contar_por_faceta("zona", solo_ofrecibles)
+        resumen = await db.resumen_catalogo()
     except Exception:
-        productos, tipos, zonas = [], [], []
+        productos, tipos, zonas, resumen = [], [], [], {}
 
     from app import facetas as F
 
@@ -1042,11 +1049,15 @@ async def productos_page(request: Request, q: str = Query(""), tipo: str = Query
             origen = '<strong style="color:#7b1fa2">manual ✓</strong>'
         elif origen == "llm":
             origen = '<span style="color:#ef6c00">llm</span>'
-        sin_clasificar = ' style="background:#fff3e0"' if not p.get("tipo") else ""
+        agotado = p.get("stock_status") == "outofstock"
+        badge = ('<span style="color:#c62828">agotado</span>' if agotado
+                 else '<span style="color:#2e7d32">disponible</span>')
+        sin_clasificar = ' style="background:#fff3e0"' if not p.get("tipo") else (
+            ' style="opacity:.55"' if agotado else "")
         filas.append(f"""<tr{sin_clasificar}>
   <td>{img}</td>
   <td><strong>{html.escape(p["nombre"][:58])}</strong><br>
-      <small>${p.get("precio", 0):,} · {html.escape(p.get("stock_status") or "")}</small></td>
+      <small>${p.get("precio", 0):,} · {badge}</small></td>
   <td>{_sel("tipo", p.get("tipo"), F.TIPOS, pid)}</td>
   <td>{_sel("zona", p.get("zona"), F.ZONAS, pid)}</td>
   <td><input type="checkbox" id="vibra-{pid}" {"checked" if p.get("vibra") else ""}></td>
@@ -1064,9 +1075,10 @@ async def productos_page(request: Request, q: str = Query(""), tipo: str = Query
             out.append(f'<a class="chip{on}" href="/admin/productos?{campo}={v}">{html.escape(v)} ({n})</a>')
         return " ".join(out)
 
-    sin_clasificar_n = sum(1 for p in productos if not p.get("tipo"))
+    sin_clasificar_n = resumen.get("sin_clasificar", 0) if solo_ofrecibles else sum(
+        1 for p in productos if not p.get("tipo"))
     aviso = (f'<p style="background:#fff3e0;padding:10px;border-radius:8px">'
-             f'{sin_clasificar_n} producto(s) sin clasificar. Corre '
+             f'{sin_clasificar_n} producto(s) ofrecibles sin clasificar. Corre '
              f'<code>scripts/clasificar_catalogo.py</code> o edítalos aquí.</p>'
              if sin_clasificar_n else "")
 
@@ -1074,6 +1086,13 @@ async def productos_page(request: Request, q: str = Query(""), tipo: str = Query
 <h1>Productos</h1>
 <p>Así ve el bot cada producto. Si algo está mal clasificado, corrígelo aquí:
 queda marcado como revisado y la sincronización no lo vuelve a tocar.</p>
+<p style="background:#f3e5f5;padding:10px;border-radius:8px">
+<strong>{resumen.get("ofrecibles", 0)}</strong> productos ofrecibles
+(con stock y con foto) de <strong>{resumen.get("total", 0)}</strong> en catálogo ·
+{resumen.get("agotados", 0)} agotados · {resumen.get("sin_foto", 0)} sin foto.<br>
+<small>Solo los ofrecibles pueden llegar a un cliente, y son los que se listan aquí.
+{"Mostrando TODOS, incluidos agotados. " if todos else ""}
+<a href="/admin/productos{"" if todos else "?todos=1"}">{"ver solo disponibles" if todos else "ver también los agotados"}</a></small></p>
 {aviso}
 <form method="get" action="/admin/productos" style="margin:12px 0">
   <input name="q" value="{html.escape(q)}" placeholder="Buscar por nombre…" style="padding:8px;min-width:220px">

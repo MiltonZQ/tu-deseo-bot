@@ -297,11 +297,27 @@ async def set_facetas_producto(producto_id: int, facetas, origen: str = "reglas"
     return bool(res) and not res.endswith(" 0")
 
 
+# Un producto es OFRECIBLE si el bot puede llegar a mandárselo a un cliente.
+# Debe ser exactamente la misma condición que usa `_consultar_restricciones` en
+# catalog.py: si el panel contara con otro criterio, mostraría números que no
+# corresponden con lo que el bot hace — que es justo el tipo de desajuste que
+# causó los bugs de recomendación.
+SQL_OFRECIBLE = ("(stock_status IS NULL OR stock_status <> 'outofstock') "
+                 "AND imagen_url IS NOT NULL AND imagen_url != ''")
+
+
 async def listar_productos_panel(buscar: str = "", tipo: str = "", zona: str = "",
                                  solo_sin_clasificar: bool = False,
-                                 limit: int = 300) -> list[dict]:
-    """Productos para la vista del panel, con filtros por faceta."""
+                                 solo_ofrecibles: bool = True,
+                                 limit: int = 500) -> list[dict]:
+    """Productos para la vista del panel, con filtros por faceta.
+
+    Por defecto muestra solo los OFRECIBLES: son los únicos que el bot puede
+    recomendar, así que son los únicos cuya clasificación afecta a un cliente.
+    """
     where, params, idx = ["TRUE"], [], 1
+    if solo_ofrecibles:
+        where.append(SQL_OFRECIBLE)
     if buscar:
         where.append(f"nombre ILIKE '%' || ${idx} || '%'")
         params.append(buscar)
@@ -326,16 +342,37 @@ async def listar_productos_panel(buscar: str = "", tipo: str = "", zona: str = "
         return [dict(r) for r in await conn.fetch(sql, *params)]
 
 
-async def contar_por_faceta(campo: str) -> list[tuple[str, int]]:
-    """Cuántos productos hay por cada valor de una faceta (para los filtros)."""
+async def contar_por_faceta(campo: str, solo_ofrecibles: bool = True) -> list[tuple[str, int]]:
+    """Cuántos productos hay por cada valor de una faceta (para los filtros).
+
+    Cuenta solo los ofrecibles por defecto: un recuento que incluya agotados no
+    dice cuántas opciones tiene realmente el cliente.
+    """
     if campo not in ("tipo", "zona", "genero_uso", "control"):
         return []
+    extra = f" AND {SQL_OFRECIBLE}" if solo_ofrecibles else ""
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             f"SELECT {campo} AS v, COUNT(*) AS n FROM productos "
-            f"WHERE {campo} IS NOT NULL GROUP BY {campo} ORDER BY n DESC"
+            f"WHERE {campo} IS NOT NULL{extra} GROUP BY {campo} ORDER BY n DESC"
         )
     return [(r["v"], r["n"]) for r in rows]
+
+
+async def resumen_catalogo() -> dict:
+    """Totales del catálogo: cuántos hay y cuántos puede ofrecer el bot."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE {SQL_OFRECIBLE}) AS ofrecibles,
+                   COUNT(*) FILTER (WHERE {SQL_OFRECIBLE} AND tipo IS NULL) AS sin_clasificar,
+                   COUNT(*) FILTER (WHERE stock_status = 'outofstock') AS agotados,
+                   COUNT(*) FILTER (WHERE imagen_url IS NULL OR imagen_url = '') AS sin_foto
+            FROM productos
+            """
+        )
+    return dict(row)
 
 
 async def get_productos_sin_clasificar(limit: int = 1000) -> list[dict]:

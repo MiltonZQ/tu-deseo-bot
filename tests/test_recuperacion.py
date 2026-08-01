@@ -224,3 +224,33 @@ def test_una_edicion_manual_se_marca_como_revisada():
     i = src.index("async def guardar_facetas")
     bloque = src[i:i + 1400]
     assert 'origen="manual"' in bloque, bloque[:400]
+
+
+def test_el_panel_y_el_bot_usan_el_mismo_criterio_de_ofrecible():
+    """Si divergen, el panel muestra números que el bot no cumple.
+
+    Pasó: el panel listaba los 483 productos del catálogo sin distinguir stock,
+    así que parecía que el bot ofrecía productos agotados. La búsqueda sí los
+    excluía, pero la vista mentía — el mismo tipo de desajuste entre lo que se
+    dice y lo que se hace que causó los bugs de recomendación.
+    """
+    fuente_db = (_ROOT / "app" / "db.py").read_text()
+    fuente_cat = (_ROOT / "app" / "catalog.py").read_text()
+    assert "SQL_OFRECIBLE" in fuente_db, "el panel debe tener el criterio en un solo sitio"
+    i = fuente_db.index("SQL_OFRECIBLE = ")
+    criterio = fuente_db[i:i + 260]
+    for pieza in ("stock_status", "outofstock", "imagen_url"):
+        assert pieza in criterio, f"falta {pieza} en el criterio del panel"
+    # El bot filtra por lo mismo en su consulta por restricciones.
+    j = fuente_cat.index("async def _consultar_restricciones")
+    bloque = fuente_cat[j:j + 900]
+    for pieza in ("stock_status", "outofstock", "imagen_url"):
+        assert pieza in bloque, f"la búsqueda del bot no filtra por {pieza}"
+
+
+def test_el_panel_lista_solo_ofrecibles_por_defecto():
+    fuente = (_ROOT / "app" / "admin.py").read_text()
+    i = fuente.index("async def productos_page")
+    bloque = fuente[i:i + 1500]
+    assert "solo_ofrecibles = not todos" in bloque, (
+        "por defecto el panel debe mostrar solo lo que el bot puede ofrecer")
