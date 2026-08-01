@@ -372,9 +372,10 @@ _REGLAS_CATEGORIA = [
     (("enema", "ducha anal", "duchas anales", "irrigador", "pera anal"), "anal"),
     # Higiene/cuidado (sin ambigüedad con juguetes)
     (("limpiador", "limpia juguete", "toallitas"), "lubricantes-y-cuidado"),
-    # Lubricantes y cosmética íntima
-    (("lubricant", "lubric", "estimulant", "retardant", "spray", "vela ", "aceite ",
+    # Lubricantes y cosmética íntima (incluye geles y lubricantes anales)
+    (("lubricant", "lubric", "estimulant", "retardant", "desensibiliz", "electrizante", "multiorgasmo", "gel anal", "lubricante anal", "sen anal", "spray", "vela ", "aceite ",
       "friction", "estrechant", "booster", "serum", "crema "), "lubricantes-y-cuidado"),
+
     # Succionadores de clítoris (antes que vibradores genéricos)
     (("succionador", "suction", "air pulse", "succión de clítoris", "succio", "pro 2", "satisfyer pro"), "succionadores"),
     # Bombas de vacío para el pene (separado de anillos)
