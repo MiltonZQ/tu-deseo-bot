@@ -272,56 +272,9 @@ def test_un_fallo_de_envio_no_cancela_las_fotos_restantes():
 # "indícame los números", eso hacía ambiguo el pedido.
 
 def _main():
-    """Importa app.main con las dependencias web stubeadas.
-
-    main.py importa fastapi/starlette, que no están en el entorno de tests. Los
-    stubs solo necesitan sostener el import: las funciones bajo prueba
-    (_texto_desde_candidatos, _numero_lista) son puras.
-    """
-    import importlib
-
-    if "fastapi" not in sys.modules:
-        class _App:
-            def __init__(self, *a, **k):
-                pass
-
-            def _deco(self, *a, **k):
-                return lambda fn: fn
-
-            get = post = put = delete = middleware = _deco
-
-            def add_middleware(self, *a, **k):
-                pass
-
-            def include_router(self, *a, **k):
-                pass
-
-        def _param(*a, **k):
-            return None
-
-        fa = types.ModuleType("fastapi")
-        fa.FastAPI = _App
-        fa.Request = fa.BackgroundTasks = type("_X", (), {})
-        fa.HTTPException = type("HTTPException", (Exception,), {})
-        fa.Header = fa.Query = fa.Form = fa.Depends = fa.Cookie = fa.Body = _param
-        fa.status = types.SimpleNamespace(HTTP_302_FOUND=302, HTTP_401_UNAUTHORIZED=401)
-        fa.APIRouter = _App
-        resp = types.ModuleType("fastapi.responses")
-        resp.PlainTextResponse = resp.HTMLResponse = resp.JSONResponse = type("_R", (), {})
-        resp.RedirectResponse = type("_R", (), {})
-        fa.responses = resp
-        tmpl = types.ModuleType("fastapi.templating")
-        tmpl.Jinja2Templates = type("_T", (), {"__init__": lambda self, *a, **k: None})
-        st = types.ModuleType("starlette")
-        mw = types.ModuleType("starlette.middleware")
-        sess = types.ModuleType("starlette.middleware.sessions")
-        sess.SessionMiddleware = type("_M", (), {})
-        for name, mod in (("fastapi", fa), ("fastapi.responses", resp),
-                          ("fastapi.templating", tmpl), ("starlette", st),
-                          ("starlette.middleware", mw),
-                          ("starlette.middleware.sessions", sess)):
-            sys.modules[name] = mod
-    return importlib.import_module("app.main")
+    """app.main con fastapi/starlette stubeados (ver tests/stubs.py)."""
+    from tests.stubs import importar_main
+    return importar_main()
 
 
 def test_numeracion_continua_en_la_segunda_ronda():

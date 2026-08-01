@@ -14,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature, catalog
 from app import escalations, admin, leads, follow_ups, sedes, pedidos, redis_client, vector_store
+from app import preguntas
 
 logging.basicConfig(
     level=logging.INFO,
@@ -371,6 +372,17 @@ def _extraer_marcadores_categoria(reply: str) -> tuple[list[str], str]:
 # su contrato y escribe la plantilla "Mira estas opciones…" sin marcadores [FOTO:ID]
 # (lo que dejaba al cliente con un mensaje que promete fotos pero no envía nada).
 # Fuente: prompts/system.md (árboles de asesoría por categoría).
+# ── Pregunta de clarificación previa (ver app/preguntas.py) ──
+# Por debajo de este número de productos ofrecibles no se pregunta: con 8 o
+# menos opciones, dos rondas de 5 las cubren casi todas y preguntar solo añade
+# un turno de fricción.
+UMBRAL_PREGUNTA_CLARIFICACION = 8
+
+# Facetas que ya acotan la búsqueda. Si el cliente nombró alguna, su petición no
+# es amplia y no hay nada que preguntarle.
+_FACETAS_DISCRIMINANTES = ("zona", "control", "genero_uso", "atributos", "vibra")
+
+
 _PREGUNTAS_CALIFICACION = {
     "masturbadores": (
         "¡Claro que sí! Para mostrarte lo ideal, cuéntame: ¿buscas un **anillo vibrador** "
@@ -883,6 +895,45 @@ async def _recuperar_candidatos(
 
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
+
+    # ── ¿VALE LA PENA PREGUNTAR ANTES DE LISTAR? ──
+    # Una petición amplia ("lubricantes") sobre una categoría grande reparte 5
+    # huecos entre 20 productos que no se parecen entre sí: el cliente recibe una
+    # muestra al azar en vez de lo que buscaba. Se pregunta UNA vez por tipo, y
+    # solo si el inventario da para al menos dos ramas reales (ver app/preguntas.py).
+    #
+    # La única palanca que toca es debe_mostrar=False, igual que la fase de venta
+    # y la selección numérica de arriba: apaga búsqueda, lista y fotos sin
+    # cambiar nada más. Si algo falla —no hay recuentos, el tipo no tiene menú,
+    # no quedan ramas vivas— `construir` devuelve None y el turno sigue como antes.
+    ya_preguntadas = set((estado or {}).get("preguntas_hechas") or [])
+    pregunta_faceta = None
+    peticion_amplia = bool(
+        restricciones.get("tipo")
+        and not any(restricciones.get(c) for c in _FACETAS_DISCRIMINANTES)
+        and not clasif.get("es_especifico")
+        and not _es_ver_mas(user_text)
+        and not exclude                      # no interrumpir a mitad de un listado
+        and restricciones["tipo"] not in ya_preguntadas
+    )
+    if peticion_amplia:
+        # Con debe_mostrar=False el bot iba a preguntar de todos modos (con el
+        # texto fijo de `_PREGUNTAS_CALIFICACION`, que ofrece ramas sin
+        # comprobar si tienen stock). Ahí no hace falta umbral: se sustituye una
+        # pregunta por otra mejor. El umbral solo protege el caso en que sí
+        # había una lista que mostrar.
+        vale_la_pena = True
+        if debe_mostrar:
+            total_ofrecible = await catalog.contar_por_restricciones(restricciones)
+            vale_la_pena = total_ofrecible > UMBRAL_PREGUNTA_CLARIFICACION
+        if vale_la_pena:
+            disponibles = await catalog.facetas_disponibles(restricciones)
+            pregunta_faceta = preguntas.construir(restricciones["tipo"], disponibles)
+            if pregunta_faceta:
+                log.info("Pregunta de clarificación para tipo=%s (mostraba=%s)",
+                         restricciones["tipo"], debe_mostrar)
+                debe_mostrar = False
+
     # ¿Se llegó a consultar el inventario en este turno? Si debe_mostrar quedó en
     # False, ninguna búsqueda corre y `candidatos` queda vacío por no haber
     # buscado — NO por falta de stock. Distinguir ambos casos evita el handoff
@@ -1070,6 +1121,9 @@ async def _recuperar_candidatos(
         "debe_mostrar": debe_mostrar and bool(candidatos),
         "restricciones": restricciones,
         "relajado": relajado,
+        # Texto de la pregunta de clarificación, o None. Si viene, ES el turno:
+        # no hay lista ni fotos que redactar.
+        "pregunta_faceta": pregunta_faceta,
     }
     return candidatos, info
 
@@ -1354,7 +1408,11 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # el sistema; si lo escribe el LLM numera desde 1 por su cuenta y un offset en
     # las fotos las desalinearía del texto.
     offset_numeracion = 0
-    if es_agotado:
+    if info.get("pregunta_faceta"):
+        # Va ANTES que `es_agotado`: una petición amplia llega con la lista de
+        # productos mostrados vacía, así que nunca es una categoría agotada.
+        raw_reply = info["pregunta_faceta"]
+    elif es_agotado:
         cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
         cat_nombre = cat_nombre.replace("-", " ")
         raw_reply = f"Te mostré todas las opciones de {cat_nombre} disponibles 😊 ¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
@@ -1559,6 +1617,10 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             calificado=info["calificado"] or bool(enviados_ids) or recien_califico,
             add_productos_mostrados=enviados_ids,
             restricciones=info.get("restricciones") or None,
+            # Se registra el tipo por el que se acaba de preguntar, para no
+            # volver a preguntar lo mismo en el turno siguiente.
+            add_pregunta_hecha=((info.get("restricciones") or {}).get("tipo")
+                                if info.get("pregunta_faceta") else None),
         )
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen

@@ -169,3 +169,142 @@ def test_las_ramas_existen_en_el_vocabulario_cerrado():
                 assert clave in facetas.GENEROS, f"género desconocido: {clave}"
             else:
                 assert clave in facetas._ATRIBUTOS, f"atributo desconocido: {clave}"
+
+
+# ── La compuerta: cuándo se pregunta y cuándo no ──
+
+from tests.stubs import importar_main  # noqa: E402
+
+main = importar_main()
+
+DISP_REAL = {"atributos": {"neutro": 3, "sabor": 3, "calor": 3, "frio": 2},
+             "zonas": {"anal": 3, "ninguna": 17}, "generos": {}}
+
+PRODS = [{"id": i, "nombre": f"Lubricante {i}", "precio": 30000,
+          "imagen_url": "http://x/i.jpg", "tipo": "lubricante",
+          "zona": "ninguna", "atributos": ["agua"]} for i in range(1, 6)]
+
+
+def _catalogo(total=20, disponibles=None, productos=None):
+    """Parcha las tres consultas a la DB que toca el camino de restricciones."""
+    disponibles = DISP_REAL if disponibles is None else disponibles
+    productos = PRODS if productos is None else productos
+
+    async def contar(restricciones):
+        return total
+
+    async def disp(restricciones):
+        return disponibles
+
+    async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True):
+        return catalog.Resultado(productos=list(productos), restricciones=restricciones)
+
+    return parchar(catalog, contar_por_restricciones=contar,
+                   facetas_disponibles=disp, buscar_por_restricciones=buscar)
+
+
+def _estado(**kwargs):
+    base = {"categoria_busqueda": "lubricantes-y-cuidado",
+            "categoria_funcional": "lubricantes-y-cuidado", "genero": None,
+            "calificado": False, "productos_mostrados": [],
+            "restricciones": {"tipo": "lubricante"}, "preguntas_hechas": []}
+    base.update(kwargs)
+    return base
+
+
+# Un turno que YA iba a listar: el estado viene calificado, así que la regla
+# híbrida anti-bucle enciende debe_mostrar. Es el caso del reporte.
+_IBA_A_LISTAR = dict(calificado=True)
+
+
+def test_categoria_amplia_y_grande_pregunta_en_vez_de_listar():
+    with _catalogo(total=20):
+        cands, info = asyncio.run(
+            main._recuperar_candidatos("lubricantes", [], _estado(**_IBA_A_LISTAR)))
+    assert info["pregunta_faceta"], "debía preguntar antes de listar"
+    assert "sabores" in info["pregunta_faceta"]
+    assert cands == [], "un turno de pregunta no lleva productos"
+    assert info["debe_mostrar"] is False
+
+
+def test_categoria_pequena_lista_directo():
+    """Con 5 opciones, dos rondas las cubren: preguntar solo añade fricción."""
+    with _catalogo(total=5):
+        cands, info = asyncio.run(
+            main._recuperar_candidatos("lubricantes", [], _estado(**_IBA_A_LISTAR)))
+    assert not info.get("pregunta_faceta")
+    assert cands
+
+
+def test_el_turno_que_iba_a_calificar_pregunta_sin_umbral():
+    """"Quiero ver lubricantes" en frío no lista: el bot califica primero.
+
+    Ahí iba a preguntar de todos modos, con el texto fijo de
+    `_PREGUNTAS_CALIFICACION` — que ofrece "base de agua, silicona, anal
+    desensibilizante o sabores" sin comprobar que existan. Se sustituye por la
+    pregunta construida del inventario, y no hace falta umbral: no se está
+    quitando ninguna lista.
+    """
+    with _catalogo(total=3):
+        cands, info = asyncio.run(
+            main._recuperar_candidatos("quiero ver lubricantes", [], None))
+    assert info["pregunta_faceta"]
+    assert cands == []
+
+
+def test_no_pregunta_si_el_cliente_ya_fue_especifico():
+    with _catalogo(total=20):
+        cands, info = asyncio.run(main._recuperar_candidatos(
+            "lubricante con sabores", [], _estado(**_IBA_A_LISTAR)))
+    assert not info.get("pregunta_faceta"), "ya dijo qué quiere"
+    assert cands
+
+
+def test_no_pregunta_dos_veces_el_mismo_tipo():
+    with _catalogo(total=20):
+        _c, info = asyncio.run(main._recuperar_candidatos(
+            "lubricantes", [], _estado(preguntas_hechas=["lubricante"], calificado=True)))
+    assert not info.get("pregunta_faceta")
+
+
+def test_no_pregunta_en_ver_mas():
+    with _catalogo(total=20):
+        _c, info = asyncio.run(main._recuperar_candidatos(
+            "mas diseños", [], _estado(calificado=True, productos_mostrados=[1, 2, 3])))
+    assert not info.get("pregunta_faceta"), "pidió más de lo mismo, no otra cosa"
+
+
+def test_no_pregunta_a_mitad_de_un_listado():
+    """Con productos ya mostrados, preguntar ahora borraría el hilo del listado."""
+    with _catalogo(total=20):
+        _c, info = asyncio.run(main._recuperar_candidatos(
+            "lubricantes", [], _estado(calificado=True, productos_mostrados=[1, 2])))
+    assert not info.get("pregunta_faceta")
+
+
+def test_sin_ramas_vivas_lista_como_siempre():
+    """Si el inventario no da para dos ramas, no se pregunta: se lista."""
+    with _catalogo(total=20, disponibles={"atributos": {"agua": 20}, "zonas": {},
+                                          "generos": {}}):
+        cands, info = asyncio.run(
+            main._recuperar_candidatos("lubricantes", [], _estado(**_IBA_A_LISTAR)))
+    assert not info.get("pregunta_faceta")
+    assert cands
+
+
+def test_si_no_se_pueden_contar_las_facetas_lista_como_siempre():
+    """Un fallo contando facetas no puede quitarle la lista al cliente."""
+    with _catalogo(total=20, disponibles={"atributos": {}, "zonas": {}, "generos": {}}):
+        cands, info = asyncio.run(
+            main._recuperar_candidatos("lubricantes", [], _estado(**_IBA_A_LISTAR)))
+    assert not info.get("pregunta_faceta")
+    assert cands
+
+
+def test_la_respuesta_a_la_pregunta_muestra_productos():
+    """Lo que cierra el bucle: tras responder, toca mostrar — y filtrado."""
+    with _catalogo(total=6):
+        cands, info = asyncio.run(main._recuperar_candidatos(
+            "con sabores", [], _estado(preguntas_hechas=["lubricante"])))
+    assert cands, "tras responder la pregunta hay que mostrar, no re-preguntar"
+    assert "sabor" in (info["restricciones"].get("atributos") or [])

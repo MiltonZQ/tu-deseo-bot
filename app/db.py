@@ -255,6 +255,12 @@ async def run_migrations() -> None:
         await conn.execute(
             "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS restricciones JSONB"
         )
+        # Tipos por los que YA se le hizo la pregunta de clarificación a este
+        # cliente. Sin esto, cada mensaje amplio volvería a preguntar lo mismo.
+        await conn.execute(
+            "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS "
+            "preguntas_hechas TEXT[] DEFAULT '{}'"
+        )
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_productos_facetas ON productos(tipo, zona)"
         )
@@ -658,13 +664,13 @@ async def get_conversation_state(wa_id: str) -> dict | None:
     """Devuelve el estado de conversación del cliente, o None si no existe.
 
     Campos: categoria_busqueda, categoria_funcional, genero, calificado,
-    productos_mostrados (lista de int).
+    productos_mostrados (lista de int), restricciones, preguntas_hechas.
     """
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT categoria_busqueda, categoria_funcional, genero, calificado,
-                   productos_mostrados, restricciones
+                   productos_mostrados, restricciones, preguntas_hechas
             FROM conversation_state WHERE wa_id = $1
             """,
             wa_id,
@@ -678,6 +684,7 @@ async def get_conversation_state(wa_id: str) -> dict | None:
         "calificado": row["calificado"],
         "productos_mostrados": list(row["productos_mostrados"] or []),
         "restricciones": json.loads(row["restricciones"]) if row["restricciones"] else {},
+        "preguntas_hechas": list(row["preguntas_hechas"] or []),
     }
 
 
@@ -689,6 +696,7 @@ async def upsert_conversation_state(
     calificado: bool | None = None,
     add_productos_mostrados: list[int] | None = None,
     restricciones: dict | None = None,
+    add_pregunta_hecha: str | None = None,
     reset: bool = False,
 ) -> None:
     """Crea o actualiza el estado de conversación de un cliente.
@@ -696,8 +704,11 @@ async def upsert_conversation_state(
     - Los campos categoria_busqueda/categoria_funcional/genero/calificado se
       actualizan con el valor provisto (None los deja igual salvo reset=True).
     - add_productos_mostrados añade IDs a los ya mostrados (sin duplicados).
+    - add_pregunta_hecha registra el tipo por el que ya se preguntó, para no
+      volver a preguntar lo mismo.
     - reset=True reinicia estado (ej: cliente cambia radicalmente de tema); en
-      ese caso los campos pasan a su default y productos_mostrados se vacía.
+      ese caso los campos pasan a su default, productos_mostrados se vacía y
+      preguntas_hechas también: en un tema nuevo, volver a preguntar es correcto.
     """
     async with _pool.acquire() as conn:
         if reset:
@@ -712,6 +723,7 @@ async def upsert_conversation_state(
                     calificado = FALSE,
                     productos_mostrados = '{}',
                     restricciones = NULL,
+                    preguntas_hechas = '{}',
                     updated_at = now()
                 """,
                 wa_id,
@@ -770,6 +782,17 @@ async def upsert_conversation_state(
                 list(add_productos_mostrados),
                 f"ARRAY(SELECT DISTINCT unnest(conversation_state.productos_mostrados || ${idx}::bigint[]))",
                 f"${idx}::bigint[]",
+            )
+        if add_pregunta_hecha:
+            # Mismo patrón acumulativo que productos_mostrados, y por el mismo
+            # motivo va en las DOS ramas del upsert: si solo estuviera en el SET,
+            # la pregunta del primer turno de un contacto nuevo no se registraría
+            # y se le volvería a preguntar lo mismo en el turno siguiente.
+            _campo(
+                "preguntas_hechas",
+                [add_pregunta_hecha],
+                f"ARRAY(SELECT DISTINCT unnest(conversation_state.preguntas_hechas || ${idx}::text[]))",
+                f"${idx}::text[]",
             )
         cols.append("updated_at")
         vals.append("now()")
