@@ -484,16 +484,42 @@ def _corregir_typos(texto: str | None) -> str:
     return _ALIASES_TYPO_RE.sub(_reemp, texto)
 
 
-def _categoria_normalizada(nombre: str, descripcion: str | None = "",
-                           cat_origen: str | None = "") -> str:
-    """Clasifica un producto en una categoría funcional mediante reglas de matching."""
-    haystack = _normalizar_texto(f"{nombre or ''} {descripcion or ''} {cat_origen or ''}")
-    if not haystack.strip():
-        return "juegos-y-accesorios"
+def _aplicar_reglas_categoria(haystack: str) -> str | None:
+    """Primera categoría funcional cuya palabra clave aparece en el texto."""
     for claves, cat_funcional in _REGLAS_CATEGORIA:
         for clave in claves:
             if clave in haystack:
                 return cat_funcional
+    return None
+
+
+def _categoria_normalizada(nombre: str, descripcion: str | None = "",
+                           cat_origen: str | None = "") -> str:
+    """Clasifica un producto en una categoría funcional mediante reglas de matching.
+
+    EL NOMBRE MANDA. Las reglas se evalúan primero contra el nombre solo, y únicamente
+    si el nombre no da señal se amplía a descripción + categoría de origen. Mezclar los
+    tres textos desde el principio hacía que una palabra suelta de la DESCRIPCIÓN
+    disparara una regla anterior (más genérica) y se llevara el producto a otra
+    categoría. Casos reales:
+      - "Bomba Automática ... Bender Optimus Pro" → su descripción dice "sistema
+        eléctrico de succión", y la regla de succionadores va antes que la de bombas:
+        quedaba como succionador y NUNCA aparecía al pedir "bombas para el pene".
+      - "Succionador Con Ondas Y Vibracion Nyla Fuscia" → su descripción dice
+        "Compatible con lubricantes a base de agua", y la regla de lubricantes va antes
+        que la de succionadores: quedaba como lubricante y era el único succionador que
+        no se mostraba.
+    Sobre el catálogo real esto corrige 32 de 246 productos (13%).
+    """
+    if not f"{nombre or ''}{descripcion or ''}{cat_origen or ''}".strip():
+        return "juegos-y-accesorios"
+    cat = _aplicar_reglas_categoria(_normalizar_texto(nombre))
+    if cat:
+        return cat
+    haystack = _normalizar_texto(f"{nombre or ''} {descripcion or ''} {cat_origen or ''}")
+    cat = _aplicar_reglas_categoria(haystack)
+    if cat:
+        return cat
     cat_o = _normalizar_texto(cat_origen)
     if "bondage" in cat_o:
         return "pareja-y-bondage"
@@ -1174,6 +1200,10 @@ async def clasificar_intencion_cliente(user_text: str,
     user_text = _corregir_typos(user_text)
 
     intencion, sustantivo = _intencion_desde_texto(user_text)
+    # Intención que trae el MENSAJE ACTUAL por sí mismo (antes de heredar nada del
+    # historial). Es lo que distingue "el cliente nombró otra categoría" de "el
+    # cliente respondió algo corto y seguimos en la misma".
+    intencion_propia = intencion
     genero = _genero_desde_texto_cliente(user_text)
     pide_fotos = bool(_FOTO_REQUEST_RE.search(user_text))
 
@@ -1205,6 +1235,9 @@ async def clasificar_intencion_cliente(user_text: str,
                 break
 
     categoria_funcional = _INTENCION_A_CATEGORIA_FUNCIONAL.get(intencion) if intencion else None
+    # ¿La categoría salió del MENSAJE ACTUAL (y no de heredar el historial)? Es la
+    # señal de cambio de tema que usa el motor de memoria más abajo.
+    cat_desde_mensaje = bool(intencion_propia and categoria_funcional)
 
     # subtipo_detectado: CUÁL subtipo reconoció (ej: "doble", "ventosa", "realista"),
     # para usarlo como filtro de ranking (que el producto mostrado coincida con el
@@ -1232,6 +1265,7 @@ async def clasificar_intencion_cliente(user_text: str,
             res_llm = await openai_client.clasificar_intencion_llm(user_text)
             if res_llm and res_llm.get("categoria") and res_llm["categoria"] != "ninguna":
                 categoria_funcional = res_llm["categoria"]
+                cat_desde_mensaje = True
                 if not intencion:
                     intencion = res_llm["categoria"]
                 if not genero and res_llm.get("genero"):
@@ -1247,6 +1281,7 @@ async def clasificar_intencion_cliente(user_text: str,
         cat_derivada = _SUBTIPO_A_CATEGORIA.get(subtipo_detectado)
         if cat_derivada:
             categoria_funcional = cat_derivada
+            cat_desde_mensaje = True
             if not intencion:
                 intencion = subtipo_detectado
 
@@ -1285,13 +1320,35 @@ async def clasificar_intencion_cliente(user_text: str,
                     cat_activa_memoria = "vibradores"
                     break
 
-    sustantivo_cambio_tema = None
-    for n in ("dildo", "dildos", "consolador", "lenceria", "lencería", "succionador", "succionadores", "vibrador", "vibradores", "anillo", "anillos", "funda", "fundas", "bomba", "bombas"):
-        if n in norm_user:
-            sustantivo_cambio_tema = n
-            break
+    # ── ¿CAMBIO DE TEMA? ──
+    # Antes esto era una lista fija de 15 sustantivos ("dildo", "vibrador",
+    # "bomba"...) y CUALQUIER mensaje que no la contuviera dejaba pegada la
+    # categoría del turno anterior. La lista omitía lubricante, látigo, plug,
+    # arnés, kit, masturbador, esposas, disfraz… así que una conversación que
+    # empezaba en "bombas para el pene" seguía respondiendo bombas cuando el
+    # cliente ya preguntaba por látigos, por lubricantes y por sabores.
+    #
+    # Criterio correcto y sin listas paralelas: si la categoría salió del MENSAJE
+    # ACTUAL (sustantivo propio, respaldo LLM o subtipo derivado) y es distinta de
+    # la de memoria, el cliente cambió de tema y manda su mensaje.
+    #
+    # EXCEPCIÓN: dentro de lubricantes, palabras como "anal" son un FILTRO de la
+    # categoría activa ("lubricante anal"), no una categoría nueva. Es el motivo
+    # original de este bloque y se conserva.
+    es_filtro_de_lubricantes = (
+        cat_activa_memoria == "lubricantes-y-cuidado"
+        and any(q in norm_user for q in ("anal", "agua", "silicona", "sabor", "desensibiliz"))
+    )
+    cambio_de_tema = bool(
+        cat_desde_mensaje
+        and categoria_funcional != cat_activa_memoria
+        and not es_filtro_de_lubricantes
+    )
+    if cambio_de_tema and cat_activa_memoria:
+        log.info("Cambio de tema en el mensaje: memoria=%s → mensaje=%s",
+                 cat_activa_memoria, categoria_funcional)
 
-    if cat_activa_memoria and not sustantivo_cambio_tema:
+    if cat_activa_memoria and not cambio_de_tema:
         categoria_funcional = cat_activa_memoria
         intencion = cat_activa_memoria
         if "anal" in norm_user or "desensibiliz" in norm_user:
@@ -1334,7 +1391,7 @@ async def clasificar_intencion_cliente(user_text: str,
         tiene_subtipo = subtipo_detectado is not None
 
     calificado = bool(categoria_funcional and (genero or tiene_subtipo or pide_fotos))
-    if categoria_funcional in CATEGORIAS_PUNTUALES or (cat_activa_memoria and not sustantivo_cambio_tema):
+    if categoria_funcional in CATEGORIAS_PUNTUALES or (cat_activa_memoria and not cambio_de_tema):
         calificado = True
 
 
@@ -1611,7 +1668,13 @@ async def get_productos_para_recomendar(
     # categoría alternativa que TAMBIÉN cumplan la categoría original (un plug
     # anal que vibra) suben al tope. Así no se diluyen los pocos productos que
     # combinan ambas intenciones entre muchos que solo cumplen el género.
-    if categoria_funcional and genero:
+    # NO se relaja la categoría cuando el cliente pidió un subtipo CONCRETO (látigos,
+    # sabores, duchas anales...): ahí "no hay" es la respuesta correcta y el turno debe
+    # escalar, no rellenar con lo que sea del género. Este bloque ignoraba `subtipo` por
+    # completo, y era el que mandaba anillos vibradores al azar a un cliente que había
+    # preguntado por látigos y luego por lubricantes de sabores.
+    subtipo_hard = bool(subtipo) and not _es_subtipo_soft(subtipo)
+    if categoria_funcional and genero and not subtipo_hard:
         cat_original_tokens = {
             "vibradores": ("vibr", "vibrador", "vibrator"),
             "dildos": ("dildo", "consolador"),

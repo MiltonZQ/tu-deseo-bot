@@ -448,30 +448,40 @@ async def _enviar_fotos_productos(
     candidatos: list[dict],
 ) -> list[int]:
     enviados: list[int] = []
-    try:
-        seen_ids: set[int] = set()
-        for idx, p in enumerate(candidatos, 1):
-            if len(enviados) >= 5:
-                break
-            pid = p.get("id")
-            if not pid or pid in seen_ids:
-                continue
-            if not p.get("imagen_url"):
-                log.warning("Candidato sin imagen_url omitido id=%s", pid)
-                continue
-            seen_ids.add(pid)
-            precio = p.get("precio", 0)
-            precio_fmt = f"{int(precio):,}".replace(",", ".") if precio else "0"
-            nombre = (p.get("nombre") or "")[:60]
-            caption = f"{idx}️⃣ *{nombre}*\n💰 ${precio_fmt}"
+    fallidos: list[int] = []
+    seen_ids: set[int] = set()
+    for idx, p in enumerate(candidatos, 1):
+        if len(enviados) >= 5:
+            break
+        pid = p.get("id")
+        if not pid or pid in seen_ids:
+            continue
+        if not p.get("imagen_url"):
+            log.warning("Candidato sin imagen_url omitido id=%s", pid)
+            continue
+        seen_ids.add(pid)
+        precio = p.get("precio", 0)
+        precio_fmt = f"{int(precio):,}".replace(",", ".") if precio else "0"
+        nombre = (p.get("nombre") or "")[:60]
+        caption = f"{idx}️⃣ *{nombre}*\n💰 ${precio_fmt}"
+        # El try/except va DENTRO del bucle: antes envolvía el bucle entero, así que
+        # la primera imagen que fallara (URL rota, formato que WhatsApp rechaza,
+        # rate limit) cancelaba en silencio TODAS las fotos restantes. El cliente
+        # veía una lista de 3 productos y recibía una sola foto.
+        try:
             await whatsapp_client.send_image(wa_id, p["imagen_url"], caption)
             log.info("Foto %d/%d '%s' enviada a %s", idx, len(candidatos), p.get("nombre"), wa_id)
             enviados.append(pid)
-            if len(enviados) < 5:
-                await asyncio.sleep(0.6)
-        log.info("Fotos a %s: %d enviadas de %d candidatos", wa_id, len(enviados), len(candidatos))
-    except Exception:
-        log.exception("Error enviando foto a %s", wa_id)
+        except Exception:
+            fallidos.append(pid)
+            log.exception(
+                "Error enviando foto de '%s' (id=%s url=%s) a %s — se continúa con las demás",
+                p.get("nombre"), pid, p.get("imagen_url"), wa_id,
+            )
+        if len(enviados) < 5:
+            await asyncio.sleep(0.6)
+    log.info("Fotos a %s: %d enviadas, %d fallidas, de %d candidatos",
+             wa_id, len(enviados), len(fallidos), len(candidatos))
     return enviados
 
 
@@ -1211,7 +1221,23 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # puso marcadores brutos, que pueden ser IDs alucinados y descartarse aquí).
     if info["debe_mostrar"] and candidatos:
         final_productos = _resolver_candidatos_del_llm(foto_ids, candidatos)
-        if len(final_productos) < 2:
+        # Solo se fuerzan fotos si la respuesta REALMENTE ofrece productos (lista
+        # numerada, plantilla de "mira estas opciones" o marcadores). Cuando el LLM
+        # responde otra cosa a propósito — escalar ("Déjame confirmar con el equipo"),
+        # o preguntar para calificar — forzar los candidatos adjuntaba fotos que nadie
+        # ofreció: el cliente preguntaba por látigos, recibía el mensaje de escalado y
+        # detrás dos anillos vibradores al azar.
+        promete_productos = bool(
+            foto_ids or _LISTA_PRODUCTOS_RE.search(reply) or _OFRECE_PRODUCTOS_RE.search(reply)
+        )
+        if len(final_productos) < 2 and not promete_productos:
+            log.info(
+                "Respuesta sin oferta de productos (%d candidatos disponibles) — no se "
+                "adjuntan fotos que el texto no promete",
+                len(candidatos),
+            )
+            final_productos = []
+        elif len(final_productos) < 2:
             # El LLM omitió las fotos o puso IDs inválidos: forzar candidatos.
             log.info(
                 "Fotos forzadas desde candidatos del sistema (%d) — LLM omitió marcadores",

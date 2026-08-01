@@ -1103,7 +1103,12 @@ def test_bug16_motor_memoria_existe_en_clasificador():
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "clasificar_intencion_cliente":
             src = ast.get_source_segment(_CAT.read_text(), node)
             assert "cat_activa_memoria" in src
-            assert "sustantivo_cambio_tema" in src
+            assert "cambio_de_tema" in src
+            # La detección de cambio de tema debe salir de si la categoría vino del
+            # MENSAJE actual, no de una lista fija de sustantivos: esa lista omitía
+            # lubricante/látigo/plug/arnés y dejaba pegada la categoría del turno 1.
+            assert "cat_desde_mensaje" in src
+            assert "sustantivo_cambio_tema" not in src
             return
     raise AssertionError("No se encontró clasificar_intencion_cliente")
 
