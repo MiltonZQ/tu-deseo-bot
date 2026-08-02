@@ -326,6 +326,7 @@ def _extract_meta_message(payload: dict) -> dict | None:
             "text": "",
             "media_id": None,
             "media_mime": None,
+            "image_url": None,
             "audio_url": None,
         }
         if mtype == "text":
@@ -334,7 +335,9 @@ def _extract_meta_message(payload: dict) -> dict | None:
             media = msg.get(mtype, {}) or {}
             out["media_id"] = media.get("id")
             out["media_mime"] = media.get("mime_type")
-            out["audio_url"] = media.get("url") or media.get("link")
+            m_url = media.get("url") or media.get("link")
+            out["image_url"] = m_url if mtype == "image" else None
+            out["audio_url"] = m_url if mtype in ("audio", "voice") else None
             # El caption es texto opcional que viene junto con la imagen/video
             out["text"] = media.get("caption", "")
         elif mtype == "interactive":
@@ -369,6 +372,7 @@ def _extract_ycloud_message(payload: dict) -> dict | None:
             "text": "",
             "media_id": None,
             "media_mime": None,
+            "image_url": None,
             "audio_url": None,
         }
         if mtype == "text":
@@ -377,10 +381,12 @@ def _extract_ycloud_message(payload: dict) -> dict | None:
             media = msg.get(mtype, {}) or {}
             out["media_id"] = media.get("id") or media.get("mediaId")
             out["media_mime"] = media.get("mime_type") or media.get("mimeType")
-            out["audio_url"] = (
+            m_url = (
                 media.get("url") or media.get("link")
                 or media.get("mediaUrl") or media.get("fileUrl")
             )
+            out["image_url"] = m_url if mtype == "image" else None
+            out["audio_url"] = m_url if mtype in ("audio", "voice") else None
             out["text"] = media.get("caption", "")
         elif mtype == "interactive":
             interactive = msg.get("interactive", {}) or {}
