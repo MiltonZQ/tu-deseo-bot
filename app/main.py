@@ -1007,7 +1007,8 @@ async def _recuperar_candidatos(
         # rellenar con productos de otra zona o tipo.
         res = await catalog.buscar_por_restricciones(
             restricciones, exclude_ids=exclude, limit=5,
-            permitir_relajar=not _es_ver_mas(user_text))
+            permitir_relajar=not _es_ver_mas(user_text),
+            user_text=user_text)
         if res.productos:
             candidatos = res.productos
             relajado = res.relajado

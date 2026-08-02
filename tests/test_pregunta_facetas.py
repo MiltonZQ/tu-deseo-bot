@@ -196,7 +196,8 @@ def _catalogo(total=20, disponibles=None, productos=None):
     async def disp(restricciones):
         return disponibles
 
-    async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True):
+    async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True,
+                     user_text=""):
         return catalog.Resultado(productos=list(productos), restricciones=restricciones)
 
     # Los caminos de respaldo (búsqueda por nombre, corrección de typos) tocan el
@@ -349,7 +350,8 @@ def _recuperar_espiando_exclude(mensaje, estado, productos=()):
     """Corre un turno devolviendo (info, excludes con los que se consultó)."""
     vistos = []
 
-    async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True):
+    async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True,
+                     user_text=""):
         vistos.append(list(exclude_ids or []))
         return catalog.Resultado(productos=list(productos), restricciones=restricciones)
 

@@ -81,3 +81,83 @@ def test_reconoce_las_dos_formas_de_plural():
     assert catalog._mismo_termino("anillo", "anillos")
     assert catalog._mismo_termino("anal", "anales")
     assert catalog._mismo_termino("dildo", "dildo")
+
+
+# ── Tarea 2: qué productos entran en la página ──
+
+# Los 12 succionadores ofrecibles reales, en el orden que devuelve el SQL
+# (LENGTH(nombre) ASC). Los 5 que se llaman "Succionador" están en las
+# posiciones 5,7,9,10,11: con LIMIT 5 el cliente no veía casi ninguno.
+SUCCIONADORES = [
+    {"id": 1, "nombre": "Satisfyer Curvy 3 Connect App", "descripcion": ""},
+    {"id": 2, "nombre": "Satisfyer Love Triangle Negro", "descripcion": ""},
+    {"id": 3, "nombre": "Satisfyer Love Triangle Blanco", "descripcion": ""},
+    {"id": 4, "nombre": "Satisfyer Pro 2+ Generación Rosa", "descripcion": ""},
+    {"id": 5, "nombre": "Succionador de Clítoris Tenera 2", "descripcion": ""},
+    {"id": 6, "nombre": "Satisfyer Pro 3+ Generación Negro", "descripcion": ""},
+    {"id": 7, "nombre": "Vibrador y Succionador Ohlala Rose", "descripcion": ""},
+    {"id": 8, "nombre": "Satisfyer Pro 2 Generación Oro Rosa", "descripcion": ""},
+    {"id": 9, "nombre": "Satisfyer Penguin Succionador Clitorial", "descripcion": ""},
+    {"id": 10, "nombre": "Satisfyer Succionador Clitorial Number One", "descripcion": ""},
+    {"id": 11, "nombre": "Succionador Con Ondas Y Vibracion Nyla Fuscia", "descripcion": ""},
+    {"id": 12, "nombre": "Estimulador de Clítoris Sona 2 Cruise Lelo Original",
+     "descripcion": ""},
+]
+
+# Los que llevan "Succionador" en el nombre.
+IDS_SUCCIONADOR = {5, 7, 9, 10, 11}
+
+
+def _catalogo_fake(filas):
+    async def fake_fetch(sql, *params):
+        return [dict(p) for p in filas]
+    return parchar(catalog, _fetch_restricciones=fake_fetch)
+
+
+def test_la_primera_pagina_trae_los_productos_que_el_cliente_nombro():
+    """El reporte del 1/08: de 12 succionadores, la primera vuelta traía 4
+    Satisfyer y un solo 'Succionador'. Los 5 que se llaman así deben ENTRAR,
+    no reordenarse dentro de una página que no los contenía."""
+    with _catalogo_fake(SUCCIONADORES):
+        res = asyncio.run(catalog._consultar_restricciones(
+            {"tipo": "succionador"}, None, 5, user_text="quizás tienen succionadores"))
+    assert {p["id"] for p in res} == IDS_SUCCIONADOR, \
+        f"recibidos: {[p['nombre'] for p in res]}"
+
+
+def test_el_sql_no_puede_cortar_antes_de_ordenar():
+    """Si el LIMIT del SQL siguiera siendo `limit`, el fixture nunca vería los
+    productos de las posiciones 6-12 y el test anterior pasaría por azar."""
+    visto = {}
+
+    async def fake_fetch(sql, *params):
+        visto["sql"] = sql
+        return [dict(p) for p in SUCCIONADORES]
+
+    with parchar(catalog, _fetch_restricciones=fake_fetch):
+        asyncio.run(catalog._consultar_restricciones(
+            {"tipo": "succionador"}, None, 5, user_text="succionadores"))
+    assert "LIMIT 5" not in visto["sql"], \
+        "con texto del cliente hay que traer el conjunto completo y ordenar aquí"
+
+
+def test_sin_texto_del_cliente_el_orden_no_cambia():
+    """`contar_por_restricciones` y `facetas_disponibles` llaman sin texto: no
+    deben pagar el coste de ordenar ni ver alterado su resultado."""
+    with _catalogo_fake(SUCCIONADORES):
+        res = asyncio.run(catalog._consultar_restricciones(
+            {"tipo": "succionador"}, None, 5))
+    assert [p["id"] for p in res] == [1, 2, 3, 4, 5]
+
+
+def test_buscar_por_restricciones_propaga_el_texto():
+    visto = {}
+
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+        visto["user_text"] = user_text
+        return [dict(p) for p in SUCCIONADORES[:5]]
+
+    with parchar(catalog, _consultar_restricciones=fake_consultar):
+        asyncio.run(catalog.buscar_por_restricciones(
+            {"tipo": "succionador"}, limit=5, user_text="tienen succionadores"))
+    assert visto["user_text"] == "tienen succionadores"

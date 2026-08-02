@@ -1850,9 +1850,25 @@ class Resultado:
 _ESCALERA_RELAJACION = ("atributos", "control", "genero_uso", "tipo", "vibra")
 
 
+async def _fetch_restricciones(sql: str, *params) -> list[dict]:
+    """Único punto que toca la DB en esta ruta. Aparte para poder probar qué
+    productos entran en la página sin levantar Postgres."""
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        return [dict(r) for r in await conn.fetch(sql, *params)]
+
+
 async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] | None,
-                                   limit: int) -> list[dict]:
-    """Una consulta SQL con las restricciones dadas. Filtra en la DB, no en Python."""
+                                   limit: int, user_text: str = "") -> list[dict]:
+    """Una consulta SQL con las restricciones dadas. Filtra en la DB, no en Python.
+
+    Con `user_text`, decide por CONCORDANCIA qué productos entran en la página.
+    Esto no es cosmético: el ORDER BY era LENGTH(nombre) ASC y el LIMIT cortaba
+    ahí, así que al pedir "succionadores" los 5 productos llamados
+    "Succionador ..." caían en las posiciones 5,7,9,10,11 del catálogo de 12 y
+    el cliente recibía cuatro Satisfyer. El SQL no puede ordenar por relevancia
+    —no sabe qué escribió el cliente—, así que se trae el conjunto que cumple
+    las facetas y se ordena aquí.
+    """
     where = ["(stock_status IS NULL OR stock_status <> 'outofstock')",
              "imagen_url IS NOT NULL AND imagen_url != ''"]
     params: list = []
@@ -1874,14 +1890,26 @@ async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] |
         where.append(f"NOT (id = ANY(${idx}::bigint[]))")
         params.append(list(exclude_ids))
         idx += 1
+    # Con texto del cliente hay que traer el conjunto completo para poder
+    # ordenarlo: cortar en SQL por longitud de nombre es justamente el fallo.
+    # 200 cubre de sobra la categoría más grande del catálogo (76 vibradores) y
+    # es menos de lo que ya pide `contar_por_restricciones` (500).
+    n_filas = limit if not user_text else 200
     sql = (
         "SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, "
         "permalink, tipo, zona, vibra, control, genero_uso, atributos "
         "FROM productos WHERE " + " AND ".join(where) +
-        f" ORDER BY (activo IS TRUE) DESC, LENGTH(nombre) ASC LIMIT {int(limit)}"
+        f" ORDER BY (activo IS TRUE) DESC, LENGTH(nombre) ASC LIMIT {int(n_filas)}"
     )
-    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
-        return [dict(r) for r in await conn.fetch(sql, *params)]
+    filas = await _fetch_restricciones(sql, *params)
+    if not user_text:
+        return filas[:limit]
+    for p in filas:
+        p["_score"] = _score_candidato(p, user_text)
+    # Desempate por nombre corto: entre productos igual de relevantes conserva
+    # el orden anterior, así que la paginación es estable.
+    filas.sort(key=lambda p: (-p["_score"], len(p.get("nombre") or "")))
+    return filas[:limit]
 
 
 async def contar_por_restricciones(restricciones: dict) -> int:
@@ -1942,7 +1970,8 @@ async def facetas_disponibles(restricciones: dict) -> dict:
 async def buscar_por_restricciones(restricciones: dict,
                                    exclude_ids: list[int] | None = None,
                                    limit: int = 5,
-                                   permitir_relajar: bool = True) -> Resultado:
+                                   permitir_relajar: bool = True,
+                                   user_text: str = "") -> Resultado:
     """Busca productos que cumplan las restricciones, cediendo de forma explícita.
 
     1. Intenta la combinación exacta.
@@ -1957,7 +1986,7 @@ async def buscar_por_restricciones(restricciones: dict,
     if not restricciones:
         return Resultado(restricciones=restricciones)
 
-    exactos = await _consultar_restricciones(restricciones, exclude_ids, limit)
+    exactos = await _consultar_restricciones(restricciones, exclude_ids, limit, user_text)
     if exactos:
         return Resultado(productos=exactos, restricciones=restricciones)
 
@@ -1974,7 +2003,7 @@ async def buscar_por_restricciones(restricciones: dict,
         aflojadas = {k: v for k, v in restricciones.items() if k != campo}
         if not aflojadas.get("tipo") and not aflojadas.get("zona"):
             continue  # soltar eso dejaría la búsqueda sin ancla
-        encontrados = await _consultar_restricciones(aflojadas, exclude_ids, limit)
+        encontrados = await _consultar_restricciones(aflojadas, exclude_ids, limit, user_text)
         if encontrados:
             log.info("Restricción relajada: %s (quedan %s) → %d productos",
                      campo, aflojadas, len(encontrados))
@@ -1987,7 +2016,7 @@ async def buscar_por_restricciones(restricciones: dict,
     ancla = "zona" if restricciones.get("zona") else "tipo"
     if restricciones.get(ancla):
         solo = {ancla: restricciones[ancla]}
-        encontrados = await _consultar_restricciones(solo, exclude_ids, limit)
+        encontrados = await _consultar_restricciones(solo, exclude_ids, limit, user_text)
         if encontrados:
             log.info("Solo se pudo respetar %s=%s → %d productos",
                      ancla, restricciones[ancla], len(encontrados))
