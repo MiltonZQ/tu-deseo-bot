@@ -42,3 +42,112 @@ def test_el_cta_pide_el_numero_tambien_cuando_se_cedio_en_algo():
         "intencion": "anal", "relajado": "zona", "hay_mas": False,
         "restricciones": {"tipo": "vibrador", "zona": "anal"}})
     assert "indícame el número o los números" in txt, txt
+
+
+LISTA = [{"role": "assistant",
+          "content": "1️⃣ *Dildo Uno* — $50.000\n2️⃣ *Dildo Dos* — $60.000"}]
+SIN_LISTA = [{"role": "assistant", "content": "¿Buscas algo realista o con ventosa?"}]
+
+
+# ── Tarea 3: el ordinal también es elegir ──
+
+def test_el_ordinal_es_una_seleccion():
+    for texto in ("el primero", "la segunda", "quiero el tercero",
+                  "me llevo la primera", "dame el quinto"):
+        assert main._es_seleccion_de_lista_mostrada(texto, LISTA), texto
+
+
+def test_primero_como_adverbio_no_es_una_seleccion():
+    """'primero quiero saber si es impermeable' es una duda, no una elección.
+    Por eso el patrón exige artículo definido y va anclado al principio."""
+    for texto in ("primero quiero saber si es impermeable",
+                  "primero dime el precio",
+                  "necesito saber primero el envio"):
+        assert not main._es_seleccion_de_lista_mostrada(texto, LISTA), texto
+
+
+def test_sin_lista_previa_el_ordinal_no_selecciona_nada():
+    assert not main._es_seleccion_de_lista_mostrada("el primero", SIN_LISTA)
+
+
+def test_la_seleccion_numerica_sigue_funcionando_igual():
+    """Lo que ya funcionaba no se toca: el ordinal se AÑADE."""
+    for texto in ("el 2", "el 1 y el 3", "dame el 2", "2 y 4"):
+        assert main._es_seleccion_de_lista_mostrada(texto, LISTA), texto
+    assert not main._es_seleccion_de_lista_mostrada("tengo 25 años", SIN_LISTA)
+
+
+# ── Tarea 2: el pedido sin número ──
+
+def test_quiere_pedir_sin_numero_recibe_la_peticion_del_numero():
+    """El caso del documento: 'quiero pedir' no lleva a otra página de catálogo."""
+    for texto in ("quiero pedir", "quiero ordenar", "como puedo comprar",
+                  "me gustaria comprar", "deseo ordenar", "quiero llevar",
+                  "como hago para pedir", "dame ese", "quiero ese"):
+        assert main._pide_comprar_sin_numero(texto, LISTA, {}, "dildo"), texto
+
+
+def test_sin_lista_previa_no_se_pide_ningun_numero():
+    """Sin lista no hay número que pedir: toca preguntarle qué busca."""
+    assert not main._pide_comprar_sin_numero("quiero comprar", SIN_LISTA, {}, None)
+
+
+def test_nombrar_otra_categoria_es_una_busqueda_nueva():
+    """Se mira la faceta del MENSAJE, no la fusionada con el estado."""
+    assert not main._pide_comprar_sin_numero(
+        "quiero comprar lubricantes", LISTA, {"tipo": "lubricante"}, "dildo")
+
+
+def test_repetir_el_tipo_en_pantalla_si_es_una_seleccion():
+    """'quiero el dildo' con dildos en pantalla no es una búsqueda nueva."""
+    assert main._pide_comprar_sin_numero(
+        "quiero el dildo", LISTA, {"tipo": "dildo"}, "dildo")
+
+
+def test_un_atributo_nuevo_es_una_busqueda_aunque_repita_el_tipo():
+    """'quiero un dildo doble' está refinando, no eligiendo."""
+    assert not main._pide_comprar_sin_numero(
+        "quiero un dildo doble", LISTA,
+        {"tipo": "dildo", "atributos": ["doble"]}, "dildo")
+
+
+def test_los_implicitos_de_facetas_no_cuentan_como_faceta_nombrada():
+    """`interpretar_mensaje` devuelve claves internas con guion bajo."""
+    assert main._pide_comprar_sin_numero(
+        "quiero pedir", LISTA, {"_implicitos": [("doble", (), None)]}, "dildo")
+
+
+def test_una_duda_no_se_confunde_con_un_pedido():
+    for texto in ("cuanto vale el envio", "son impermeables", "hacen envios a cali"):
+        assert not main._pide_comprar_sin_numero(texto, LISTA, {}, "dildo"), texto
+
+
+def test_si_ya_dio_el_numero_no_se_le_vuelve_a_pedir():
+    """'quiero el 2' trae el número: lo atiende la selección numérica, intacta."""
+    assert not main._pide_comprar_sin_numero("quiero el 2", LISTA, {}, "dildo")
+
+
+def test_el_ordinal_no_se_confunde_con_un_pedido_sin_numero():
+    """'quiero el primero' casa el patrón de compra vaga por el 'el': gana la
+    selección, que es más específica."""
+    assert not main._pide_comprar_sin_numero("quiero el primero", LISTA, {}, "dildo")
+
+
+def test_pedir_un_listado_en_plural_no_es_elegir():
+    """'quiero los vibradores' pide ver, no comprar: el plural queda fuera."""
+    assert not main._pide_comprar_sin_numero(
+        "quiero los vibradores", LISTA, {"tipo": "vibrador"}, "vibrador")
+
+
+def test_la_copia_no_vuelve_a_listar_productos():
+    assert "️⃣" not in main.PEDIR_NUMERO_DE_LISTA
+    assert "[FOTO:" not in main.PEDIR_NUMERO_DE_LISTA
+    assert "indícame el número o los números" in main.PEDIR_NUMERO_DE_LISTA
+
+
+def test_el_bot_mostro_lista_reconoce_el_keycap():
+    assert main._bot_mostro_lista(LISTA)
+    assert not main._bot_mostro_lista(SIN_LISTA)
+    assert not main._bot_mostro_lista([])
+    assert not main._bot_mostro_lista([{"role": "user", "content": "1️⃣ me gusta"}]), \
+        "la lista la tiene que haber enviado el BOT, no el cliente"

@@ -14,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature, catalog
 from app import escalations, admin, leads, follow_ups, sedes, pedidos, redis_client, vector_store
-from app import preguntas
+from app import preguntas, facetas
 
 logging.basicConfig(
     level=logging.INFO,
@@ -819,17 +819,109 @@ _SELECCION_NUMERICA_RE = re.compile(
 )
 
 
-def _es_seleccion_de_lista_mostrada(user_text: str, history: list[dict]) -> bool:
-    """El cliente elige por número ("el 2 y 3") de una lista que el bot ya
-    envió con emojis de numeración (1️⃣, 2️⃣...) en el turno anterior. Requiere
-    ver esa numeración reciente para no confundir cualquier número suelto
-    (ej: "tengo 25 años", una dirección) con una selección de producto."""
-    if not _SELECCION_NUMERICA_RE.search(user_text or ""):
-        return False
-    for m in reversed(history[-4:]):
+# Selección por ordinal ("el primero", "la segunda"). Aparte del patrón numérico
+# porque no lleva dígitos, y solo hasta el quinto: nunca se muestran más de cinco
+# productos por turno.
+#
+# Anclado al principio y con artículo definido obligatorio a propósito: sin eso,
+# "primero quiero saber si es impermeable" —una duda perfectamente normal— se leía
+# como una elección y el bot daba por cerrada la venta.
+_SELECCION_ORDINAL_RE = re.compile(
+    r"^\s*(?:(?:me\s+llevo|quiero|dame|deseo|prefiero|elijo)\s+)?"
+    r"(?:el|la)\s+(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])\b",
+    re.IGNORECASE,
+)
+
+# El cliente dice que quiere comprar pero no dice CUÁL. Dos formas:
+#
+#  A. Fórmula de pedido sin objeto: "quiero pedir", "cómo puedo comprar".
+#  B. Verbo de compra + determinante SINGULAR: "quiero ese", "quiero el dildo".
+#
+# El singular separa B de una búsqueda: "quiero los vibradores" pide un listado,
+# "quiero el vibrador" elige uno. `_FASE_VENTA_RE` no cubre ninguna de las dos
+# —conoce "lo compro" y "lo llevo", no "quiero comprar"—, así que estos turnos
+# caían en la regla anti-bucle y el sistema listaba otra página.
+_COMPRA_SIN_OBJETO_RE = re.compile(
+    r"\b(quiero|deseo|necesito|me\s+gustar[ií]a)\s+"
+    r"(pedir|ordenar|comprar|llevar|hacer\s+(un\s+|el\s+)?pedido)\b|"
+    r"\bc[oó]mo\s+(puedo\s+|hago\s+para\s+)?(pedir|ordenar|comprar|"
+    r"hacer\s+(el|un)\s+pedido)\b",
+    re.IGNORECASE,
+)
+_COMPRA_OBJETO_VAGO_RE = re.compile(
+    r"\b(quiero|dame|deseo|me\s+llevo|ll[eé]vame|sep[aá]r[ae]me|ap[aá]rt[ae]me)\s+"
+    r"(ese|esa|eso|este|esta|el|la|un|una)\b",
+    re.IGNORECASE,
+)
+
+# Respuesta a ese caso. NO lleva lista ni marcadores de foto a propósito: el
+# cliente ya vio los productos y está cerrando; reenviárselos es el ruido que
+# rompe la venta.
+PEDIR_NUMERO_DE_LISTA = (
+    "¡Perfecto! Para tomar tu pedido, por favor indícame el número o los números "
+    "de los productos que deseas adquirir, según las opciones que te envié "
+    "anteriormente 😊"
+)
+
+
+def _bot_mostro_lista(history: list[dict]) -> bool:
+    """¿El bot envió una lista numerada en los últimos turnos?
+
+    El keycap (1️⃣) es la marca; lo pone `_numero_lista`. Es lo que distingue
+    "el 2" (una selección) de "tengo 2 hijos" (un número suelto), y ahora también
+    lo que autoriza a pedirle un número al cliente: sin lista previa, pedirlo no
+    tiene sentido.
+    """
+    for m in reversed((history or [])[-4:]):
         if m.get("role") == "assistant" and "️⃣" in (m.get("content") or ""):
             return True
     return False
+
+
+def _es_seleccion_de_lista_mostrada(user_text: str, history: list[dict]) -> bool:
+    """El cliente elige por número ("el 2 y 3") o por ordinal ("el primero") de
+    una lista que el bot ya envió con emojis de numeración (1️⃣, 2️⃣...) en el
+    turno anterior. Requiere ver esa numeración reciente para no confundir
+    cualquier número suelto (ej: "tengo 25 años", una dirección) con una
+    selección de producto."""
+    if not (_SELECCION_NUMERICA_RE.search(user_text or "")
+            or _SELECCION_ORDINAL_RE.search(user_text or "")):
+        return False
+    return _bot_mostro_lista(history)
+
+
+def _pide_comprar_sin_numero(user_text: str, history: list[dict],
+                             restricciones_msg: dict,
+                             tipo_activo: str | None) -> bool:
+    """El cliente dice que quiere comprar, pero no dice cuál de la lista.
+
+    Tres condiciones, todas necesarias:
+
+    - No trae número ni ordinal. De eso se encarga la selección de lista, que NO
+      se toca; "quiero el 2" casa el patrón B por el "el", y se descarta aquí
+      primero para que el orden de las palancas no importe.
+    - El bot mostró una lista numerada hace poco. Sin lista no hay número que
+      pedir y la respuesta correcta es preguntarle qué busca.
+    - El mensaje no nombra nada nuevo. Se comparan las facetas del MENSAJE, no
+      las fusionadas con el estado: "quiero comprar lubricantes" trae tipo propio
+      y es una búsqueda; "quiero el dildo" repite el tipo que ya está en pantalla
+      y es una selección mal expresada. Un atributo ("un dildo doble") también
+      cuenta como búsqueda: está refinando, no eligiendo.
+    """
+    texto = user_text or ""
+    if _SELECCION_NUMERICA_RE.search(texto) or _SELECCION_ORDINAL_RE.search(texto):
+        return False
+    if not (_COMPRA_SIN_OBJETO_RE.search(texto) or _COMPRA_OBJETO_VAGO_RE.search(texto)):
+        return False
+    if not _bot_mostro_lista(history):
+        return False
+    # Las claves con guion bajo son internas de `interpretar_mensaje` (los
+    # implícitos), no facetas que el cliente haya nombrado.
+    propias = {k: v for k, v in (restricciones_msg or {}).items()
+               if not k.startswith("_")}
+    if not propias:
+        return True
+    return list(propias) == ["tipo"] and propias["tipo"] == tipo_activo
 
 
 # Frases que indican que el bot REALMENTE abrió el checkout (pidió datos de envío
@@ -1028,6 +1120,22 @@ async def _recuperar_candidatos(
         debe_mostrar = False
         clasif["calificado"] = False
         log.info("Selección numérica de lista ya mostrada — fotos desactivadas este turno")
+
+    # REGLA DE PEDIDO SIN NÚMERO: el cliente dice que quiere comprar pero no dice
+    # cuál ("quiero pedir", "dame ese"). Cuarta palanca sobre debe_mostrar, con la
+    # forma de la fase de venta y la selección numérica: apaga búsqueda, lista y
+    # fotos sin tocar nada más.
+    #
+    # A diferencia de esas dos, NO pone `calificado=False`. Ellas lo hacen para que
+    # el turno siguiente no fuerce un reenvío; aquí el cliente sigue calificado —ya
+    # sabe qué quiere, solo falta el número— y borrarlo haría que el bot le volviera
+    # a preguntar la categoría.
+    pide_numero_de_lista = _pide_comprar_sin_numero(
+        user_text, history, facetas.interpretar_mensaje(user_text),
+        ((estado or {}).get("restricciones") or {}).get("tipo"))
+    if pide_numero_de_lista:
+        debe_mostrar = False
+        log.info("Intención de compra sin número — se le pide el número de la lista")
 
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
@@ -1321,6 +1429,9 @@ async def _recuperar_candidatos(
         # Texto de la pregunta de clarificación, o None. Si viene, ES el turno:
         # no hay lista ni fotos que redactar.
         "pregunta_faceta": pregunta_faceta,
+        # El cliente pidió comprar sin decir cuál. Si viene, ES el turno: no hay
+        # lista ni fotos, solo la petición del número.
+        "pide_numero_de_lista": pide_numero_de_lista,
     }
     return candidatos, info
 
@@ -1612,7 +1723,12 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # el sistema; si lo escribe el LLM numera desde 1 por su cuenta y un offset en
     # las fotos las desalinearía del texto.
     offset_numeracion = 0
-    if info.get("pregunta_faceta"):
+    if info.get("pide_numero_de_lista"):
+        # Va PRIMERO: el cliente ya dijo que quiere comprar. Cualquier otra rama
+        # —pregunta de faceta, categoría agotada, el LLM— lo devuelve a explorar
+        # justo cuando estaba cerrando.
+        raw_reply = PEDIR_NUMERO_DE_LISTA
+    elif info.get("pregunta_faceta"):
         # Va ANTES que `es_agotado`: una petición amplia llega con la lista de
         # productos mostrados vacía, así que nunca es una categoría agotada.
         raw_reply = info["pregunta_faceta"]
