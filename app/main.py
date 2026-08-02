@@ -237,6 +237,19 @@ async def reclasificar_facetas(
     return res
 
 
+@app.get("/maintenance/auditar-atributos")
+async def auditar_atributos(x_reload_token: str = Header(None)):
+    """De dónde saca cada atributo el catálogo: del nombre o de la descripción.
+
+    Solo lee. Es el paso previo a acotar una regla: un atributo que casi todos
+    sus productos deben a la descripción es sospechoso de falso positivo.
+    """
+    if not config.RELOAD_TOKEN or x_reload_token != config.RELOAD_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from app import clasificacion
+    return await clasificacion.auditar_atributos()
+
+
 @app.post("/maintenance/reset-all-conversations")
 async def reset_all_conversations(
     x_reload_token: str = Header(None),

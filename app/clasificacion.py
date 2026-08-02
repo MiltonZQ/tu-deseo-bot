@@ -92,3 +92,48 @@ async def reclasificar_catalogo(dry_run: bool = False, solo_nuevos: bool = False
         "cambios": len(cambios),
         "detalle": cambios,
     }
+
+
+def auditar_filas(productos: list[dict]) -> dict:
+    """De dónde sale cada atributo: del nombre o solo de la descripción.
+
+    Los atributos se detectan sobre `nombre + descripción + categoría`, así que
+    una frase comercial de la ficha marca el producto entero. Pasó con "doble
+    densidad", que convirtió en dildos DOBLES a cuatro ultrarrealistas. La
+    señal es exactamente esta: el atributo está, pero el cliente no lo vería
+    leyendo el nombre.
+
+    Función pura para poder probarla sin Postgres; `auditar_atributos` trae las
+    filas.
+    """
+    resumen: dict[str, dict] = {}
+    for p in productos:
+        completo = facetas.normalizar(
+            f"{p.get('nombre') or ''} {p.get('descripcion') or ''} "
+            f"{p.get('categoria') or ''}")
+        solo_nombre = facetas.normalizar(p.get("nombre") or "")
+        for attr, claves in facetas._ATRIBUTOS.items():
+            if not facetas._alguna(claves, completo):
+                continue
+            entrada = resumen.setdefault(attr, {
+                "total": 0, "por_nombre": 0, "solo_descripcion": 0,
+                "ejemplos": [],
+            })
+            entrada["total"] += 1
+            if facetas._alguna(claves, solo_nombre):
+                entrada["por_nombre"] += 1
+            else:
+                entrada["solo_descripcion"] += 1
+                if len(entrada["ejemplos"]) < 8:
+                    entrada["ejemplos"].append(p.get("nombre") or "")
+    return {"productos": len(productos), "atributos": resumen}
+
+
+async def auditar_atributos() -> dict:
+    """`auditar_filas` sobre los productos ofrecibles del catálogo."""
+    sql = ("SELECT id, nombre, descripcion, categoria FROM productos "
+           "WHERE (stock_status IS NULL OR stock_status <> 'outofstock') "
+           "AND imagen_url IS NOT NULL AND imagen_url != ''")
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        productos = [dict(r) for r in await conn.fetch(sql)]
+    return auditar_filas(productos)
