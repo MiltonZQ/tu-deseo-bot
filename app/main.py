@@ -859,7 +859,8 @@ async def _recuperar_candidatos(
         if tokens_extra:
             exclude_previo = estado.get("productos_mostrados", []) if estado else []
             producto_por_nombre = await catalog.buscar_producto_especifico(
-                user_text, limit=5, exclude_ids=exclude_previo)
+                user_text, limit=5, exclude_ids=exclude_previo,
+                tipo=restricciones.get("tipo"))
             if not producto_por_nombre:
                 # El término puede venir con un typo ("multiorgarmo"). Corregirlo
                 # contra los nombres reales del catálogo y reintentar: sin esto el
@@ -868,7 +869,8 @@ async def _recuperar_candidatos(
                 texto_corregido = await catalog.corregir_typos_contra_catalogo(user_text)
                 if texto_corregido != user_text:
                     producto_por_nombre = await catalog.buscar_producto_especifico(
-                        texto_corregido, limit=5, exclude_ids=exclude_previo)
+                        texto_corregido, limit=5, exclude_ids=exclude_previo,
+                        tipo=restricciones.get("tipo"))
             if producto_por_nombre:
                 clasif["es_especifico"] = True
                 clasif["calificado"] = True
@@ -999,7 +1001,7 @@ async def _recuperar_candidatos(
     # Así "Lovense Lush" muestra Lovense, no vibradores genéricos al azar.
     if clasif.get("es_especifico") and debe_mostrar:
         especificos = producto_por_nombre or await catalog.buscar_producto_especifico(
-            user_text, limit=5, exclude_ids=exclude)
+            user_text, limit=5, exclude_ids=exclude, tipo=restricciones.get("tipo"))
         if especificos:
             candidatos = especificos
             log.info("Producto específico encontrado por nombre: %d", len(candidatos))

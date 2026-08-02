@@ -162,7 +162,15 @@ STOP_WORDS = {
     "enviar", "mandar", "manda", "envia", "como", "es", "tienes", "verla",
     "verlo", "verlos", "verlas", "con", "para", "este", "chat", "puedes",
     "cada", "uno", "unos", "unas", "diferencias", "principales", "me", "no",
-    "enciaste", "enviaste", "mandaste", "llegado", "llego", "hijueputa", "puta"
+    "enciaste", "enviaste", "mandaste", "llegado", "llego", "hijueputa", "puta",
+    # Conectores y saludos. Sin ellos, "que" contaba como token de búsqueda:
+    # dos coincidencias de relleno en la descripción (0.5 + 0.5) alcanzaban el
+    # umbral de producto específico sin tocar el nombre, y un "Hola, que dildos
+    # tinen" devolvía 2 productos al azar en vez del catálogo de la categoría.
+    "que", "qué", "cual", "cuales", "hay", "tiene", "hola", "buenas",
+    "buenos", "dias", "tardes", "noches", "gracias", "favor", "porfa",
+    "manejan", "maneja", "venden", "vende", "muestras", "mostrar", "quisiera",
+    "podria", "puede", "algun", "alguna", "algunos", "algunas",
 }
 
 
@@ -1477,6 +1485,25 @@ def _mismo_termino(a: str, b: str) -> bool:
     return larga in (corta + "s", corta + "es")
 
 
+def _score_nombre_discriminante(producto: dict, user_text: str) -> float:
+    """Cuánto casa el NOMBRE con las palabras que identifican un producto concreto.
+
+    Solo cuentan los tokens que NO son vocabulario de catálogo: marcas y
+    modelos. La palabra de la categoría no vale como prueba de que el cliente
+    pide un producto específico — "dildos" está en el nombre de los 22 dildos,
+    así que serviría para "encontrar" cualquiera de ellos. Con esto, "dildos
+    Tenera" se resuelve por "tenera" y "Hola, que dildos tinen" no se resuelve
+    por nada, que es lo correcto: ahí el cliente habla de la categoría.
+    """
+    discriminantes = _tokens_no_reconocidos(user_text)
+    if not discriminantes:
+        return 0.0
+    nombre_toks = set(re.findall(r"\b[a-z]{2,}\b", _normalizar_texto(
+        producto.get("nombre", "") or "")))
+    return sum(2.0 for t in discriminantes
+               if any(_mismo_termino(t, n) for n in nombre_toks))
+
+
 def _score_candidato(producto: dict, user_text: str) -> float:
     if not user_text:
         return 0.0
@@ -2051,13 +2078,29 @@ async def contar_productos(categoria_funcional: str | None, genero: str | None) 
         return 0
 
 
-async def buscar_producto_especifico(user_text: str, limit: int = 3,
-                                     exclude_ids: list[int] | None = None) -> list[dict]:
-    """Busca productos por nombre cuando el cliente pide algo específico (ej:
-    "tienen el Lovense Diamo?"). Usa coincidencia de tokens con score >= 1.0.
+async def _fetch_especificos(sql: str, *params) -> list[dict]:
+    """Único punto que toca la DB en la búsqueda por nombre. Aparte para poder
+    probar el filtrado sin levantar Postgres."""
+    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+        return [dict(r) for r in await conn.fetch(sql, *params)]
 
-    Para el pipeline: cuando no hay intención de categoría clara pero el texto
-    menciona un producto concreto, recupéralo para que el LLM lo muestre.
+
+async def buscar_producto_especifico(user_text: str, limit: int = 3,
+                                     exclude_ids: list[int] | None = None,
+                                     tipo: str | None = None) -> list[dict]:
+    """Productos cuyo NOMBRE coincide con lo que escribió el cliente.
+
+    Para el pipeline: cuando el texto menciona un producto concreto ("tienen el
+    Lovense Diamo?"), recuperarlo directo en vez de listar su categoría.
+
+    Exige al menos una coincidencia en el NOMBRE. Antes bastaba llegar a un
+    score de 1.0, y como una coincidencia en la descripción vale 0.5, dos
+    palabras de relleno ("que" + "dildos") lo alcanzaban: un "Hola, que dildos
+    tinen" devolvía 2 productos al azar y, por la vía de `es_especifico`, esos 2
+    sustituían al listado de los 22 dildos de la categoría.
+
+    Con `tipo`, la búsqueda se restringe a esa faceta: "dildos Tenera" busca
+    Tenera entre los dildos y no puede traer nada de otra categoría.
 
     exclude_ids: IDs a excluir (productos ya mostrados, para no repetir fotos al
     pedir "ver más"). Retrocompatible: si es None, no excluye nada.
@@ -2068,24 +2111,26 @@ async def buscar_producto_especifico(user_text: str, limit: int = 3,
     if not tokens:
         return []
     exclude_set = set(exclude_ids or [])
-    async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
-        rows = await conn.fetch(
-            """
-            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
-            FROM productos
-            WHERE activo = TRUE
-              AND (stock_status IS NULL OR stock_status <> 'outofstock')
-              AND imagen_url IS NOT NULL AND imagen_url != ''
-            """
-        )
+    where = ["activo = TRUE",
+             "(stock_status IS NULL OR stock_status <> 'outofstock')",
+             "imagen_url IS NOT NULL AND imagen_url != ''"]
+    params: list = []
+    if tipo:
+        where.append(f"tipo = ${len(params) + 1}")
+        params.append(tipo)
+    sql = ("SELECT id, nombre, descripcion, categoria, precio, imagen_url, "
+           "galeria_urls, permalink FROM productos WHERE " + " AND ".join(where))
+    rows = await _fetch_especificos(sql, *params)
+
     scored = []
-    for r in rows:
-        p = dict(r)
+    for p in rows:
         if p["id"] in exclude_set:
             continue
-        score = _score_candidato(p, user_text)
-        if score >= 1.0:  # al menos una coincidencia fuerte en el nombre
-            p["_score"] = score
-            scored.append(p)
+        # Tiene que casar por marca/modelo, no por la palabra de la categoría:
+        # "dildos" está en el nombre de los 22 dildos y "encontraría" cualquiera.
+        if _score_nombre_discriminante(p, user_text) < 2.0:
+            continue
+        p["_score"] = _score_candidato(p, user_text)
+        scored.append(p)
     scored.sort(key=lambda p: (-p["_score"], len(p["nombre"])))
     return scored[:limit]

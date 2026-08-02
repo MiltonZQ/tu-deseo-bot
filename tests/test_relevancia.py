@@ -241,3 +241,55 @@ def test_el_texto_de_busqueda_se_persiste_para_el_turno_siguiente():
     texto, info = _espiar_texto("quizás tienen succionadores", None)
     assert texto == "quizás tienen succionadores"
     assert info["texto_busqueda"] == "quizás tienen succionadores"
+
+
+# ── Tarea 4: la búsqueda por nombre ──
+
+DILDOS = [
+    {"id": 20, "nombre": "Dildo Doble Niel 38 cm",
+     "descripcion": "Ideal para quienes buscan dildos de doble uso"},
+    {"id": 21, "nombre": "Dildo Realista Daian 17 cm",
+     "descripcion": "Uno de los dildos más vendidos, con base firme"},
+    {"id": 22, "nombre": "Dildo Ultra Realista Kona 19 cm", "descripcion": ""},
+    {"id": 23, "nombre": "Dildo de Vidrio Icicles No. 60", "descripcion": ""},
+]
+
+
+def test_el_ruido_de_la_descripcion_no_basta_para_ser_producto_especifico():
+    """Reporte del 1/08: 'Hola, que dildos tinen' devolvía 2 de 22 dildos.
+    'que' no es stop word, así que 'que'(0.5) + 'dildos'(0.5) en la DESCRIPCIÓN
+    llegaban al umbral de 1.0 sin ninguna coincidencia en el nombre."""
+    async def fake_fetch(sql, *params):
+        return [dict(p) for p in DILDOS]
+
+    with parchar(catalog, _fetch_especificos=fake_fetch):
+        res = asyncio.run(catalog.buscar_producto_especifico("Hola, que dildos tinen"))
+    assert res == [], f"ninguno de esos nombres es lo que el cliente pidió: {res}"
+
+
+def test_una_marca_en_el_nombre_si_encuentra_el_producto():
+    async def fake_fetch(sql, *params):
+        return [dict(p) for p in DILDOS]
+
+    with parchar(catalog, _fetch_especificos=fake_fetch):
+        res = asyncio.run(catalog.buscar_producto_especifico("tienen Icicles?"))
+    assert [p["id"] for p in res] == [23]
+
+
+def test_la_busqueda_por_nombre_se_acota_al_tipo():
+    """'dildos Tenera' busca Tenera SOLO entre dildos."""
+    visto = {}
+
+    async def fake_fetch(sql, *params):
+        visto["sql"], visto["params"] = sql, params
+        return []
+
+    with parchar(catalog, _fetch_especificos=fake_fetch):
+        asyncio.run(catalog.buscar_producto_especifico("dildos Tenera", tipo="dildo"))
+    assert "tipo = $" in visto["sql"]
+    assert "dildo" in visto["params"]
+
+
+def test_que_es_palabra_de_relleno():
+    assert "que" in catalog.STOP_WORDS
+    assert "hola" in catalog.STOP_WORDS
