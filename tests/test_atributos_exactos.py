@@ -329,3 +329,24 @@ def test_la_escalation_se_registra_sin_depender_de_frases():
     assert eid == 7
     assert creadas[0]["reason"] == "sin_inventario"
     assert creadas[0]["wa_id"] == "573001112233"
+
+
+def test_dual_a_secas_no_significa_doble_penetracion():
+    """Medido en el catálogo: en las bolas Kegel 'dual' son dos motores."""
+    for nombre in ("Bolas Vaginales Kegel Dual Recargable - Rosa",
+                   "Bolas Vaginales Remote Dual Motor Kegel System"):
+        f = facetas.clasificar_por_reglas(nombre, "", "Bolas")
+        assert "doble" not in f.atributos, nombre
+
+
+def test_la_frase_completa_dual_penetrator_si_cuenta():
+    f = facetas.clasificar_por_reglas(
+        "Consolador con Anillos Accommodator Dual Penetrator Marfil", "", "Anillo")
+    assert "doble" in f.atributos
+
+
+def test_un_anillo_de_doble_penetracion_conserva_el_atributo():
+    """Perdía el atributo solo porque `anillo` no estaba entre los tipos."""
+    f = facetas.clasificar_por_reglas(
+        "Anillo con Vibración Doble Penetración Diver Calexotics", "", "Anillo")
+    assert "doble" in f.atributos

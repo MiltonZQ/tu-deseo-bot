@@ -230,11 +230,16 @@ _ATRIBUTOS_ACOTADOS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # anillos, plugs y balas. Solo cuenta si lo dice el nombre, y solo en tipos
     # donde "doble" significa dos penetraciones y no dos capas de silicona.
     #
-    # "double" en inglés es obligatorio: los tres dobles de verdad del catálogo
-    # que no lo dicen en español son "Satisfyer Double Joy", "Satisfyer Double
-    # Classic Partner" y "Arnes Fetish Fantasy Double Penetrix".
-    "doble": (("doble", "double", "doble penetracion", "doble estimulacion"),
-              ("dildo", "vibrador", "arnes")),
+    # "double" en inglés es obligatorio: media docena de dobles reales solo lo
+    # dicen así ("Satisfyer Double Joy", "Satisfyer Double Fun"…).
+    #
+    # "dual" a secas NO, y esto se midió: en "Bolas Vaginales Kegel Dual
+    # Recargable" y "Dual Motor Kegel System" significa dos motores, no doble
+    # penetración. Solo entra la frase completa, que sí es inequívoca y recupera
+    # el "Accommodator Dual Penetrator".
+    "doble": (("doble", "double", "doble penetracion", "doble estimulacion",
+               "dual penetrator", "double penetration"),
+              ("dildo", "vibrador", "arnes", "anillo")),
 }
 
 # Atributos que solo tienen sentido en ciertos tipos, se digan donde se digan.
