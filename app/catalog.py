@@ -1389,6 +1389,22 @@ async def clasificar_intencion_cliente(user_text: str,
         log.info("Cambio de tema en el mensaje: memoria=%s → mensaje=%s",
                  cat_activa_memoria, categoria_funcional)
 
+    # La faceta que aporta ESTE mensaje. Se mira aquí y no al final porque
+    # decide si el cliente cambió de tema: "multiorgasmo" no está en el
+    # vocabulario de intenciones legacy, así que sin esto `cambio_de_tema`
+    # quedaba en False y se heredaba la categoría del turno anterior — el
+    # cliente pedía multiorgasmo y el bot respondía "opciones de dildos".
+    from app import facetas as _facetas
+    _tipo_del_mensaje = _facetas.interpretar_mensaje(user_text).get("tipo")
+    _cat_del_tipo = _facetas._TIPO_A_CATEGORIA_LEGACY.get(_tipo_del_mensaje or "")
+    if (cat_activa_memoria and _cat_del_tipo and _cat_del_tipo != cat_activa_memoria
+            and not es_filtro_de_lubricantes):
+        log.info("Cambio de tema por faceta propia: memoria=%s → tipo=%s (%s)",
+                 cat_activa_memoria, _tipo_del_mensaje, _cat_del_tipo)
+        cambio_de_tema = True
+        categoria_funcional = categoria_funcional or _cat_del_tipo
+        intencion = intencion or _cat_del_tipo
+
     if cat_activa_memoria and not cambio_de_tema:
         categoria_funcional = cat_activa_memoria
         intencion = cat_activa_memoria

@@ -946,11 +946,13 @@ async def _recuperar_candidatos(
     # on"→arnes, "jenga"→juego): el vocabulario de facetas y el de intenciones no
     # son el mismo. `fusionar_restricciones` ya trata un tipo distinto como
     # cambio de tema, así que aquí solo se usa esa señal.
+    tema_nuevo = False
     tipo_previo = ((estado or {}).get("restricciones") or {}).get("tipo")
     if tipo_previo and restricciones.get("tipo") and restricciones["tipo"] != tipo_previo:
         log.info("Tipo cambiado %s → %s — los productos mostrados no aplican",
                  tipo_previo, restricciones["tipo"])
         exclude = []
+        tema_nuevo = True
 
     # ── ¿VALE LA PENA PREGUNTAR ANTES DE LISTAR? ──
     # Una petición amplia ("lubricantes") sobre una categoría grande reparte 5
@@ -1181,6 +1183,10 @@ async def _recuperar_candidatos(
         # Texto que originó la búsqueda activa. Se persiste para que el "ver
         # más" del turno siguiente ordene por el mismo criterio.
         "texto_busqueda": texto_busqueda,
+        # Los productos del tema anterior no cuentan: ni para excluir ni para
+        # numerar. Sin esto la decisión se tomaba en dos sitios y solo uno la
+        # tenía completa — el exclude se limpiaba y la lista seguía en 2️⃣.
+        "tema_nuevo": tema_nuevo,
         # Texto de la pregunta de clarificación, o None. Si viene, ES el turno:
         # no hay lista ni fotos que redactar.
         "pregunta_faceta": pregunta_faceta,
@@ -1479,7 +1485,8 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     elif texto_lo_arma_el_sistema:
         # La numeración continúa mientras siga la misma búsqueda; si el cliente
         # cambió de tema, el estado se reinició y arranca de nuevo en 1️⃣.
-        offset_numeracion = 0 if info.get("reset_state") else len(ids_mostrados)
+        offset_numeracion = 0 if (info.get("reset_state") or info.get("tema_nuevo")) \
+            else len(ids_mostrados)
         raw_reply = _texto_desde_candidatos(candidatos, info,
                                             mas_disenos=bool(es_ver_mas_pedido),
                                             offset=offset_numeracion)

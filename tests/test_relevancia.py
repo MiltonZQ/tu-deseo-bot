@@ -293,3 +293,87 @@ def test_la_busqueda_por_nombre_se_acota_al_tipo():
 def test_que_es_palabra_de_relleno():
     assert "que" in catalog.STOP_WORDS
     assert "hola" in catalog.STOP_WORDS
+
+
+# ── Tarea 5: la categoría no se hereda si el mensaje trae la suya ──
+
+def _clasificar(texto, categoria_estado=None, restricciones_previas=None):
+    from app import openai_client
+
+    async def sin_llm(_t):
+        return None
+
+    with parchar(openai_client, clasificar_intencion_llm=sin_llm):
+        return asyncio.run(catalog.clasificar_intencion_cliente(
+            texto, [], categoria_estado, restricciones_previas))
+
+
+def test_una_faceta_propia_rompe_la_herencia_de_categoria():
+    """Reporte del 1/08: tras ver dildos, 'Tienen productos multiorgasmo'
+    respondía '...opciones de dildos que tenemos' y numeraba desde 2️⃣."""
+    r = _clasificar("Tienen productos multiorgasmo",
+                    categoria_estado="dildos",
+                    restricciones_previas={"tipo": "dildo"})
+    assert r["restricciones"]["tipo"] == "cosmetica"
+    assert r["categoria_funcional"] != "dildos"
+    assert r["intencion"] != "dildos"
+
+
+def test_la_categoria_sale_de_la_faceta_del_mensaje():
+    r = _clasificar("Tienen productos multiorgasmo", categoria_estado="dildos")
+    assert r["categoria_funcional"] == "lubricantes-y-cuidado"
+
+
+def test_sin_faceta_propia_la_categoria_sigue_heredandose():
+    """La herencia existe por una razón: 'y de esos cuál recomiendas' debe
+    seguir hablando de dildos."""
+    r = _clasificar("y de esos cual recomiendas", categoria_estado="dildos")
+    assert r["categoria_funcional"] == "dildos"
+
+
+def _turno_cambiando_de_tipo(mensaje, estado):
+    async def fake_buscar(restricciones, exclude_ids=None, limit=5,
+                          permitir_relajar=True, user_text=""):
+        return catalog.Resultado(
+            productos=[{"id": 99, "nombre": "Multiorgasmos Original X 30 Ml",
+                        "precio": 36900, "imagen_url": "http://x/a.jpg",
+                        "tipo": "cosmetica", "zona": "ninguna", "atributos": []}],
+            restricciones=restricciones)
+
+    with _sin_db(buscar_por_restricciones=fake_buscar):
+        _c, info = asyncio.run(main._recuperar_candidatos(mensaje, [], estado))
+    return info
+
+
+def test_al_cambiar_de_tipo_la_numeracion_vuelve_a_empezar():
+    """Confirmado en el log de producción: el exclude ya se limpiaba ('Tipo
+    cambiado dildo → cosmetica') pero la numeración seguía en 2️⃣, porque el
+    offset lee productos_mostrados del estado sin enterarse.
+
+    Este es el caso que el reset por cambio de tema NO cubre: lubricante y
+    cosmetica comparten categoría legacy, así que `reset_state` queda en False
+    y `tema_nuevo` es la única señal de que los productos del tema anterior ya
+    no cuentan.
+    """
+    estado = {"categoria_busqueda": "lubricantes-y-cuidado",
+              "categoria_funcional": "lubricantes-y-cuidado",
+              "genero": None, "calificado": True, "productos_mostrados": [1, 2, 3],
+              "restricciones": {"tipo": "lubricante"}, "preguntas_hechas": [],
+              "texto_busqueda": "que lubricantes tienen"}
+    info = _turno_cambiando_de_tipo("tienen estimulantes", estado)
+    assert info["reset_state"] is False, "mismo tema legacy: el reset no aplica"
+    assert info["tema_nuevo"] is True, \
+        "los productos del tema anterior no cuentan para numerar el nuevo"
+
+
+def test_la_numeracion_se_reinicia_en_cualquiera_de_las_dos_vias():
+    """Lo que importa es el resultado, venga del reset o de tema_nuevo: la
+    lista del tema nuevo tiene que empezar en 1️⃣."""
+    estado_dildos = {"categoria_busqueda": "dildos", "categoria_funcional": "dildos",
+                     "genero": None, "calificado": True,
+                     "productos_mostrados": [79063],
+                     "restricciones": {"tipo": "dildo"}, "preguntas_hechas": [],
+                     "texto_busqueda": "que dildos tienen"}
+    info = _turno_cambiando_de_tipo("Tienen productos multiorgasmo", estado_dildos)
+    assert info["reset_state"] or info["tema_nuevo"], \
+        "tras cambiar de tema la numeración no puede continuar desde el anterior"
