@@ -1033,7 +1033,7 @@ def _tokens_no_reconocidos(user_text: str) -> list[str]:
 _MARCAS_CONOCIDAS = (
     "lovense", "satisfyer", "tenga", "we vibe", "wevibe", "chorus",
     "womanizer", "lelo", "fun factory", "pipedream", "california dreaming",
-    "camtoyz", "lerot", "optimus",
+    "camtoyz", "lerot", "optimus", "calexotics",
     "lush", "hush", "diamo", "max", "nova", "ambu", "oski", "ferri",
     "gush", "pro 2", "pro 3",
     # Marcas de cosmética/lubricantes/estimulantes del catálogo

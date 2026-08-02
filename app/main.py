@@ -940,6 +940,15 @@ async def _recuperar_candidatos(
     # clasificador de categorías no reconoce podía terminar generando una
     # pregunta de calificación genérica en vez de mostrar directo el producto
     # que el cliente ya nombró explícitamente.
+    #
+    # El guard sigue excluyendo las conversaciones ya encauzadas en una
+    # categoría, y se midió por qué: "los rojos", "el segundo" y "los mas
+    # baratos" producen tokens discriminantes igual que una marca, y "rojos"
+    # casa con "Suspensorio Insolent Rojo" por la regla de plurales. Quitarlo
+    # dejaba que un color secuestrara el listado y, vía es_especifico, matara la
+    # paginación. Una marca que no esté en `_MARCAS_CONOCIDAS` seguirá sin
+    # encontrarse a mitad de conversación hasta que los colores y ordinales
+    # dejen de contar como discriminantes.
     producto_por_nombre: list[dict] = []
     if not clasif.get("es_especifico") and (not estado_tiene_cat or reset_state):
         tokens_extra = catalog._tokens_no_reconocidos(user_text)

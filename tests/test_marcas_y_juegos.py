@@ -102,3 +102,116 @@ def test_un_aceite_con_dados_sigue_siendo_cosmetica():
     f = facetas.clasificar_por_reglas(
         "Aceite Caliente Saborizado con Dados", "", "Cosmeticos")
     assert f.tipo == "cosmetica"
+
+
+# ── Tarea 4: la marca curada ──
+
+def test_calexotics_es_una_marca_conocida():
+    """Estar en la lista hace es_especifico=True, que es lo que abre el camino
+    de búsqueda por nombre incluso con una conversación en curso."""
+    assert "calexotics" in catalog._MARCAS_CONOCIDAS
+
+
+def test_la_marca_se_reconoce_dentro_de_una_frase():
+    norm = catalog._normalizar_texto("tienen quizas productos Calexotics")
+    assert any(m in norm for m in catalog._MARCAS_CONOCIDAS)
+
+
+# ── Tarea 5: la marca desconocida en mitad de la conversación ──
+
+CALEXOTICS = [
+    {"id": 1, "nombre": "Bala Vibradora Conejito Pixies Calexotics",
+     "precio": 50000, "imagen_url": "http://x/1.jpg", "tipo": "vibrador",
+     "zona": "clitoris", "atributos": []},
+]
+
+
+def _estado_vibradores():
+    return {"categoria_busqueda": "vibradores", "categoria_funcional": "vibradores",
+            "genero": "pareja", "calificado": True,
+            "productos_mostrados": [11, 12, 13, 14, 15],
+            "restricciones": {"tipo": "vibrador"}, "preguntas_hechas": [],
+            "texto_busqueda": "tienen vibradores"}
+
+
+def _sin_catalogo(**extra):
+    async def sin_restricciones(restricciones, exclude_ids=None, limit=5,
+                                permitir_relajar=True, user_text=""):
+        return catalog.Resultado(relajado="sin_resultado", restricciones=restricciones)
+
+    async def contar(_r):
+        return 20
+
+    async def sin_facetas(_r):
+        return {"atributos": {}, "zonas": {}, "generos": {}}
+
+    base = dict(buscar_por_restricciones=sin_restricciones,
+                contar_por_restricciones=contar,
+                facetas_disponibles=sin_facetas)
+    base.update(extra)
+    return parchar(catalog, **base)
+
+
+def test_la_marca_curada_se_busca_con_conversacion_activa():
+    """El turno del 2/08: 'tienen quizas productos Calexotics' llegó con una
+    charla de vibradores en curso.
+
+    Lo resuelve estar en `_MARCAS_CONOCIDAS`, que pone `es_especifico=True` y
+    abre el camino de [main.py:1050]. El bloque de primer contacto sigue
+    gateado a propósito (ver el test siguiente)."""
+    buscados = []
+
+    async def fake_especifico(user_text, limit=5, exclude_ids=None, tipo=None):
+        buscados.append((user_text, tipo))
+        return [dict(CALEXOTICS[0])]
+
+    with _sin_catalogo(buscar_producto_especifico=fake_especifico):
+        candidatos, _info = asyncio.run(main._recuperar_candidatos(
+            "tienen quizas productos Calexotics", [], _estado_vibradores()))
+    assert buscados, "la búsqueda por nombre no llegó a ejecutarse"
+    assert [p["id"] for p in candidatos] == [1]
+
+
+def test_un_color_no_puede_secuestrar_el_listado():
+    """Por qué el bloque de primer contacto sigue gateado: 'los rojos' produce
+    un token discriminante igual que una marca, y casaría con 'Suspensorio
+    Insolent Rojo' por la regla de plurales. Es el bug19."""
+    assert catalog._tokens_no_reconocidos("los rojos") == ["rojos"]
+
+    buscados = []
+
+    async def fake_especifico(user_text, limit=5, exclude_ids=None, tipo=None):
+        buscados.append(user_text)
+        return [dict(CALEXOTICS[0])]
+
+    async def con_productos(restricciones, exclude_ids=None, limit=5,
+                            permitir_relajar=True, user_text=""):
+        return catalog.Resultado(productos=[dict(CALEXOTICS[0])],
+                                 restricciones=restricciones)
+
+    with _sin_catalogo(buscar_producto_especifico=fake_especifico,
+                       buscar_por_restricciones=con_productos):
+        asyncio.run(main._recuperar_candidatos(
+            "los rojos", [], _estado_vibradores()))
+    assert buscados == [], f"un color no debe buscarse por nombre: {buscados}"
+
+
+def test_una_respuesta_sin_marca_no_dispara_busqueda_por_nombre():
+    """'sí' o 'el 2' no traen tokens discriminantes: el bloque debe seguir
+    quieto para no secuestrar la conversación."""
+    buscados = []
+
+    async def fake_especifico(user_text, limit=5, exclude_ids=None, tipo=None):
+        buscados.append(user_text)
+        return []
+
+    async def con_productos(restricciones, exclude_ids=None, limit=5,
+                            permitir_relajar=True, user_text=""):
+        return catalog.Resultado(productos=[dict(CALEXOTICS[0])],
+                                 restricciones=restricciones)
+
+    with _sin_catalogo(buscar_producto_especifico=fake_especifico,
+                       buscar_por_restricciones=con_productos):
+        asyncio.run(main._recuperar_candidatos(
+            "sí, muéstrame", [], _estado_vibradores()))
+    assert buscados == [], f"no debía buscar por nombre: {buscados}"
