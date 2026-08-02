@@ -69,12 +69,36 @@ def test_un_juego_de_anillos_sigue_siendo_anillos():
     assert r.get("tipo") == "anillo"
 
 
-def test_el_producto_llamado_juego_se_clasifica_como_juego():
-    f = facetas.clasificar_por_reglas("Juego Sexy Dice", "", "Juegos")
-    assert f.tipo == "juego"
-
-
 def test_un_producto_que_es_un_conjunto_no_es_un_juego_de_mesa():
     f = facetas.clasificar_por_reglas(
         "Anillos para Pene Donut Stay Hard Kit x3", "", "Anillos")
     assert f.tipo == "anillo"
+
+
+def test_juego_no_es_clave_del_lado_del_producto():
+    """Medido contra el catálogo de producción: añadir 'juego' a las reglas de
+    producto producía 3 regresiones y ninguna mejora.
+
+    El nombre se evalúa en una pasada propia que gana con confianza 1.0 y corta
+    antes de mirar la descripción, así que la palabra en el nombre secuestra la
+    clasificación aunque la descripción diga lo correcto.
+    """
+    f = facetas.clasificar_por_reglas(
+        "Juego de Kegel con Pesas Intercambiables She-ology",
+        "Bolas chinas de ejercicio para el suelo pélvico", "Bolas")
+    assert f.tipo == "bolas", "'juego de X' es un conjunto de X, no un juego"
+
+
+def test_los_juegos_de_verdad_entran_por_su_forma_concreta():
+    for nombre, esperado in (("Juego Jenga Erotico", "juego"),
+                             ("Juego de Cartas Verdad o Se Atreve", "juego"),
+                             ("Wana Dados Juego Erotico", "juego")):
+        f = facetas.clasificar_por_reglas(nombre, "", "Juego")
+        assert f.tipo == esperado, nombre
+
+
+def test_un_aceite_con_dados_sigue_siendo_cosmetica():
+    """Lo salva el orden: la regla de cosmética va antes que la de juegos."""
+    f = facetas.clasificar_por_reglas(
+        "Aceite Caliente Saborizado con Dados", "", "Cosmeticos")
+    assert f.tipo == "cosmetica"

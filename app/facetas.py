@@ -136,10 +136,14 @@ _REGLAS_TIPO: tuple[tuple[tuple[str, ...], str], ...] = (
       "pantuflas", "tanga", "encaje"), "lenceria"),
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo",
       "mordaza", "venda", "cepo", "collar", "sadomaso", "sado", "tapa ojos"), "bondage"),
-    # Va la ÚLTIMA a propósito: en castellano "juego de X" es un CONJUNTO de X,
-    # y así "Juego de Anillos Stay Hard" ya casó antes con la regla de anillos.
-    (("juego de mesa", "jenga", "cartas", "dado", "dados", "ruleta",
-      "juego", "juegos"), "juego"),
+    # "juego"/"juegos" NO son claves aquí, y se midió por qué. El nombre se
+    # evalúa en una pasada propia que gana con confianza 1.0 y corta antes de
+    # mirar la descripción, así que "Juego de Kegel con Pesas" dejaba de ser
+    # `bolas` y "Muñeca Inflable" dejaba de ser `masturbador`: tres regresiones
+    # sobre el catálogo de producción y ninguna mejora. En castellano "juego de
+    # X" es un CONJUNTO de X, y los juegos de verdad ya entran por su forma
+    # concreta. El hueco estaba en el lado del cliente, no aquí.
+    (("juego de mesa", "jenga", "cartas", "dado", "dados", "ruleta"), "juego"),
 )
 
 # ── ZONA: dónde se usa ──
