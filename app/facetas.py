@@ -136,7 +136,10 @@ _REGLAS_TIPO: tuple[tuple[tuple[str, ...], str], ...] = (
       "pantuflas", "tanga", "encaje"), "lenceria"),
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo",
       "mordaza", "venda", "cepo", "collar", "sadomaso", "sado", "tapa ojos"), "bondage"),
-    (("juego de mesa", "jenga", "cartas", "dado", "dados", "ruleta"), "juego"),
+    # Va la ÚLTIMA a propósito: en castellano "juego de X" es un CONJUNTO de X,
+    # y así "Juego de Anillos Stay Hard" ya casó antes con la regla de anillos.
+    (("juego de mesa", "jenga", "cartas", "dado", "dados", "ruleta",
+      "juego", "juegos"), "juego"),
 )
 
 # ── ZONA: dónde se usa ──
@@ -507,7 +510,11 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
     (("bondage", "bdsm", "esposas", "antifaz", "antifaces", "latigo", "latigos",
       "fusta", "fustas", "mordaza", "amarre", "amarres", "vendas", "sado",
       "sadomasoquismo", "collar"), {"tipo": "bondage"}),
-    (("juego de mesa", "juegos de mesa", "jenga", "cartas", "dados", "ruleta"), {"tipo": "juego"}),
+    # "juegos" a secas es lo que escribe un cliente real; las demás claves son
+    # las formas concretas. Va después de las de producto por el mismo motivo
+    # que en `_REGLAS_TIPO`: "juego de anillos" son anillos.
+    (("juego de mesa", "juegos de mesa", "jenga", "cartas", "dados", "ruleta",
+      "juego", "juegos"), {"tipo": "juego"}),
     # ── zona ──
     (("prostata", "prostatico"), {"zona": "anal"}),
     (("anal", "anales", "por atras", "el culo", "recto", "cola"), {"zona": "anal"}),
