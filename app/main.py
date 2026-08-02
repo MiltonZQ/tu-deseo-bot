@@ -564,6 +564,30 @@ def _texto_agotado(info: dict) -> str:
             f"¿Cuál te gustaría llevar para continuar con tu pedido? 😊")
 
 
+def _debe_avisar_agotado(reply: str, ids_ya_mostrados: set, final_productos: list,
+                         foto_ids: list, info: dict, pedido_creado_id) -> bool:
+    """¿Toca reescribir la respuesta con "ya te mostré todo"?
+
+    Aparte y con nombre propio porque esta decisión se tomaba en línea, con
+    datos del turno ANTERIOR, y pisaba respuestas correctas. En producción
+    convirtió una pregunta de calificación recién inyectada —"¿buscas para
+    ella, para él, anal o en pareja?"— en "Te mostré todas las opciones de
+    vibradores", sin haber mostrado ninguno.
+
+    Dos condiciones nuevas frente a lo que había:
+
+    - Si el tema cambió, los productos del tema anterior no cuentan. Es la
+      misma señal que ya usa `offset_numeracion`.
+    - Se mira `final_productos` (validados contra el catálogo) y no `foto_ids`
+      (los IDs brutos del LLM, que pueden ser alucinaciones ya descartadas).
+    """
+    if pedido_creado_id or final_productos or not ids_ya_mostrados:
+        return False
+    if info.get("reset_state") or info.get("tema_nuevo"):
+        return False
+    return bool(info.get("debe_mostrar") or _OFRECE_PRODUCTOS_RE.search(reply))
+
+
 def _texto_desde_candidatos(candidatos: list[dict], info: dict,
                             mas_disenos: bool = False, offset: int = 0) -> str:
     """Redacta la lista de productos desde los candidatos reales del catálogo.
@@ -1678,26 +1702,26 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # plantilla de "mostrar productos", reescribimos el reply con un mensaje
     # honesto: la categoría está agotada. Así el cliente nunca recibe la misma
     # foto repetida ni un "mira estas opciones" sin fotos nuevas.
-    if ids_ya_mostrados and not final_productos and not pedido_creado_id:
-        if info["debe_mostrar"] or _OFRECE_PRODUCTOS_RE.search(reply) or foto_ids:
-            log.warning(
-                "Categoría agotada para %s (cat=%s): todos los candidatos ya fueron "
-                "mostrados — reescribiendo reply con mensaje honesto",
-                wa_id, info["categoria_funcional"],
-            )
-            cat_nombres = {
-                "vibradores": "vibradores", "dildos": "dildos", "anal": "juguetes anales",
-                "masturbadores": "masturbadores", "anillos-y-fundas": "anillos y fundas",
-                "lubricantes-y-cuidado": "lubricantes", "lenceria": "lencería",
-                "succionadores": "succionadores", "pareja-y-bondage": "productos de pareja",
-                "juegos-y-accesorios": "accesorios",
-            }
-            nombre_cat = cat_nombres.get(info["categoria_funcional"], "ese producto")
-            reply = (
-                f"Te mostré todas las opciones de {nombre_cat} que tenemos disponibles "
-                f"😊 ¿Te gustó alguno de los que viste, o te interesa que te ayude con "
-                f"otro tipo de producto? Tenemos vibradores, lencería, lubricantes y más."
-            )
+    if _debe_avisar_agotado(reply, ids_ya_mostrados, final_productos,
+                            foto_ids, info, pedido_creado_id):
+        log.warning(
+            "Categoría agotada para %s (cat=%s): todos los candidatos ya fueron "
+            "mostrados — reescribiendo reply con mensaje honesto",
+            wa_id, info["categoria_funcional"],
+        )
+        cat_nombres = {
+            "vibradores": "vibradores", "dildos": "dildos", "anal": "juguetes anales",
+            "masturbadores": "masturbadores", "anillos-y-fundas": "anillos y fundas",
+            "lubricantes-y-cuidado": "lubricantes", "lenceria": "lencería",
+            "succionadores": "succionadores", "pareja-y-bondage": "productos de pareja",
+            "juegos-y-accesorios": "accesorios",
+        }
+        nombre_cat = cat_nombres.get(info["categoria_funcional"], "ese producto")
+        reply = (
+            f"Te mostré todas las opciones de {nombre_cat} que tenemos disponibles "
+            f"😊 ¿Te gustó alguno de los que viste, o te interesa que te ayude con "
+            f"otro tipo de producto? Tenemos vibradores, lencería, lubricantes y más."
+        )
 
     # Detectar cierre de venta [[PEDIDO:CERRADO]]: crea el pedido automáticamente
     # (con datos de envío del historial y total calculado del catálogo).
