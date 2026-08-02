@@ -137,14 +137,18 @@ async def _download_image_as_b64(image_url: str) -> str | None:
     if config.WHATSAPP_PROVIDER == "ycloud" and config.YCLOUD_API_KEY:
         headers["X-API-Key"] = config.YCLOUD_API_KEY
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
             r = await c.get(image_url, headers=headers)
         if r.status_code != 200:
-            log.warning("Descarga imagen falló: HTTP %s", r.status_code)
-            return None
+            log.warning("Descarga imagen con X-API-Key falló: HTTP %s para URL %s — reintentando sin auth", r.status_code, image_url)
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+                r = await c.get(image_url)
+            if r.status_code != 200:
+                log.warning("Reintento descarga sin auth falló: HTTP %s", r.status_code)
+                return None
         return base64.b64encode(r.content).decode("ascii")
     except Exception as exc:
-        log.warning("Error descargando imagen: %s", exc)
+        log.warning("Error descargando imagen de %s: %s", image_url, exc)
         return None
 
 
@@ -212,8 +216,9 @@ async def handle_inbound_image(
         "abono", "nequi", "daviplata", "bancolombia", "envio", "envío",
     ))
 
-    if not pedido_id and not habla_pago:
-        return False  # sin contexto de pago → main.py la maneja como media genérica
+    # Si no hay pedido ni palabras clave pero hay historial o es una foto aislada, procesarla igualmente como comprobante
+    if not pedido_id and not habla_pago and len(history) > 2:
+        return False  # solo si hay una conversación activa de exploración sin pago sin pedido
 
     # 1) Descargar
     image_b64 = await _download_image_as_b64(image_url)
