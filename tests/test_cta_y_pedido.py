@@ -151,3 +151,35 @@ def test_el_bot_mostro_lista_reconoce_el_keycap():
     assert not main._bot_mostro_lista([])
     assert not main._bot_mostro_lista([{"role": "user", "content": "1️⃣ me gusta"}]), \
         "la lista la tiene que haber enviado el BOT, no el cliente"
+
+
+# ── El bloque de precios que recibe el LLM ──
+
+def test_el_bloque_de_precios_va_numerado_como_la_lista():
+    """El cliente elige por número; el bloque que ve el LLM iba con viñetas y
+    tenía que contar para saber cuál era '1'."""
+    lineas = main._detalle_productos_mostrados(
+        [{"nombre": "Esposas Lois", "precio": 29900},
+         {"nombre": "Esposas Kratos", "precio": 45900}]).splitlines()
+    assert lineas[0].strip().startswith("1️⃣"), lineas
+    assert "Esposas Lois" in lineas[0]
+    assert "29.900" in lineas[0] or "29,900" in lineas[0], lineas
+    assert lineas[1].strip().startswith("2️⃣"), lineas
+
+
+def test_la_numeracion_del_bloque_no_reinicia_tras_ver_mas():
+    """Con offset, el sexto producto es 6️⃣ para el cliente y para el LLM."""
+    prods = [{"nombre": f"P{i}", "precio": 1000} for i in range(1, 4)]
+    lineas = main._detalle_productos_mostrados(prods, offset=5).splitlines()
+    assert lineas[0].strip().startswith("6️⃣"), lineas
+
+
+def test_un_producto_que_ya_no_existe_no_corre_los_numeros():
+    """Si el 2 no se resuelve por ID, el 3 sigue siendo el 3. Si corriera, el
+    '3' del cliente y el '3' del LLM serían productos distintos."""
+    lineas = main._detalle_productos_mostrados(
+        [{"nombre": "Uno", "precio": 1000}, None,
+         {"nombre": "Tres", "precio": 3000}]).splitlines()
+    assert len(lineas) == 2, lineas
+    assert lineas[1].strip().startswith("3️⃣"), lineas
+    assert "Tres" in lineas[1]

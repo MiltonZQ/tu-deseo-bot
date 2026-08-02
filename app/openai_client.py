@@ -217,8 +217,9 @@ async def complete(user_message: str, history: list[dict],
             )
         if estado.get("productos_con_precios"):
             estado_lines.append(
-                "- Productos mostrados CON PRECIOS EXACTOS del catálogo (USA ESTOS precios "
-                "en el resumen de confirmación del pedido, NO los inventes):\n"
+                "- Productos mostrados, NUMERADOS como los vio el cliente. Si dice "
+                "'el 1' o 'quiero el 2', es ESE número. Usa estos precios EXACTOS "
+                "en el resumen de confirmación del pedido, NO los inventes:\n"
                 + estado["productos_con_precios"]
             )
         if estado_lines:

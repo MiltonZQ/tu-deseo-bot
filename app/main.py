@@ -525,6 +525,24 @@ def _numero_lista(n: int) -> str:
     return "".join(_KEYCAPS[int(d)] for d in str(n))
 
 
+def _detalle_productos_mostrados(productos: list[dict | None], offset: int = 0) -> str:
+    """El bloque de nombres y precios exactos que recibe el LLM, numerado igual
+    que la lista que vio el cliente.
+
+    Iba con viñetas, y como el CTA le pide al cliente el NÚMERO, el LLM tenía
+    que contar para resolver un "1". La numeración coincide sin trucos: los IDs
+    se acumulan en orden de envío y el offset de cada ronda es cuántos llevaba.
+
+    Acepta `None` en la lista y se salta esa línea CONSERVANDO su número: un
+    producto que ya no se resuelve por ID no puede correr un puesto a todos los
+    demás, porque entonces el "2" del cliente y el "2" del LLM serían distintos.
+    """
+    return "\n".join(
+        f"  {_numero_lista(i)} {p['nombre']} — ${p['precio']:,}"
+        for i, p in enumerate(productos, 1 + offset) if p
+    )
+
+
 # Cómo se le nombra al cliente lo que pidió. Se describe lo que PIDIÓ, no la
 # etiqueta interna: "No tengo exactamente anal para anal" no es castellano.
 _ZONAS_EN_TEXTO = {
@@ -1713,13 +1731,14 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     productos_detalle_estado = ""
     ids_mostrados = (estado_previo or {}).get("productos_mostrados", [])
     if ids_mostrados:
-        detalle_lines = []
-        for pid in ids_mostrados[-10:]:
-            p = await catalog.get_producto_by_id(pid)
-            if p:
-                detalle_lines.append(f"  • {p['nombre']} — ${p['precio']:,}")
-        if detalle_lines:
-            productos_detalle_estado = "\n".join(detalle_lines)
+        # Solo los últimos 10, pero numerados desde su posición real en la lista
+        # que vio el cliente: en la tercera ronda de un "ver más", el primero
+        # de este bloque es 6️⃣, no 1️⃣.
+        recientes = ids_mostrados[-10:]
+        offset = len(ids_mostrados) - len(recientes)
+        detalle = [await catalog.get_producto_by_id(pid) for pid in recientes]
+        if any(detalle):
+            productos_detalle_estado = _detalle_productos_mostrados(detalle, offset)
 
     es_ver_mas_pedido = _es_ver_mas(user_text) and info.get("debe_mostrar") and candidatos
     es_agotado = info.get("categoria_agotada")
