@@ -1385,7 +1385,8 @@ async def clasificar_intencion_cliente(user_text: str,
     # original de este bloque y se conserva.
     es_filtro_de_lubricantes = (
         cat_activa_memoria == "lubricantes-y-cuidado"
-        and any(q in norm_user for q in ("anal", "agua", "silicona", "sabor", "desensibiliz"))
+        and any(q in norm_user for q in ("anal", "agua", "silicona", "sabor", "desensibiliz",
+                                         "otro", "otros", "tipo", "tipos", "cual", "cuál", "opcion", "opción"))
     )
     cambio_de_tema = bool(
         cat_desde_mensaje

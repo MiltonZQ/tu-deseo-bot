@@ -387,3 +387,23 @@ def test_filtro_anal_tras_pregunta_lubricante_asigna_tipo_lubricante():
     assert r["restricciones"]["tipo"] == "lubricante", r["restricciones"]
     assert r["categoria_funcional"] == "lubricantes-y-cuidado"
 
+
+def test_si_agregalo_activa_fase_venta_tras_cross_selling():
+    """Valida que 'Si agregalo' tras una oferta de lubricantes active fase de venta para pedir datos."""
+    from app.main import _es_fase_venta
+    history = [
+        {"role": "user", "content": "1"},
+        {"role": "assistant", "content": "Te anoto Esposas Lois. ¿Te gustaría agregarlo a tu pedido un Lubricante Íntimo?"}
+    ]
+    assert _es_fase_venta("Si agregalo", history) is True
+
+
+def test_explorar_otros_tipos_lubricante_asigna_tipo_lubricante():
+    """Valida que 'hay otros tipos' tras preguntar por lubricantes asigne tipo='lubricante'."""
+    r = _clasificar("hay otros tipos",
+                    categoria_estado="lubricantes-y-cuidado",
+                    restricciones_previas={"tipo": "bondage"})
+    assert r["restricciones"]["tipo"] == "lubricante", r["restricciones"]
+    assert r["categoria_funcional"] == "lubricantes-y-cuidado"
+
+

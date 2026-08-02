@@ -801,9 +801,9 @@ def _es_respuesta_afirmativa(user_text: str) -> bool:
     t = catalog._normalizar_texto(user_text).strip().strip(".,!?¿¡")
     if not t:
         return False
-    if t in _RESPUESTAS_AFIRMATIVAS:
+    if t in _RESPUESTAS_AFIRMATIVAS or t.startswith("si ") or t.startswith("sí "):
         return True
-    for af in ("dame", "muestrame", "muéstrame", "mandame", "mándame", "enviame", "envíame"):
+    for af in ("dame", "muestrame", "muéstrame", "mandame", "mándame", "enviame", "envíame", "agrega", "agregalo", "agrégalo"):
         if af in t:
             return True
     return False
@@ -1002,7 +1002,7 @@ def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     if any(f in c for f in _BOT_ABRIO_CHECKOUT):
         return True
     if any(w in c for w in _BOT_OFRECIO_CROSS_SELLING):
-        if _RECHAZO_CROSS_SELLING_RE.search(texto) or _CIERRE_CROSS_SELLING_RE.search(texto):
+        if _RECHAZO_CROSS_SELLING_RE.search(texto) or _CIERRE_CROSS_SELLING_RE.search(texto) or _es_respuesta_afirmativa(texto):
             return True
     return False
 
