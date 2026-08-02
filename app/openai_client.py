@@ -217,10 +217,13 @@ async def complete(user_message: str, history: list[dict],
             )
         if estado.get("productos_con_precios"):
             estado_lines.append(
-                "- Productos mostrados, NUMERADOS como los vio el cliente. Si dice "
-                "'el 1' o 'quiero el 2', es ESE número. Usa estos precios EXACTOS "
-                "en el resumen de confirmación del pedido, NO los inventes:\n"
-                + estado["productos_con_precios"]
+                "- Productos mostrados, NUMERADOS como los vio el cliente:\n"
+                + estado["productos_con_precios"] + "\n"
+                "- ⚠️ REGLA ABSOLUTA DE SELECCIÓN NUMÉRICA: Si el cliente escribe un número (ej: '1', '2', 'el 1'), "
+                "corresponde ÚNICA Y EXCLUSIVAMENTE a la línea que tiene ESE MISMO número (1️⃣, 2️⃣...). "
+                "Está ESTRICTAMENTE PROHIBIDO reinterpretar el número o cambiarlo por comentarios o colores "
+                "mencionados en mensajes anteriores (ej: si dijo 'negras' antes pero ahora escribe '1', DEBES seleccionar "
+                "e indicar el producto 1️⃣, NO el 4️⃣). Usa los nombres y precios EXACTOS de esa línea."
             )
         if estado_lines:
             estado_block = "\n\n## Estado de la conversación\n" + "\n".join(estado_lines) + "\n"
