@@ -1460,6 +1460,23 @@ async def clasificar_intencion_cliente(user_text: str,
     }
 
 
+def _mismo_termino(a: str, b: str) -> bool:
+    """True si son la misma palabra salvo el plural.
+
+    `_misma_familia` (prefijo puro, arriba) es demasiado laxo para puntuar:
+    haría casar 'anal' con 'analgésico' y 'pro' con 'próstata'. Aquí solo se
+    admite el sufijo de plural castellano, que es lo que se perdía: el cliente
+    escribe 'succionadores' y el producto se llama 'Succionador ...', o escribe
+    'multiorgasmo' y los productos se llaman 'Multiorgasmos ...'.
+    """
+    if a == b:
+        return True
+    corta, larga = (a, b) if len(a) <= len(b) else (b, a)
+    if len(corta) < 4:
+        return False
+    return larga in (corta + "s", corta + "es")
+
+
 def _score_candidato(producto: dict, user_text: str) -> float:
     if not user_text:
         return 0.0
@@ -1473,9 +1490,9 @@ def _score_candidato(producto: dict, user_text: str) -> float:
     desc_toks = set(re.findall(r"\b[a-z]{2,}\b", _normalizar_texto(desc)))
     score = 0.0
     for t in tokens:
-        if t in nombre_toks:
+        if any(_mismo_termino(t, n) for n in nombre_toks):
             score += 2.0
-        elif t in desc_toks:
+        elif any(_mismo_termino(t, d) for d in desc_toks):
             score += 0.5
     return score
 
