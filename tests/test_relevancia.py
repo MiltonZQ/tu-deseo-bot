@@ -407,3 +407,13 @@ def test_explorar_otros_tipos_lubricante_asigna_tipo_lubricante():
     assert r["categoria_funcional"] == "lubricantes-y-cuidado"
 
 
+def test_detecta_cliente_frustrado_para_escalamiento():
+    """Valida que frases de molestia como 'ya me estresé pásame a un asesor' o 'malparido' disparen escalamiento."""
+    from app.escalations import detect_reason
+    res1 = detect_reason("me estresa ya me indicaste cuál", "hola", "text")
+    assert res1 is not None and res1[0] == "cliente_frustrado"
+    res2 = detect_reason("pasame a un asesor por favor", "hola", "text")
+    assert res2 is not None and res2[0] == "cliente_frustrado"
+
+
+

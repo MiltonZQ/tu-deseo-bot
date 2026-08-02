@@ -43,6 +43,17 @@ BOT_ESCALATION_PATTERNS = [
 ]
 
 
+# Patrones que indican frustración, molestia del cliente o solicitud explícita de un asesor humano
+FRUSTRATION_PATTERNS = [
+    r"\b(asesor|humano|persona|agente)\b",
+    r"\b(hablar|pasar|comunicar)\s+con\s+(un\s+)?(asesor|humano|persona|agente)\b",
+    r"\b(me\s+estresa|estresad[oa]|frustrad[oa]|molest[oa]|fastidiad[oa])\b",
+    r"\b(p[eé]simo|terrible|malo|horrible)\s+servicio\b",
+    r"\b(no\s+entiendes|ya\s+te\s+dije|ya\s+te\s+indicad[oa]|siempre\s+falla)\b",
+    r"\b(malparid[oa]|mierda|puta|est[uú]pid[oa]|inepto|no\s+sea\s+tan)\b",
+]
+
+
 def _match(patterns: list[str], text: str) -> bool:
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
@@ -66,6 +77,12 @@ def detect_reason(
         return (
             "media_recibida",
             f"El cliente envió un mensaje de tipo '{message_type}' que el bot no puede procesar.",
+        )
+
+    if _match(FRUSTRATION_PATTERNS, ut):
+        return (
+            "cliente_frustrado",
+            "Cliente expresa molestia, insatisfacción o solicita un asesor humano.",
         )
 
     if _match(URGENT_PATTERNS, ut):

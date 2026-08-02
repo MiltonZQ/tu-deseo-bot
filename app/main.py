@@ -984,26 +984,21 @@ def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     """Detecta si el cliente está en fase de venta/pago (no de exploración).
 
     True si el mensaje actual habla de pago/datos/envío, O si el bot ofreció
-    venta cruzada en su ÚLTIMO mensaje y el cliente responde cerrando sin
-    adicionales.
+    venta cruzada o abrió checkout en sus mensajes recientes.
     """
     texto = user_text or ""
     if _FASE_VENTA_RE.search(texto) or _RECHAZO_CROSS_SELLING_RE.search(texto):
         return True
 
-    # Solo el ÚLTIMO mensaje del bot: la fase de venta la define el turno
-    # inmediatamente anterior, no cualquier mensaje de los últimos seis (si no,
-    # una venta cruzada vieja dejaba la conversación en modo-venta para siempre).
-    ultimo_bot = next(
-        (m for m in reversed(history) if m.get("role") == "assistant"), None)
-    if not ultimo_bot:
-        return False
-    c = (ultimo_bot.get("content") or "").lower()
-    if any(f in c for f in _BOT_ABRIO_CHECKOUT):
-        return True
-    if any(w in c for w in _BOT_OFRECIO_CROSS_SELLING):
-        if _RECHAZO_CROSS_SELLING_RE.search(texto) or _CIERRE_CROSS_SELLING_RE.search(texto) or _es_respuesta_afirmativa(texto):
+    # Revisar mensajes recientes del asistente para asegurar que no se reenvíen fotos durante el checkout
+    ultimo_bot = next((m for m in reversed(history or []) if m.get("role") == "assistant"), None)
+    asistentes = [m.get("content", "").lower() for m in reversed(history or []) if m.get("role") == "assistant"]
+    for c in asistentes[:3]:
+        if any(f in c for f in _BOT_ABRIO_CHECKOUT):
             return True
+        if any(w in c for w in _BOT_OFRECIO_CROSS_SELLING):
+            if _RECHAZO_CROSS_SELLING_RE.search(texto) or _CIERRE_CROSS_SELLING_RE.search(texto) or _es_respuesta_afirmativa(texto):
+                return True
     return False
 
 
@@ -2016,15 +2011,15 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             except Exception:
                 log.exception("Error enviando pin de ubicación de sede %s", sede_mencionada)
 
-    await escalations.record_if_escalated(
+    escalated_id = await escalations.record_if_escalated(
         wa_id=wa_id, user_text=user_text, bot_reply=reply,
         message_type="text", media_type=None, history=history,
     )
 
-    # Si el bot dijo que pasa a un asesor, pausar automáticamente
-    if _BOT_SAYS_HANDOFF_RE.search(reply):
+    # Si el bot o el usuario dispararon un escalamiento o handoff, pausar automáticamente
+    if escalated_id or _BOT_SAYS_HANDOFF_RE.search(reply):
         await db.set_bot_paused(wa_id, True)
-        log.info("Bot pausado: reply contiene handoff para %s", wa_id)
+        log.info("Bot pausado: escalamiento o handoff activo para %s", wa_id)
         return
 
     updated_history = history + [
