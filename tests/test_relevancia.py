@@ -377,3 +377,13 @@ def test_la_numeracion_se_reinicia_en_cualquiera_de_las_dos_vias():
     info = _turno_cambiando_de_tipo("Tienen productos multiorgasmo", estado_dildos)
     assert info["reset_state"] or info["tema_nuevo"], \
         "tras cambiar de tema la numeración no puede continuar desde el anterior"
+
+
+def test_filtro_anal_tras_pregunta_lubricante_asigna_tipo_lubricante():
+    """Valida que tras preguntar por lubricantes (ej. de esposas a lubricantes), 'anal' asigne tipo='lubricante' y no mantenga tipo='bondage'."""
+    r = _clasificar("anal",
+                    categoria_estado="lubricantes-y-cuidado",
+                    restricciones_previas={"tipo": "bondage"})
+    assert r["restricciones"]["tipo"] == "lubricante", r["restricciones"]
+    assert r["categoria_funcional"] == "lubricantes-y-cuidado"
+

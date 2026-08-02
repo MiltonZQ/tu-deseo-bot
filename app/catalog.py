@@ -1478,6 +1478,12 @@ async def clasificar_intencion_cliente(user_text: str,
     restricciones = _facetas.fusionar_restricciones(
         restricciones_previas, _facetas.interpretar_mensaje(user_text))
 
+    # Si el mensaje actual es un filtro explícito de lubricantes (ej. "anal", "agua",
+    # "silicona", "sabores" tras preguntar por lubricantes), forzar tipo="lubricante"
+    # en las restricciones para no arrastrar tipos de productos anteriores (ej: bondage).
+    if es_filtro_de_lubricantes and restricciones.get("tipo") != "lubricante":
+        restricciones["tipo"] = "lubricante"
+
     return {
         "intencion": intencion,
         "categoria_funcional": categoria_funcional,
