@@ -191,7 +191,7 @@ async def handle_inbound_image(
     wa_id: str,
     image_url: str | None,
     caption: str | None,
-    message_id: str,
+    message_id: str = "",
     history: list[dict],
 ) -> bool:
     """Punto de entrada desde main.py.
@@ -375,3 +375,7 @@ async def handle_inbound_image(
         log.info("Comprobante inválido para %s (intento %d): %s",
                  wa_id, intento_n, result["razon"])
     return True
+
+
+# Alias para compatibilidad de importación
+handle_comprobante_imagen = handle_inbound_image

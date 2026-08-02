@@ -1575,10 +1575,11 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     if mtype == "image":
         image_url = msg.get("image_url")
         if image_url:
-            handled = await payments.handle_comprobante_imagen(
+            handled = await payments.handle_inbound_image(
                 wa_id=wa_id,
                 image_url=image_url,
                 caption=user_text,
+                message_id=msg.get("message_id", ""),
                 history=history,
             )
             if handled:
