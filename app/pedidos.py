@@ -184,45 +184,52 @@ async def _resolver_productos_y_total(
         })
         total += precio
 
-    # 0) PRIORIDAD MÁXIMA: productos_mostrados_ids (persistidos en conversation_state).
-    #    Los marcadores [FOTO:ID] se limpian del historial antes de guardarlo, así que
-    #    esta es la ÚNICA fuente confiable de qué productos vio/compró el cliente.
+    # 0) PRIORIDAD MÁXIMA: Si el cliente eligió por número (ej. "1", "el 1") de la lista mostrada
+    num_elegido = None
     if productos_mostrados_ids:
-        for pid in productos_mostrados_ids:
-            if pid in seen_ids:
-                continue
-            p = await catalog.get_producto_by_id(pid)
-            if p:
-                _agregar(p)
-            if len(items) >= 8:
-                break
+        for msg in reversed(history):
+            if msg.get("role") == "user":
+                txt = msg.get("content", "").strip()
+                m = re.search(r"^\s*(?:el\s+)?(\d{1,2})\s*$", txt, re.IGNORECASE)
+                if m:
+                    idx = int(m.group(1)) - 1
+                    if 0 <= idx < len(productos_mostrados_ids):
+                        num_elegido = idx
+                        break
 
-    # 1) Si no hubo IDs persistidos, buscar por nombres en los últimos mensajes
-    #    del CLIENTE (su confirmación real de compra).
+    if num_elegido is not None and productos_mostrados_ids:
+        pid = productos_mostrados_ids[num_elegido]
+        p = await catalog.get_producto_by_id(pid)
+        if p:
+            _agregar(p)
+
+    # 1) Buscar por nombres de producto en los mensajes del cliente
     if not items:
         user_msgs = [m for m in history if m.get("role") == "user"]
-        for msg in user_msgs[-3:]:  # últimos 3 mensajes del cliente
+        for msg in user_msgs[-3:]:
             contenido = msg.get("content", "")
-            if not contenido:
-                continue
-            for p in await catalog.get_productos_en_texto(contenido, limit=5):
-                _agregar(p)
-                if len(items) >= 8:
-                    break
-            if len(items) >= 8:
-                break
-
-    # 2) FALLBACK: si nada matcheó, tomar el ÚLTIMO mensaje del asistente y buscar
-    #    productos por nombre.
-    if not items:
-        asistente_msgs = [m for m in history if m.get("role") == "assistant"]
-        if asistente_msgs:
-            ultimo = asistente_msgs[-1].get("content", "")
-            if ultimo:
-                for p in await catalog.get_productos_en_texto(ultimo, limit=5):
+            if contenido:
+                for p in await catalog.get_productos_en_texto(contenido, limit=3):
                     _agregar(p)
-                    if len(items) >= 8:
+                    if len(items) >= 5:
                         break
+
+    # 2) FALLBACK: buscar productos confirmados en los mensajes del asistente
+    asistente_msgs = [m for m in history if m.get("role") == "assistant"]
+    if asistente_msgs:
+        for msg in reversed(asistente_msgs[-2:]):
+            ultimo = msg.get("content", "")
+            if ultimo:
+                for p in await catalog.get_productos_en_texto(ultimo, limit=3):
+                    _agregar(p)
+                    if len(items) >= 5:
+                        break
+
+    # 3) Fallback final: tomar solo el PRIMERO de los mostrados si nada coincidió
+    if not items and productos_mostrados_ids:
+        p = await catalog.get_producto_by_id(productos_mostrados_ids[0])
+        if p:
+            _agregar(p)
 
     return items, total
 
@@ -239,11 +246,19 @@ async def maybe_create_pedido(
 
     reply_limpio = _limpiar_marker(reply)
 
-    # No duplicar: si ya hay un pedido pendiente/pagado reciente, no crear otro.
+    # Resolver productos y total del catálogo.
+    estado_conv = await db.get_conversation_state(wa_id)
+    productos_ids = (estado_conv or {}).get("productos_mostrados", []) if estado_conv else []
+    items, total = await _resolver_productos_y_total(history, productos_mostrados_ids=productos_ids)
+
+    # No duplicar: si ya hay un pedido pendiente/pagado reciente, actualizar total si cambió.
     existente = await db.get_pedido_pendiente(wa_id)
     if existente:
-        log.info("Pedido ya existe para %s (id=%s, estado=%s) — no se duplica",
-                 wa_id, existente["id"], existente["estado"])
+        log.info("Pedido ya existe para %s (id=%s, estado=%s) — actualizando total a $%s",
+                 wa_id, existente["id"], existente["estado"], total)
+        if total > 0 and total != existente.get("total"):
+            async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
+                await conn.execute("UPDATE pedidos SET total = $1 WHERE id = $2", total, existente["id"])
         return reply_limpio, existente["id"]
 
     # Extraer datos de envío. PRIORIDAD: marcador estructurado [[PEDIDO_DATOS:...]]
@@ -261,13 +276,6 @@ async def maybe_create_pedido(
         ciudad = _extraer_ciudad(history)
         direccion = _extraer_direccion(history)
         telefono = _extraer_telefono(history, wa_id)
-
-    # Resolver productos y total del catálogo. Priorizar los IDs persistidos en
-    # conversation_state (productos_mostrados) porque los marcadores [FOTO:ID] se
-    # limpian del historial antes de guardarlo.
-    estado_conv = await db.get_conversation_state(wa_id)
-    productos_ids = (estado_conv or {}).get("productos_mostrados", []) if estado_conv else []
-    items, total = await _resolver_productos_y_total(history, productos_mostrados_ids=productos_ids)
 
     # Crear el pedido (aunque falten datos o total=0 — el equipo lo completa).
     try:
