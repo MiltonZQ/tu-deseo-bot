@@ -91,20 +91,23 @@ def test_el_turno_de_calificacion_no_lo_improvisa_el_llm():
     """18:47 del 2/08: 'tienen kit BDSM' tras un cambio de tema. Sin candidatos
     el LLM invocó cross_selling y ofreció lubricantes en vez de preguntar."""
     info = {"debe_mostrar": False, "categoria_funcional": "pareja-y-bondage",
-            "pregunta_faceta": None, "categoria_agotada": False}
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": False}
     assert main._pregunta_de_calificacion(info) == \
         main._PREGUNTAS_CALIFICACION["pareja-y-bondage"]
 
 
 def test_sin_categoria_no_hay_pregunta_que_inyectar():
     info = {"debe_mostrar": False, "categoria_funcional": None,
-            "pregunta_faceta": None, "categoria_agotada": False}
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": False}
     assert main._pregunta_de_calificacion(info) is None
 
 
 def test_si_hay_productos_que_mostrar_no_se_pregunta():
     info = {"debe_mostrar": True, "categoria_funcional": "pareja-y-bondage",
-            "pregunta_faceta": None, "categoria_agotada": False}
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": False}
     assert main._pregunta_de_calificacion(info) is None
 
 
@@ -112,5 +115,44 @@ def test_la_pregunta_por_facetas_tiene_prioridad():
     """`pregunta_faceta` se arma con el stock real; la fija es el respaldo."""
     info = {"debe_mostrar": False, "categoria_funcional": "dildos",
             "pregunta_faceta": "¿lo buscas realista o con ventosa?",
-            "categoria_agotada": False}
+            "categoria_agotada": False, "ya_vio_productos": False}
     assert main._pregunta_de_calificacion(info) is None
+
+
+# ── Regresión del 2/08 14:54: dar el número devolvía la pregunta de categoría ──
+
+def test_quien_ya_vio_productos_no_recibe_la_pregunta_de_categoria():
+    """El cliente vio 5 esposas, el bot le pidió el número, contestó '1' y
+    recibió '¿buscas kits de amarre, esposas, antifaces o fustas?'.
+
+    La selección numérica apaga `debe_mostrar` —correcto, no hay que reenviar
+    fotos— y esta rama leía ese False como 'toca calificar'. Una pregunta de
+    calificación solo tiene sentido ANTES de mostrar nada."""
+    info = {"debe_mostrar": False, "categoria_funcional": "pareja-y-bondage",
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": True}
+    assert main._pregunta_de_calificacion(info) is None
+
+
+def test_en_fase_de_venta_tampoco_se_pregunta_la_categoria():
+    """Dando la dirección o mandando el comprobante no se califica nada."""
+    info = {"debe_mostrar": False, "categoria_funcional": "dildos",
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": True, "en_fase_venta": True}
+    assert main._pregunta_de_calificacion(info) is None
+
+
+def test_pidiendo_el_numero_tampoco_se_pregunta_la_categoria():
+    info = {"debe_mostrar": False, "categoria_funcional": "pareja-y-bondage",
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": True, "pide_numero_de_lista": True}
+    assert main._pregunta_de_calificacion(info) is None
+
+
+def test_la_pregunta_sigue_saliendo_en_el_primer_contacto():
+    """Su razón de ser: 'tienen kit BDSM' sin haber mostrado nada."""
+    info = {"debe_mostrar": False, "categoria_funcional": "pareja-y-bondage",
+            "pregunta_faceta": None, "categoria_agotada": False,
+            "ya_vio_productos": False}
+    assert main._pregunta_de_calificacion(info) == \
+        main._PREGUNTAS_CALIFICACION["pareja-y-bondage"]

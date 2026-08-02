@@ -609,8 +609,18 @@ def _pregunta_de_calificacion(info: dict) -> str | None:
 
     `pregunta_faceta` tiene prioridad: se arma con el stock real, mientras que
     esta es texto fijo que puede ofrecer ramas vacías.
+
+    Y **solo se califica antes de mostrar nada**. Eso se me olvidó y costó una
+    venta: el cliente vio 5 esposas, el bot le pidió el número, contestó "1" y
+    recibió "¿buscas kits de amarre, esposas, antifaces o fustas?". Las tres
+    palancas que apagan `debe_mostrar` tras una lista —selección numérica, fase
+    de venta, pedido sin número— caían todas aquí, y esta rama leía ese False
+    como "toca calificar".
     """
     if info.get("debe_mostrar") or info.get("pregunta_faceta") or info.get("categoria_agotada"):
+        return None
+    if (info.get("ya_vio_productos") or info.get("en_fase_venta")
+            or info.get("pide_numero_de_lista")):
         return None
     return _PREGUNTAS_CALIFICACION.get(info.get("categoria_funcional") or "")
 
@@ -1432,6 +1442,10 @@ async def _recuperar_candidatos(
         # El cliente pidió comprar sin decir cuál. Si viene, ES el turno: no hay
         # lista ni fotos, solo la petición del número.
         "pide_numero_de_lista": pide_numero_de_lista,
+        # ¿Este cliente ya vio productos de lo que está mirando? Sale de
+        # `exclude` y no del estado crudo a propósito: si cambió de tema,
+        # `exclude` se limpia y volver a calificar es lo correcto.
+        "ya_vio_productos": bool(exclude),
     }
     return candidatos, info
 
@@ -1809,7 +1823,12 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     if (not info["debe_mostrar"]
             and not final_productos
             and (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply))):
-        pregunta = _PREGUNTAS_CALIFICACION.get(info["categoria_funcional"]) if info["categoria_funcional"] else None
+        # Sale de la misma función que la rama determinista de arriba: si ella
+        # sabe que no toca calificar —el cliente ya vio productos, está en fase
+        # de venta, o se le acaba de pedir el número—, aquí tampoco. Leyendo el
+        # diccionario en línea, un resumen de pedido con "1️⃣ Esposas — $29.900"
+        # casaba `_LISTA_PRODUCTOS_RE` y se convertía en la pregunta de categoría.
+        pregunta = _pregunta_de_calificacion(info)
         if pregunta:
             log.info(
                 "LLM omitió la pregunta de calificación para '%s' (escribió plantilla sin "
