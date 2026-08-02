@@ -110,3 +110,61 @@ def test_el_aviso_de_agotado_sin_facetas_sigue_igual():
     info = {"categoria_agotada": True, "agotado_por_facetas": False,
             "intencion": "lubricantes-y-cuidado", "restricciones": {}}
     assert "lubricantes y cuidado" in main._texto_agotado(info)
+
+
+# ── Tarea 3: la escalera de relajación ──
+
+DILDOS = [
+    {"id": 20, "nombre": "Dildo Doble Niel 38 cm", "descripcion": ""},
+    {"id": 21, "nombre": "Dildo Realista Daian 17 cm", "descripcion": ""},
+    {"id": 22, "nombre": "Raw Dildo Realista Denzel 19 cm", "descripcion": ""},
+]
+
+
+def test_no_se_rellena_soltando_el_atributo_que_pidio_el_cliente():
+    """El turno 3 del 2/08: 'Restricción relajada: atributos (quedan
+    {tipo: dildo}) → 5 productos'. El cliente pidió dobles y recibió
+    realistas."""
+    consultas = []
+
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+        consultas.append(dict(restricciones))
+        return [] if restricciones.get("atributos") else [dict(DILDOS[1])]
+
+    with parchar(catalog, _consultar_restricciones=fake_consultar):
+        res = asyncio.run(catalog.buscar_por_restricciones(
+            {"tipo": "dildo", "atributos": ["doble"]}, limit=5,
+            user_text="tienen mas dobles?"))
+    assert res.productos == []
+    assert res.relajado == "sin_resultado"
+    assert all(c.get("atributos") for c in consultas), \
+        f"nunca debe consultarse sin el atributo pedido: {consultas}"
+
+
+def test_un_solo_producto_se_muestra_solo_el():
+    """El principio, literal: si solo hay uno de lo que pidió, se muestra ese."""
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+        return [dict(DILDOS[0])]
+
+    with parchar(catalog, _consultar_restricciones=fake_consultar):
+        res = asyncio.run(catalog.buscar_por_restricciones(
+            {"tipo": "dildo", "atributos": ["doble"]}, limit=5,
+            user_text="doble"))
+    assert [p["id"] for p in res.productos] == [20]
+    assert res.relajado is None
+
+
+def test_sin_atributos_la_escalera_sigue_cediendo():
+    """La relajación existe por una razón: un vibrador 'con control remoto' que
+    no existe debe poder devolver vibradores, avisando."""
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+        if restricciones.get("control"):
+            return []
+        return [dict(DILDOS[1])]
+
+    with parchar(catalog, _consultar_restricciones=fake_consultar):
+        res = asyncio.run(catalog.buscar_por_restricciones(
+            {"tipo": "vibrador", "control": "remoto"}, limit=5,
+            user_text="vibrador con control remoto"))
+    assert res.relajado == "control"
+    assert res.productos

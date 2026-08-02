@@ -1890,7 +1890,12 @@ class Resultado:
 # Medido sobre las 42 combinaciones que los menús del bot pueden producir, con
 # las facetas reales del catálogo: con la zona en la escalera hay 1 respuesta que
 # contradice lo pedido; sin ella, ninguna.
-_ESCALERA_RELAJACION = ("atributos", "control", "genero_uso", "tipo", "vibra")
+#
+# `atributos` tampoco está, por lo mismo. El cliente pidió un dildo DOBLE y la
+# escalera soltó el atributo: log de producción del 2/08, 'Restricción relajada:
+# atributos (quedan {tipo: dildo}) → 5 productos', cuatro de ellos realistas.
+# Lo que el cliente nombra distingue un producto de otro; no es una preferencia.
+_ESCALERA_RELAJACION = ("control", "genero_uso", "tipo", "vibra")
 
 
 async def _fetch_restricciones(sql: str, *params) -> list[dict]:
@@ -2056,8 +2061,13 @@ async def buscar_por_restricciones(restricciones: dict,
     # Último recurso. Si el cliente nombró una ZONA, es lo único que se respeta:
     # nunca se cae a "solo el tipo", porque eso devolvería productos de otra parte
     # del cuerpo, que es exactamente el fallo que se corrigió.
+    #
+    # Y si nombró un ATRIBUTO no hay último recurso que valga: "otros dildos" no
+    # es una respuesta parcial a "un dildo doble", es otro producto. Quien llame
+    # decide qué hacer con el vacío; rellenarlo aquí es lo que ponía cinco fotos
+    # de realistas delante de quien pidió dobles.
     ancla = "zona" if restricciones.get("zona") else "tipo"
-    if restricciones.get(ancla):
+    if restricciones.get(ancla) and not restricciones.get("atributos"):
         solo = {ancla: restricciones[ancla]}
         encontrados = await _consultar_restricciones(solo, exclude_ids, limit, user_text)
         if encontrados:
