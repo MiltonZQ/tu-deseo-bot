@@ -924,6 +924,14 @@ async def _recuperar_candidatos(
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
 
+    # En un "ver más" el mensaje ("Ver más", "otros diseños") no tiene tokens de
+    # producto, así que ordenar por él daría una página 2 con otro criterio que
+    # la 1. Se reutiliza el texto que inició la búsqueda.
+    es_ver_mas = _es_ver_mas(user_text)
+    texto_busqueda = user_text
+    if es_ver_mas and (estado or {}).get("texto_busqueda"):
+        texto_busqueda = estado["texto_busqueda"]
+
     # Los productos ya mostrados pertenecen al tema anterior. Si el cliente
     # cambió de tipo, arrastrarlos hace dos daños: excluye productos válidos del
     # tema nuevo, y con `exclude` no vacío dispara `categoria_agotada`, que
@@ -1007,8 +1015,8 @@ async def _recuperar_candidatos(
         # rellenar con productos de otra zona o tipo.
         res = await catalog.buscar_por_restricciones(
             restricciones, exclude_ids=exclude, limit=5,
-            permitir_relajar=not _es_ver_mas(user_text),
-            user_text=user_text)
+            permitir_relajar=not es_ver_mas,
+            user_text=texto_busqueda)
         if res.productos:
             candidatos = res.productos
             relajado = res.relajado
@@ -1168,6 +1176,9 @@ async def _recuperar_candidatos(
         "debe_mostrar": debe_mostrar and bool(candidatos),
         "restricciones": restricciones,
         "relajado": relajado,
+        # Texto que originó la búsqueda activa. Se persiste para que el "ver
+        # más" del turno siguiente ordene por el mismo criterio.
+        "texto_busqueda": texto_busqueda,
         # Texto de la pregunta de clarificación, o None. Si viene, ES el turno:
         # no hay lista ni fotos que redactar.
         "pregunta_faceta": pregunta_faceta,
@@ -1668,6 +1679,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             # volver a preguntar lo mismo en el turno siguiente.
             add_pregunta_hecha=((info.get("restricciones") or {}).get("tipo")
                                 if info.get("pregunta_faceta") else None),
+            texto_busqueda=info.get("texto_busqueda"),
         )
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen

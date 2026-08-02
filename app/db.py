@@ -261,6 +261,12 @@ async def run_migrations() -> None:
             "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS "
             "preguntas_hechas TEXT[] DEFAULT '{}'"
         )
+        # Texto con el que el cliente inició la búsqueda activa. Se conserva
+        # para que "ver más" ordene la página siguiente por el mismo criterio:
+        # el mensaje "Ver más" no tiene tokens de producto.
+        await conn.execute(
+            "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS texto_busqueda TEXT"
+        )
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_productos_facetas ON productos(tipo, zona)"
         )
@@ -670,7 +676,8 @@ async def get_conversation_state(wa_id: str) -> dict | None:
         row = await conn.fetchrow(
             """
             SELECT categoria_busqueda, categoria_funcional, genero, calificado,
-                   productos_mostrados, restricciones, preguntas_hechas
+                   productos_mostrados, restricciones, preguntas_hechas,
+                   texto_busqueda
             FROM conversation_state WHERE wa_id = $1
             """,
             wa_id,
@@ -685,6 +692,7 @@ async def get_conversation_state(wa_id: str) -> dict | None:
         "productos_mostrados": list(row["productos_mostrados"] or []),
         "restricciones": json.loads(row["restricciones"]) if row["restricciones"] else {},
         "preguntas_hechas": list(row["preguntas_hechas"] or []),
+        "texto_busqueda": row["texto_busqueda"],
     }
 
 
@@ -697,6 +705,7 @@ async def upsert_conversation_state(
     add_productos_mostrados: list[int] | None = None,
     restricciones: dict | None = None,
     add_pregunta_hecha: str | None = None,
+    texto_busqueda: str | None = None,
     reset: bool = False,
 ) -> None:
     """Crea o actualiza el estado de conversación de un cliente.
@@ -724,6 +733,7 @@ async def upsert_conversation_state(
                     productos_mostrados = '{}',
                     restricciones = NULL,
                     preguntas_hechas = '{}',
+                    texto_busqueda = NULL,
                     updated_at = now()
                 """,
                 wa_id,
@@ -769,6 +779,8 @@ async def upsert_conversation_state(
         if restricciones is not None:
             _campo("restricciones", json.dumps(restricciones),
                    f"${idx}::jsonb", f"${idx}::jsonb")
+        if texto_busqueda is not None:
+            _campo("texto_busqueda", texto_busqueda, f"${idx}", f"${idx}")
         if add_productos_mostrados:
             # UPDATE: unir con lo ya guardado, sin duplicados.
             # OJO: usar ${idx} (un solo $) como placeholder de asyncpg. Escribir

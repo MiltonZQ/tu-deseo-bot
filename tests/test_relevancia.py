@@ -161,3 +161,83 @@ def test_buscar_por_restricciones_propaga_el_texto():
         asyncio.run(catalog.buscar_por_restricciones(
             {"tipo": "succionador"}, limit=5, user_text="tienen succionadores"))
     assert visto["user_text"] == "tienen succionadores"
+
+
+# ── Tarea 3: la paginación conserva el criterio ──
+
+from tests.stubs import importar_main  # noqa: E402
+
+main = importar_main()
+
+
+def _sin_db(**extra):
+    """Silencia todas las consultas del pipeline salvo las que interesan."""
+    async def sin_contar(r):
+        return 12
+
+    async def sin_facetas(r):
+        return {"atributos": {}, "zonas": {}, "generos": {}}
+
+    async def sin_nombre(*a, **k):
+        return []
+
+    async def sin_typos(t, *a, **k):
+        return t
+
+    async def sin_reco(**k):
+        return []
+
+    base = dict(contar_por_restricciones=sin_contar, facetas_disponibles=sin_facetas,
+                buscar_producto_especifico=sin_nombre,
+                corregir_typos_contra_catalogo=sin_typos,
+                get_productos_para_recomendar=sin_reco)
+    base.update(extra)
+    return parchar(catalog, **base)
+
+
+def _estado_succionadores(**kw):
+    base = {"categoria_busqueda": "succionadores",
+            "categoria_funcional": "succionadores", "genero": None,
+            "calificado": True, "productos_mostrados": [5, 7, 9, 10, 11],
+            "restricciones": {"tipo": "succionador"}, "preguntas_hechas": [],
+            "texto_busqueda": "quizás tienen succionadores"}
+    base.update(kw)
+    return base
+
+
+def _espiar_texto(mensaje, estado, producto=None):
+    """Corre un turno y devuelve (user_text que llegó a la búsqueda, info)."""
+    visto = {}
+
+    async def fake_buscar(restricciones, exclude_ids=None, limit=5,
+                          permitir_relajar=True, user_text=""):
+        visto["user_text"] = user_text
+        p = producto or SUCCIONADORES[4]
+        return catalog.Resultado(
+            productos=[dict(p, precio=1000, imagen_url="http://x/a.jpg",
+                            tipo="succionador", zona="clitoris", atributos=[])],
+            restricciones=restricciones)
+
+    with _sin_db(buscar_por_restricciones=fake_buscar):
+        _c, info = asyncio.run(main._recuperar_candidatos(mensaje, [], estado))
+    return visto.get("user_text"), info
+
+
+def test_ver_mas_reutiliza_el_texto_de_la_busqueda_original():
+    """'Ver más' no tiene tokens de producto: sin esto la página 2 volvería a
+    ordenarse por longitud de nombre."""
+    texto, _info = _espiar_texto("Ver más", _estado_succionadores())
+    assert texto == "quizás tienen succionadores"
+
+
+def test_una_busqueda_nueva_reemplaza_el_texto_guardado():
+    texto, info = _espiar_texto("ahora quiero succionadores con app",
+                                _estado_succionadores())
+    assert texto == "ahora quiero succionadores con app"
+    assert info["texto_busqueda"] == "ahora quiero succionadores con app"
+
+
+def test_el_texto_de_busqueda_se_persiste_para_el_turno_siguiente():
+    texto, info = _espiar_texto("quizás tienen succionadores", None)
+    assert texto == "quizás tienen succionadores"
+    assert info["texto_busqueda"] == "quizás tienen succionadores"
