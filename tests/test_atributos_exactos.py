@@ -238,3 +238,94 @@ def test_lo_que_de_verdad_es_para_principiantes_se_mantiene():
     f = facetas.clasificar_por_reglas(
         "Plug Anal Mikel CamToyz", "Ideal para principiantes", "Plug")
     assert "principiante" in f.atributos
+
+
+# ── Tarea 4: cero coincidencias ──
+
+def _estado_dildos(mostrados):
+    return {"categoria_busqueda": "dildos", "categoria_funcional": "dildos",
+            "genero": None, "calificado": True, "productos_mostrados": mostrados,
+            "restricciones": {"tipo": "dildo", "atributos": ["doble"]},
+            "preguntas_hechas": [], "texto_busqueda": "doble"}
+
+
+def _catalogo_vacio(total: int):
+    """Ninguna búsqueda devuelve nada; `total` es cuántos existen en catálogo."""
+    async def sin_productos(*a, **k):
+        return []
+
+    async def sin_restricciones(restricciones, exclude_ids=None, limit=5,
+                                permitir_relajar=True, user_text=""):
+        return catalog.Resultado(relajado="sin_resultado", restricciones=restricciones)
+
+    async def contar(_r):
+        return total
+
+    async def sin_facetas(_r):
+        return {"atributos": {}, "zonas": {}, "generos": {}}
+
+    return parchar(catalog, buscar_por_restricciones=sin_restricciones,
+                   contar_por_restricciones=contar,
+                   facetas_disponibles=sin_facetas,
+                   buscar_producto_especifico=sin_productos,
+                   get_productos_para_recomendar=sin_productos)
+
+
+def test_sin_ningun_producto_del_pedido_se_escala():
+    """El cliente pide algo que no existe: nunca 'no hay', se escala."""
+    with _catalogo_vacio(total=0):
+        _c, info = asyncio.run(main._recuperar_candidatos(
+            "tienen dildos dobles", [], _estado_dildos([])))
+    assert info["sin_inventario"] is True
+    assert info["agotado_por_facetas"] is False
+
+
+def test_si_ya_los_vio_todos_no_se_escala():
+    """Existe 1 y el cliente ya lo vio: eso no es falta de inventario, es que se
+    acabó la lista. Escalar aquí llenaría el panel con cada 'ver más'."""
+    with _catalogo_vacio(total=1):
+        _c, info = asyncio.run(main._recuperar_candidatos(
+            "tienen mas dobles?", [], _estado_dildos([20])))
+    assert info["sin_inventario"] is False
+    assert info["agotado_por_facetas"] is True
+
+
+def test_no_se_rellena_con_la_categoria_legacy():
+    """El corte tiene que apagar los cinco fallbacks: si alguno sigue vivo,
+    vuelven los dildos genéricos."""
+    llamadas = []
+
+    async def recomendar(*a, **k):
+        llamadas.append(k or a)
+        return [dict(DILDOS[1])]
+
+    with _catalogo_vacio(total=0):
+        with parchar(catalog, get_productos_para_recomendar=recomendar):
+            candidatos, _info = asyncio.run(main._recuperar_candidatos(
+                "tienen dildos dobles", [], _estado_dildos([])))
+    assert candidatos == [], f"se rellenó con {candidatos}"
+    assert llamadas == [], f"no debe consultarse el camino legacy: {llamadas}"
+
+
+def test_la_escalation_se_registra_sin_depender_de_frases():
+    """`detect_reason` mira patrones en la respuesta del bot, y el handoff por
+    falta de stock no casa con ninguno: hoy pausa sin registrar."""
+    creadas = []
+
+    async def sin_pendiente(_wa):
+        return None
+
+    async def crear(data):
+        creadas.append(data)
+        return 7
+
+    from app import db as _db
+    with parchar(_db, find_pending_escalation=sin_pendiente, create_escalation=crear):
+        eid = asyncio.run(escalations.registrar(
+            wa_id="573001112233", reason="sin_inventario",
+            reason_detail="El cliente pidió dildos dobles y no hay ninguno.",
+            issue_summary="tienen dildos dobles", history=[],
+            bot_reply="Déjame validar con el equipo 🙌"))
+    assert eid == 7
+    assert creadas[0]["reason"] == "sin_inventario"
+    assert creadas[0]["wa_id"] == "573001112233"

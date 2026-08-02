@@ -1073,7 +1073,26 @@ async def _recuperar_candidatos(
             log.info("Restricciones %s → %d productos%s", restricciones,
                      len(candidatos), f" (relajando {relajado})" if relajado else "")
 
-    if not candidatos and debe_mostrar and cat_func:
+    # Si el cliente nombró un atributo y no hay nada que lo cumpla, los fallbacks
+    # de abajo rellenarían con "lo que sea de la categoría": son cinco caminos
+    # distintos hacia el mismo ruido. Se corta aquí, y se distingue el caso en
+    # que NUNCA hubo (se escala, sin decirle al cliente que no existe) del caso
+    # en que ya los vio todos (se le dice que ya los vio).
+    sin_inventario = False
+    agotado_por_facetas = False
+    if debe_mostrar and not candidatos and restricciones.get("atributos") \
+            and restricciones.get("tipo"):
+        total_del_pedido = await catalog.contar_por_restricciones(restricciones)
+        if total_del_pedido:
+            agotado_por_facetas = True
+        else:
+            sin_inventario = True
+        log.info("Sin coincidencias para %s (existen %d en catálogo) → %s",
+                 restricciones, total_del_pedido,
+                 "escalar" if sin_inventario else "ya los vio todos")
+    corte_por_facetas = sin_inventario or agotado_por_facetas
+
+    if not candidatos and debe_mostrar and cat_func and not corte_por_facetas:
         # Camino anterior, aún activo para los productos que todavía no tienen
         # facetas calculadas (hasta que corra el backfill).
         candidatos = await catalog.get_productos_para_recomendar(
@@ -1087,7 +1106,7 @@ async def _recuperar_candidatos(
 
     # Si subtipo SOFT (primera vez, sencillo, suave...) no dio matches estrictos, relajar a categoría sin subtipo.
     # Evita el bug "primera vez" -> 0 resultados -> handoff.
-    if not candidatos and clasif.get("subtipo_detectado"):
+    if not candidatos and clasif.get("subtipo_detectado") and not corte_por_facetas:
         _sub = clasif.get("subtipo_detectado")
         try:
             es_soft = catalog._es_subtipo_soft(_sub)
@@ -1114,7 +1133,7 @@ async def _recuperar_candidatos(
 
     # Si se especificó un subtipo HARD (ej: "duchas anales") y no hay candidatos, NO ejecutar
     # fallbacks a otras categorías irrelevantes (como Arneses Strap-On). Para SOFT ya se intentó arriba.
-    if not candidatos and not clasif.get("subtipo_detectado"):
+    if not candidatos and not clasif.get("subtipo_detectado") and not corte_por_facetas:
         # BLINDAJE ANTI-BUCLE: si el cliente está respondiendo a una pregunta de
         # calificación (estado.calificado=True, debe_mostrar=True) PERO no se
         # encontraron candidatos (género/subtipo restrictivo no matchea nada),
@@ -1166,7 +1185,9 @@ async def _recuperar_candidatos(
     # Detectar CATEGORÍA/SUBTIPO AGOTADO: el cliente pidió "ver más" o un subtipo específico
     # cuyas opciones disponibles en inventario ya fueron totalmente mostradas en mensajes previos.
     categoria_agotada = bool(
-        not candidatos and (clasif["pide_fotos"] or clasif.get("subtipo_detectado")) and bool(exclude) and cat_func
+        agotado_por_facetas
+        or (not candidatos and (clasif["pide_fotos"] or clasif.get("subtipo_detectado"))
+            and bool(exclude) and cat_func)
     )
 
     _subtipo_actual = clasif.get("subtipo_detectado")
@@ -1223,6 +1244,10 @@ async def _recuperar_candidatos(
         # handoff "no tengo ese producto" + bot pausado sin justificación.
         "sin_stock_subtipo": bool(busqueda_ejecutada and _subtipo_actual and not candidatos
                                   and not exclude and not _es_soft_actual),
+        # Cero productos de lo que el cliente nombró. `sin_inventario` es que
+        # NUNCA hubo —se escala—; `agotado_por_facetas` es que ya los vio todos.
+        "sin_inventario": sin_inventario,
+        "agotado_por_facetas": agotado_por_facetas,
         "debe_mostrar": debe_mostrar and bool(candidatos),
         "restricciones": restricciones,
         "relajado": relajado,
@@ -1468,22 +1493,29 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # ESCALAMIENTO POR PRODUCTO/SUBTIPO NO DISPONIBLE:
     # Si el cliente especificó un subtipo (ej: "duchas anales") y no hay candidatos
     # en stock, NO enviar productos no relacionados. Pausar el bot y escalar a humano.
-    if info.get("sin_stock_subtipo"):
-        HANDOFF_NO_STOCK = (
-            "En este momento no cuento con ese producto o diseño específico en inventario 😔. "
-            "Te estoy transfiriendo con un asesor humano para que te ayude a consultar disponibilidad "
-            "o buscar la mejor alternativa 💬"
+    if info.get("sin_inventario") or info.get("sin_stock_subtipo"):
+        # Nunca se le dice al cliente que no existe: puede haber entrado
+        # mercancía que el catálogo todavía no refleja, y un "no tengo" cierra la
+        # venta. Se pausa el bot y se le pasa a una persona.
+        HANDOFF_SIN_INVENTARIO = (
+            "Déjame validar con el equipo si nos llegó algo nuevo que aún no tengo "
+            "registrado 🙌 En un momentito se comunican contigo por aquí."
         )
+        pedido = _describir_pedido(info.get("restricciones") or {})
         await db.set_bot_paused(wa_id, True)
         await db.save_message(wa_id, "user", user_text)
-        await db.save_message(wa_id, "assistant", HANDOFF_NO_STOCK)
-        await whatsapp_client.send_text(wa_id, HANDOFF_NO_STOCK)
-        await escalations.record_if_escalated(
-            wa_id=wa_id, user_text=user_text, bot_reply=HANDOFF_NO_STOCK,
-            message_type="text", media_type=None, history=history,
-        )
-        log.info("Handoff por producto/subtipo sin stock (%s) para %s — bot pausado",
-                 info.get("intencion") or user_text, wa_id)
+        await db.save_message(wa_id, "assistant", HANDOFF_SIN_INVENTARIO)
+        await whatsapp_client.send_text(wa_id, HANDOFF_SIN_INVENTARIO)
+        # Registro directo: `record_if_escalated` decide buscando frases como
+        # "especialista te responderá" en la respuesta del bot, y ninguna copia
+        # de este camino las contiene — pausaba sin dejar rastro en el panel.
+        await escalations.registrar(
+            wa_id=wa_id, reason="sin_inventario",
+            reason_detail=f"El cliente pidió {pedido} y no hay ninguno ofrecible.",
+            issue_summary=user_text, history=history,
+            bot_reply=HANDOFF_SIN_INVENTARIO)
+        log.info("Handoff por inventario sin coincidencias (%s) para %s — bot pausado",
+                 pedido, wa_id)
         return
 
     if info["reset_state"] and estado_previo:

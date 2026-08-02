@@ -129,6 +129,42 @@ def _build_excerpt(history: list[dict], user_text: str, bot_reply: str) -> str:
     return "\n".join(lines)
 
 
+async def registrar(wa_id: str, reason: str, reason_detail: str,
+                    issue_summary: str, history: list[dict], bot_reply: str,
+                    media_type: str | None = None) -> int:
+    """Crea o actualiza la escalation pendiente de un contacto.
+
+    Sin pasar por `detect_reason`. Ese camino decide mirando si la respuesta
+    del bot contiene frases como "especialista te responderá", y el handoff por
+    falta de stock no contiene ninguna: pausaba el bot y no dejaba rastro en el
+    panel, así que el cliente quedaba esperando a nadie. Cuando el sistema YA
+    sabe que está escalando no tiene que averiguarlo leyéndose a sí mismo.
+    """
+    customer = _extract_customer_data(
+        history + [{"role": "user", "content": issue_summary}])
+    data = {
+        "wa_id": wa_id,
+        **customer,
+        "issue_summary": (issue_summary[:300] + "...") if len(issue_summary) > 300
+                         else issue_summary,
+        "reason": reason,
+        "reason_detail": reason_detail,
+        "last_media_type": media_type,
+        "conversation_excerpt": _build_excerpt(history, issue_summary, bot_reply),
+    }
+    existing = await db.find_pending_escalation(wa_id)
+    if existing:
+        await db.bump_escalation(
+            existing["id"], {**data, "media_count_delta": 1 if media_type else 0})
+        log.info("Escalation %d actualizada (wa_id=%s, reason=%s)",
+                 existing["id"], wa_id, reason)
+        return existing["id"]
+    data["media_count"] = 1 if media_type else 0
+    new_id = await db.create_escalation(data)
+    log.info("Escalation %d CREADA (wa_id=%s, reason=%s)", new_id, wa_id, reason)
+    return new_id
+
+
 async def record_if_escalated(
     wa_id: str,
     user_text: str,
@@ -146,39 +182,7 @@ async def record_if_escalated(
         return None
 
     reason_code, reason_detail = detected
-    customer = _extract_customer_data(history + [{"role": "user", "content": user_text}])
-    excerpt = _build_excerpt(history, user_text, bot_reply)
-    summary = (user_text[:300] + "...") if len(user_text) > 300 else user_text
-
-    data = {
-        "wa_id": wa_id,
-        **customer,
-        "issue_summary": summary,
-        "reason": reason_code,
-        "reason_detail": reason_detail,
-        "last_media_type": media_type,
-        "conversation_excerpt": excerpt,
-    }
-
-    existing = await db.find_pending_escalation(wa_id)
-    if existing:
-        # Actualiza la escalation pendiente (no creamos duplicados)
-        bump = {
-            **data,
-            "media_count_delta": 1 if media_type else 0,
-        }
-        # Preservar customer_name/city/etc si la pendiente ya los tenía
-        for k in ("customer_name", "city", "product", "purchase_date"):
-            if not data.get(k) and existing.get(k):
-                bump[k] = None  # deja el existente
-            elif data.get(k):
-                bump[k] = data[k]
-        await db.bump_escalation(existing["id"], bump)
-        log.info("Escalation %d actualizada (wa_id=%s, reason=%s)",
-                 existing["id"], wa_id, reason_code)
-        return existing["id"]
-
-    data["media_count"] = 1 if media_type else 0
-    new_id = await db.create_escalation(data)
-    log.info("Escalation %d CREADA (wa_id=%s, reason=%s)", new_id, wa_id, reason_code)
-    return new_id
+    return await registrar(
+        wa_id=wa_id, reason=reason_code, reason_detail=reason_detail,
+        issue_summary=user_text, history=history, bot_reply=bot_reply,
+        media_type=media_type)
