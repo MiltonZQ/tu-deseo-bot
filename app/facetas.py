@@ -595,6 +595,9 @@ def interpretar_mensaje(texto: str) -> dict:
         encontradas["_implicitos"] = implicitos
     if _alguna(_CLAVES_PIDE_VIBRACION, t):
         encontradas["vibra"] = True
+    # En "arnés con pene", el término pene describe la prótesis incorporada al arnés, no la zona corporal del usuario.
+    if encontradas.get("tipo") == "arnes" and encontradas.get("zona") == "pene":
+        encontradas.pop("zona", None)
     return encontradas
 
 
@@ -648,7 +651,7 @@ def fusionar_restricciones(previas: dict | None, nuevas: dict) -> dict:
 # Qdrant y el prompt. Se mantiene mientras dure la transición.
 _TIPO_A_CATEGORIA_LEGACY = {
     "vibrador": "vibradores", "succionador": "succionadores",
-    "plug": "anal", "bolas": "anal", "enema": "anal", "arnes": "anal",
+    "plug": "anal", "bolas": "anal", "enema": "anal", "arnes": "pareja-y-bondage",
     "dildo": "dildos", "anillo": "anillos-vibradores", "funda": "fundas-pene",
     "masturbador": "masturbadores", "bomba": "bombas-pene",
     "lubricante": "lubricantes-y-cuidado", "cosmetica": "lubricantes-y-cuidado",

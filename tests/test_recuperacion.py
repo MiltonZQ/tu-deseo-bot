@@ -365,3 +365,12 @@ def test_la_zona_no_se_cede_nunca():
     escalera = catalog._ESCALERA_RELAJACION
     assert "zona" not in escalera, f"la zona no puede cederse: {escalera}"
     assert "tipo" in escalera, f"la forma del juguete sí es negociable: {escalera}"
+
+
+def test_arnes_con_pene_no_asigna_zona_pene():
+    """Valida que 'arnés con pene' se clasifique como tipo arnés sin zona pene (describe la prótesis)."""
+    from app import facetas
+    r = facetas.interpretar_mensaje("Me gustaría un arnés con pene")
+    assert r.get("tipo") == "arnes", r
+    assert r.get("zona") != "pene", f"pene en arnés con pene describe la prótesis, no la zona corporal: {r}"
+

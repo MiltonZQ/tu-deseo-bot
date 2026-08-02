@@ -773,6 +773,10 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "anillos": "anillos-vibradores",
     "funda": "fundas-pene",
     "fundas": "fundas-pene",
+    "funda para el pene": "fundas-pene",
+    "fundas para el pene": "fundas-pene",
+    "funda para pene": "fundas-pene",
+    "fundas para pene": "fundas-pene",
     "bomba": "bombas-pene",
     "bombas": "bombas-pene",
     "bomba pene": "bombas-pene",
@@ -791,9 +795,9 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "bodys": "lenceria",
     "baby doll": "lenceria",
     "babydoll": "lenceria",
-    "arnes": "anal",
-    "arnés": "anal",
-    "arneses": "anal",
+    "arnes": "pareja-y-bondage",
+    "arnés": "pareja-y-bondage",
+    "arneses": "pareja-y-bondage",
     "conjunto": "lenceria",
     "conjuntos": "lenceria",
     "pechera": "lenceria",
@@ -865,6 +869,7 @@ _SUBTIPO_KEYWORDS = (
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
     "desensibiliz", "caliente",
     # Lencería
+    "funda", "fundas", "funda para el pene",
     "arnes", "arnés", "liguero", "pechera", "encaje", "body", "bodies", "bodys", "disfraz",
     "suspensorio", "conjunto",
     # Bondage / BDSM (pareja-y-bondage)
@@ -897,6 +902,8 @@ _SUBTIPO_A_CATEGORIA = {
     "body": "lenceria", "bodies": "lenceria", "bodys": "lenceria",
     "disfraz": "lenceria", "suspensorio": "lenceria",
     "conjunto": "lenceria",
+    "funda": "fundas-pene", "fundas": "fundas-pene", "funda para el pene": "fundas-pene",
+    "arnes": "pareja-y-bondage", "arnés": "pareja-y-bondage",
     "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
     "antifaz": "pareja-y-bondage", "antifaces": "pareja-y-bondage",
     "fustas": "pareja-y-bondage", "fusta": "pareja-y-bondage",
@@ -1891,10 +1898,6 @@ class Resultado:
 # las facetas reales del catálogo: con la zona en la escalera hay 1 respuesta que
 # contradice lo pedido; sin ella, ninguna.
 #
-# `atributos` tampoco está, por lo mismo. El cliente pidió un dildo DOBLE y la
-# escalera soltó el atributo: log de producción del 2/08, 'Restricción relajada:
-# atributos (quedan {tipo: dildo}) → 5 productos', cuatro de ellos realistas.
-# Lo que el cliente nombra distingue un producto de otro; no es una preferencia.
 _ESCALERA_RELAJACION = ("control", "genero_uso", "tipo", "vibra")
 
 
