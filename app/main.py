@@ -13,7 +13,7 @@ from fastapi.responses import PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature, catalog
-from app import escalations, admin, leads, follow_ups, sedes, pedidos, redis_client, vector_store
+from app import escalations, admin, leads, follow_ups, sedes, pedidos, redis_client, vector_store, payments
 from app import preguntas, facetas
 
 logging.basicConfig(
