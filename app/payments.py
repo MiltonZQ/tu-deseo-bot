@@ -209,16 +209,6 @@ async def handle_inbound_image(
         return False
 
     monto_esperado, pedido_id = await _get_monto_esperado(wa_id)
-    recent = " ".join(m["content"] for m in history[-6:]).lower()
-    caption_lc = (caption or "").lower()
-    habla_pago = any(w in recent or w in caption_lc for w in (
-        "pago", "comprobante", "transferencia", "consignacion", "consignación",
-        "abono", "nequi", "daviplata", "bancolombia", "envio", "envío",
-    ))
-
-    # Si no hay pedido ni palabras clave pero hay historial o es una foto aislada, procesarla igualmente como comprobante
-    if not pedido_id and not habla_pago and len(history) > 2:
-        return False  # solo si hay una conversación activa de exploración sin pago sin pedido
 
     # 1) Descargar
     image_b64 = await _download_image_as_b64(image_url)
