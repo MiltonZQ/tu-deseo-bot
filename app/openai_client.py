@@ -198,7 +198,9 @@ async def complete(user_message: str, history: list[dict],
         if estado.get("hay_mas"):
             total = estado.get("total_en_categoria", 0)
             estado_lines.append(
-                f"- ✅ HAY MAS PRODUCTOS: total {total} en categoria, quedan por mostrar. Usa CTA '¿Cuál te gusta o deseas ver más diseños? 😊'"
+                f"- ✅ HAY MAS PRODUCTOS: total {total} en categoria, quedan por mostrar. "
+                f"Usa CTA 'Por favor, indícame el número o los números de los productos "
+                f"que deseas adquirir, o si deseas ver más diseños 😊'"
             )
         if estado.get("sin_mas_opciones"):
             estado_lines.append(

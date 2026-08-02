@@ -497,6 +497,16 @@ _SIN_RESULTADO_MSG = (
 )
 
 
+# CTA de la lista numerada. Se pide el NÚMERO, no "cuál te gusta": con la
+# pregunta abierta el cliente contestaba "ese", "el dildo" o "quiero pedir", y
+# ninguna de las tres identifica un producto. El número sí, y la numeración es
+# continua entre rondas justamente para que no sea ambiguo (ver `_numero_lista`).
+_CTA_CON_MAS = ("Por favor, indícame el número o los números de los productos "
+                "que deseas adquirir, o si deseas ver más diseños 😊")
+_CTA_SIN_MAS = ("Por favor, indícame el número o los números de los productos "
+                "que deseas adquirir 😊")
+
+
 _KEYCAPS = ("0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣")
 
 
@@ -647,11 +657,11 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     if info.get("hay_mas"):
         intro = (f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Buena elección! Te muestro estas opciones de {cat_nombre} 👇")
-        cta = "¿Cuál te gusta o deseas ver más diseños? 😊"
+        cta = _CTA_CON_MAS
     else:
         intro = (f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Perfecto! Estas son las opciones de {cat_nombre} que tenemos 👇")
-        cta = "¿Cuál de estos te gustaría llevar? 😊"
+        cta = _CTA_SIN_MAS
     # Con aviso, el aviso ES la entrada: encadenar los dos dejaba dos saludos
     # seguidos ("No tengo exactamente… 👇" + "¡Buena elección!… 👇").
     encabezado = aviso.rstrip("\n") if aviso else intro
