@@ -83,3 +83,34 @@ def test_con_productos_que_enviar_nunca_se_avisa():
         info={"debe_mostrar": True, "reset_state": False, "tema_nuevo": False},
         pedido_creado_id=None,
     )
+
+
+# ── Tarea 2: el turno de calificación lo escribe el sistema ──
+
+def test_el_turno_de_calificacion_no_lo_improvisa_el_llm():
+    """18:47 del 2/08: 'tienen kit BDSM' tras un cambio de tema. Sin candidatos
+    el LLM invocó cross_selling y ofreció lubricantes en vez de preguntar."""
+    info = {"debe_mostrar": False, "categoria_funcional": "pareja-y-bondage",
+            "pregunta_faceta": None, "categoria_agotada": False}
+    assert main._pregunta_de_calificacion(info) == \
+        main._PREGUNTAS_CALIFICACION["pareja-y-bondage"]
+
+
+def test_sin_categoria_no_hay_pregunta_que_inyectar():
+    info = {"debe_mostrar": False, "categoria_funcional": None,
+            "pregunta_faceta": None, "categoria_agotada": False}
+    assert main._pregunta_de_calificacion(info) is None
+
+
+def test_si_hay_productos_que_mostrar_no_se_pregunta():
+    info = {"debe_mostrar": True, "categoria_funcional": "pareja-y-bondage",
+            "pregunta_faceta": None, "categoria_agotada": False}
+    assert main._pregunta_de_calificacion(info) is None
+
+
+def test_la_pregunta_por_facetas_tiene_prioridad():
+    """`pregunta_faceta` se arma con el stock real; la fija es el respaldo."""
+    info = {"debe_mostrar": False, "categoria_funcional": "dildos",
+            "pregunta_faceta": "¿lo buscas realista o con ventosa?",
+            "categoria_agotada": False}
+    assert main._pregunta_de_calificacion(info) is None

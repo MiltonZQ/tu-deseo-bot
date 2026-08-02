@@ -588,6 +588,23 @@ def _debe_avisar_agotado(reply: str, ids_ya_mostrados: set, final_productos: lis
     return bool(info.get("debe_mostrar") or _OFRECE_PRODUCTOS_RE.search(reply))
 
 
+def _pregunta_de_calificacion(info: dict) -> str | None:
+    """La pregunta fija de la categoría, cuando el turno es de calificar.
+
+    El sistema ya redacta los turnos de PRODUCTO por la misma razón que aquí:
+    cuando el LLM redacta sin candidatos, improvisa. En producción respondió a
+    'tienen kit BDSM' ofreciendo lubricantes y preguntando si confirmaba que
+    hubiera kits, teniendo cinco en catálogo. La red de seguridad existente
+    solo salta si escribió una plantilla de productos reconocible.
+
+    `pregunta_faceta` tiene prioridad: se arma con el stock real, mientras que
+    esta es texto fijo que puede ofrecer ramas vacías.
+    """
+    if info.get("debe_mostrar") or info.get("pregunta_faceta") or info.get("categoria_agotada"):
+        return None
+    return _PREGUNTAS_CALIFICACION.get(info.get("categoria_funcional") or "")
+
+
 def _texto_desde_candidatos(candidatos: list[dict], info: dict,
                             mas_disenos: bool = False, offset: int = 0) -> str:
     """Redacta la lista de productos desde los candidatos reales del catálogo.
@@ -1582,6 +1599,11 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         raw_reply = info["pregunta_faceta"]
     elif es_agotado:
         raw_reply = _texto_agotado(info)
+    elif _pregunta_de_calificacion(info):
+        # Sin candidatos el LLM redactaba libre y a veces improvisaba: a un
+        # 'tienen kit BDSM' respondió ofreciendo lubricantes, teniendo cinco
+        # kits en catálogo. Lo redacta el sistema, como los turnos de producto.
+        raw_reply = _pregunta_de_calificacion(info)
     elif texto_lo_arma_el_sistema:
         # La numeración continúa mientras siga la misma búsqueda; si el cliente
         # cambió de tema, el estado se reinició y arranca de nuevo en 1️⃣.
