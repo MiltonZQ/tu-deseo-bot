@@ -194,7 +194,6 @@ _ATRIBUTOS = {
     "realista": ("realista", "ultrarrealista", "ultrarealista", "hiperrealista", "textura piel"),
     "ventosa": ("ventosa",),
     "vidrio": ("vidrio", "cristal"),
-    "doble": ("doble", "doble estimulacion", "doble penetracion"),
     "sabor": ("sabor", "sabores", "comestible"),
     "agua": ("base de agua", "base agua", "h2o", "hidrosoluble", "acuoso"),
     "silicona": ("silicona",),
@@ -202,7 +201,9 @@ _ATRIBUTOS = {
     "desensibilizante": ("desensibiliz", "anestesico", "relajante anal"),
     "calor": ("caliente", "sensacion caliente", "calor"),
     "frio": ("frio", "menta", "efecto frio"),
-    "principiante": ("principiante", "primera vez", "iniciacion", "pequeño", "pequeno"),
+    # "pequeño" NO es clave: describe el tamaño, no al público. Por ahí entraban
+    # un baby doll y un arnés de bondage como productos "para principiantes".
+    "principiante": ("principiante", "primera vez", "iniciacion"),
     "recargable": ("recargable", "usb"),
     "impermeable": ("impermeable", "sumergible", "waterproof"),
 }
@@ -224,6 +225,30 @@ _ATRIBUTOS_ACOTADOS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
               ("lubricante", "cosmetica")),
     "neutro": (("neutro", "neutra", "sin sabor", "sin olor"),
                ("lubricante", "cosmetica")),
+    # "doble densidad" es la frase comercial de CUALQUIER dildo ultrarrealista, y
+    # vive en la descripción: marcaba como dobles a cuatro que no lo son, más
+    # anillos, plugs y balas. Solo cuenta si lo dice el nombre, y solo en tipos
+    # donde "doble" significa dos penetraciones y no dos capas de silicona.
+    #
+    # "double" en inglés es obligatorio: los tres dobles de verdad del catálogo
+    # que no lo dicen en español son "Satisfyer Double Joy", "Satisfyer Double
+    # Classic Partner" y "Arnes Fetish Fantasy Double Penetrix".
+    "doble": (("doble", "double", "doble penetracion", "doble estimulacion"),
+              ("dildo", "vibrador", "arnes")),
+}
+
+# Atributos que solo tienen sentido en ciertos tipos, se digan donde se digan.
+#
+# A diferencia de `_ATRIBUTOS_ACOTADOS` estos SÍ se leen de la descripción: un
+# lubricante no suele decir "base de agua" en el nombre. Lo que se corta es que
+# se peguen a otro tipo de producto. Medido sobre los 246 ofrecibles: un arnés y
+# una funda para el pene salían "a base de agua" porque su ficha dice "usar
+# lubricante a base de agua", y un dildo ultrarrealista salía "con efecto calor".
+_ATRIBUTOS_POR_TIPO: dict[str, tuple[str, ...]] = {
+    "agua": ("lubricante", "cosmetica"),
+    "sabor": ("lubricante", "cosmetica"),
+    "calor": ("lubricante", "cosmetica"),
+    "frio": ("lubricante", "cosmetica"),
 }
 
 # Vocabulario público de atributos, para el panel y para quien tenga que
@@ -333,7 +358,11 @@ def clasificar_por_reglas(nombre: str, descripcion: str | None = "",
 
 
 def aplicar_atributos_acotados(nombre: str, f: Facetas) -> None:
-    """Añade a `f` los atributos de `_ATRIBUTOS_ACOTADOS` que correspondan.
+    """Ajusta los atributos de `f` que dependen del tipo del producto.
+
+    Añade los de `_ATRIBUTOS_ACOTADOS` (que solo cuentan si lo dice el NOMBRE) y
+    quita los de `_ATRIBUTOS_POR_TIPO` que se hayan pegado a un tipo donde no
+    significan nada.
 
     Va aparte porque hay que aplicarlo dos veces: tras las reglas y, cuando el
     tipo lo decide el LLM, otra vez con ese tipo ya conocido.
@@ -342,6 +371,11 @@ def aplicar_atributos_acotados(nombre: str, f: Facetas) -> None:
     for attr, (claves, tipos_validos) in _ATRIBUTOS_ACOTADOS.items():
         if f.tipo in tipos_validos and attr not in f.atributos and _alguna(claves, n):
             f.atributos = sorted(f.atributos + [attr])
+    # Sin tipo no se puede podar: lo decidirá el LLM y este mismo pase corre otra
+    # vez después. Podar aquí borraría el atributo antes de saber si era válido.
+    if f.tipo:
+        f.atributos = [a for a in f.atributos
+                       if f.tipo in _ATRIBUTOS_POR_TIPO.get(a, (f.tipo,))]
 
 
 # ── Respaldo con LLM para los productos que las reglas no deciden ──

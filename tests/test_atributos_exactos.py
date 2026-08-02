@@ -58,17 +58,16 @@ def test_la_auditoria_separa_el_nombre_de_la_descripcion():
     """Lo que hay que poder ver: cuántos productos deben un atributo solo a la
     descripción, que es donde vive el ruido comercial."""
     filas = [
-        {"id": 1, "nombre": "Dildo Doble Niel 38 cm",
+        {"id": 1, "nombre": "Dildo Ultra Realista Burgo Camtoyz",
          "descripcion": "", "categoria": "Dildo"},
-        {"id": 2, "nombre": "Dildo Ultra Realista Burgo Camtoyz",
-         "descripcion": "Silicona de doble densidad, tacto piel",
-         "categoria": "Dildo"},
+        {"id": 2, "nombre": "Consolador King Cock con Squirting",
+         "descripcion": "Textura piel, acabado realista", "categoria": "Dildo"},
     ]
     res = clasificacion.auditar_filas(filas)
     assert res["productos"] == 2
-    assert res["atributos"]["doble"]["por_nombre"] == 1
-    assert res["atributos"]["doble"]["solo_descripcion"] == 1
-    assert res["atributos"]["doble"]["ejemplos"] == ["Dildo Ultra Realista Burgo Camtoyz"]
+    assert res["atributos"]["realista"]["por_nombre"] == 1
+    assert res["atributos"]["realista"]["solo_descripcion"] == 1
+    assert res["atributos"]["realista"]["ejemplos"] == ["Consolador King Cock con Squirting"]
 
 
 def test_la_auditoria_no_cuenta_atributos_que_nadie_tiene():
@@ -168,3 +167,74 @@ def test_sin_atributos_la_escalera_sigue_cediendo():
             user_text="vibrador con control remoto"))
     assert res.relajado == "control"
     assert res.productos
+
+
+# ── Tarea 2: los atributos no se pegan a productos que no son ──
+
+def test_doble_densidad_no_convierte_un_dildo_en_doble():
+    """El falso positivo del 2/08: cuatro ultrarrealistas marcados como dobles
+    porque su ficha dice 'silicona de doble densidad'."""
+    f = facetas.clasificar_por_reglas(
+        "Dildo Ultra Realista Burgo Camtoyz",
+        "Fabricado en silicona de doble densidad, tacto piel", "Dildo")
+    assert "doble" not in f.atributos
+
+
+def test_un_dildo_doble_de_verdad_sigue_marcandose():
+    f = facetas.clasificar_por_reglas("Dildo Doble Niel 38 cm", "", "Dildo")
+    assert "doble" in f.atributos
+
+
+def test_los_dobles_que_lo_dicen_en_ingles_no_se_pierden():
+    """La auditoría del catálogo: tres dobles reales no usan la palabra
+    española. Sin la clave inglesa, acotar al nombre los habría borrado."""
+    for nombre in ("Satisfyer Double Joy Vibrador Negro",
+                   "Satisfyer Double Classic Partner Vibrador Morado"):
+        f = facetas.clasificar_por_reglas(nombre, "", "Vibrador")
+        assert "doble" in f.atributos, nombre
+
+
+def test_doble_sigue_siendo_vocabulario_publico():
+    """El panel valida contra F.ATRIBUTOS: si `doble` desaparece de ahí, deja
+    de poder corregirse a mano."""
+    assert "doble" in facetas.ATRIBUTOS
+
+
+def test_un_arnes_no_es_un_lubricante_a_base_de_agua():
+    """Auditoría: 12 de 14 productos con `agua` lo debían a la descripción, y
+    entre ellos un arnés y una funda cuya ficha dice 'usar lubricante a base
+    de agua'."""
+    f = facetas.clasificar_por_reglas(
+        "Arnes Tanos Camtoyz",
+        "Se recomienda usar lubricante a base de agua", "Arneses")
+    assert "agua" not in f.atributos
+
+
+def test_un_dildo_no_tiene_efecto_calor():
+    f = facetas.clasificar_por_reglas(
+        "Dildo Ultrarealista Grigor CamToyz",
+        "Lavar con agua caliente y jabón neutro", "Dildo")
+    assert "calor" not in f.atributos
+    assert "neutro" not in f.atributos
+
+
+def test_el_lubricante_conserva_sus_propios_atributos():
+    """La poda es por tipo: en un lubricante esos atributos son su razón de ser."""
+    f = facetas.clasificar_por_reglas(
+        "Lubricante Electrizante Mango X 30 ML",
+        "Lubricante con sabor a mango, base de agua", "Lubricantes")
+    assert "sabor" in f.atributos
+    assert "agua" in f.atributos
+
+
+def test_pequeno_no_significa_para_principiantes():
+    """Auditoría: por la clave 'pequeño' entraban un baby doll y un arnés."""
+    f = facetas.clasificar_por_reglas(
+        "Baby Doll Bluma Lerot", "Prenda de encaje con detalle pequeño", "Lencería")
+    assert "principiante" not in f.atributos
+
+
+def test_lo_que_de_verdad_es_para_principiantes_se_mantiene():
+    f = facetas.clasificar_por_reglas(
+        "Plug Anal Mikel CamToyz", "Ideal para principiantes", "Plug")
+    assert "principiante" in f.atributos
