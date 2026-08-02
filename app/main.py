@@ -515,6 +515,55 @@ def _numero_lista(n: int) -> str:
     return "".join(_KEYCAPS[int(d)] for d in str(n))
 
 
+# Cómo se le nombra al cliente lo que pidió. Se describe lo que PIDIÓ, no la
+# etiqueta interna: "No tengo exactamente anal para anal" no es castellano.
+_ZONAS_EN_TEXTO = {
+    "anal": "anales", "clitoris": "de clítoris", "vaginal": "vaginales",
+    "pene": "para el pene", "pezones": "para pezones", "cuerpo": "corporales",
+}
+_TIPOS_EN_TEXTO = {
+    "vibrador": "vibradores", "succionador": "succionadores", "plug": "plugs",
+    "dildo": "dildos", "anillo": "anillos", "funda": "fundas",
+    "masturbador": "masturbadores", "bomba": "bombas", "arnes": "arneses",
+    "enema": "duchas anales", "lubricante": "lubricantes", "bolas": "bolas",
+    "lenceria": "prendas", "bondage": "artículos de bondage", "juego": "juegos",
+}
+_ATRIBUTOS_EN_TEXTO = {
+    "doble": "dobles", "realista": "realistas", "ventosa": "con ventosa",
+    "vidrio": "de vidrio", "sabor": "con sabor", "neutro": "neutros",
+    "agua": "a base de agua", "silicona": "de silicona", "hibrido": "híbridos",
+    "desensibilizante": "desensibilizantes", "calor": "con efecto calor",
+    "frio": "con efecto frío", "principiante": "para principiantes",
+    "recargable": "recargables", "impermeable": "sumergibles",
+}
+
+
+def _describir_pedido(restricciones: dict) -> str:
+    """"dildos dobles", "lubricantes con sabor", "vibradores anales".
+
+    Sin esto las copias solo nombraban el tipo, y el bot le decía "no tengo
+    exactamente dildos" a un cliente que pedía uno doble teniendo 22 dildos.
+    """
+    partes = [_TIPOS_EN_TEXTO.get(restricciones.get("tipo") or "", "productos")]
+    partes += [_ATRIBUTOS_EN_TEXTO[a] for a in (restricciones.get("atributos") or [])
+               if a in _ATRIBUTOS_EN_TEXTO]
+    zona = _ZONAS_EN_TEXTO.get(restricciones.get("zona") or "")
+    if zona:
+        partes.append(zona)
+    return " ".join(partes).strip()
+
+
+def _texto_agotado(info: dict) -> str:
+    """El turno en que ya se mostró todo lo que cumple lo que pidió el cliente."""
+    if info.get("agotado_por_facetas"):
+        que = _describir_pedido(info.get("restricciones") or {})
+    else:
+        que = (info.get("intencion") or info.get("categoria_funcional")
+               or "productos").replace("-", " ")
+    return (f"Te mostré todas las opciones de {que} disponibles 😊 "
+            f"¿Cuál te gustaría llevar para continuar con tu pedido? 😊")
+
+
 def _texto_desde_candidatos(candidatos: list[dict], info: dict,
                             mas_disenos: bool = False, offset: int = 0) -> str:
     """Redacta la lista de productos desde los candidatos reales del catálogo.
@@ -541,29 +590,13 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     relajado = info.get("relajado")
     if relajado and relajado not in ("todo", "sin_resultado"):
         pedido = info.get("restricciones") or {}
-        _ZONAS_EN_TEXTO = {
-            "anal": "anales", "clitoris": "de clítoris", "vaginal": "vaginales",
-            "pene": "para el pene", "pezones": "para pezones", "cuerpo": "corporales",
-        }
-        _TIPOS_EN_TEXTO = {
-            "vibrador": "vibradores", "succionador": "succionadores", "plug": "plugs",
-            "dildo": "dildos", "anillo": "anillos", "funda": "fundas",
-            "masturbador": "masturbadores", "bomba": "bombas", "arnes": "arneses",
-            "enema": "duchas anales", "lubricante": "lubricantes", "bolas": "bolas",
-            "lenceria": "prendas", "bondage": "artículos de bondage", "juego": "juegos",
-        }
-        # Se describe lo que el cliente PIDIÓ, no la etiqueta interna: decir
-        # "No tengo exactamente anal para anal" (lo que salía antes) no es
-        # castellano ni le dice nada al cliente.
-        que_pidio = _TIPOS_EN_TEXTO.get(pedido.get("tipo") or "", cat_nombre)
-        if relajado == "zona" and pedido.get("zona"):
-            que_pidio += " " + _ZONAS_EN_TEXTO.get(pedido["zona"], "")
-        elif relajado == "vibra":
+        # `_describir_pedido` ya trae tipo, atributos y zona; aquí solo se añade
+        # lo que no vive en las restricciones nombrables.
+        que_pidio = _describir_pedido(pedido)
+        if relajado == "vibra":
             que_pidio += " con vibración"
         elif relajado == "control":
             que_pidio += " con ese tipo de control"
-        elif relajado == "tipo" and pedido.get("zona"):
-            que_pidio = _ZONAS_EN_TEXTO.get(pedido["zona"], que_pidio)
         aviso = (f"No tengo exactamente {que_pidio.strip()} en este momento, "
                  f"pero mira estas opciones muy parecidas 👇\n")
 
@@ -1492,9 +1525,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # productos mostrados vacía, así que nunca es una categoría agotada.
         raw_reply = info["pregunta_faceta"]
     elif es_agotado:
-        cat_nombre = info.get("intencion") or info.get("categoria_funcional") or "productos"
-        cat_nombre = cat_nombre.replace("-", " ")
-        raw_reply = f"Te mostré todas las opciones de {cat_nombre} disponibles 😊 ¿Cuál te gustaría llevar para continuar con tu pedido? 😊"
+        raw_reply = _texto_agotado(info)
     elif texto_lo_arma_el_sistema:
         # La numeración continúa mientras siga la misma búsqueda; si el cliente
         # cambió de tema, el estado se reinició y arranca de nuevo en 1️⃣.

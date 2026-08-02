@@ -76,3 +76,37 @@ def test_la_auditoria_no_cuenta_atributos_que_nadie_tiene():
               "descripcion": "", "categoria": "Anillo"}]
     res = clasificacion.auditar_filas(filas)
     assert "sabor" not in res["atributos"]
+
+
+# ── Tarea 5: cómo se nombra lo que pidió el cliente ──
+
+def test_el_pedido_se_describe_con_el_atributo():
+    assert main._describir_pedido(
+        {"tipo": "dildo", "atributos": ["doble"]}) == "dildos dobles"
+    assert main._describir_pedido(
+        {"tipo": "lubricante", "atributos": ["sabor"]}) == "lubricantes con sabor"
+
+
+def test_el_pedido_se_describe_con_la_zona():
+    assert main._describir_pedido(
+        {"tipo": "vibrador", "zona": "anal"}) == "vibradores anales"
+
+
+def test_sin_restricciones_no_se_inventa_nada():
+    assert main._describir_pedido({}) == "productos"
+
+
+def test_el_aviso_de_agotado_nombra_el_atributo():
+    """Decir 'te mostré todas las opciones de dildos' teniendo 22 es falso: lo
+    que se agotó fueron los dobles."""
+    info = {"categoria_agotada": True, "agotado_por_facetas": True,
+            "intencion": "dildos", "categoria_funcional": "dildos",
+            "restricciones": {"tipo": "dildo", "atributos": ["doble"]}}
+    assert "dildos dobles" in main._texto_agotado(info)
+
+
+def test_el_aviso_de_agotado_sin_facetas_sigue_igual():
+    """El camino legacy no tiene restricciones: no debe quedarse sin texto."""
+    info = {"categoria_agotada": True, "agotado_por_facetas": False,
+            "intencion": "lubricantes-y-cuidado", "restricciones": {}}
+    assert "lubricantes y cuidado" in main._texto_agotado(info)
