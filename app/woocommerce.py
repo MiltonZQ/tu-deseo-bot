@@ -6,6 +6,7 @@ precios, stock e imágenes para el envío automático de fotos por WhatsApp.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -259,6 +260,28 @@ async def sync_catalog_from_woocommerce(full_replace: bool = True) -> dict:
         log.exception("Error en diagnóstico post-sync")
 
     return {"total": len(raw_products), "sincronizados": insertados}
+
+
+async def periodic_sync_loop(interval_hours: float, sleep_fn=asyncio.sleep) -> None:
+    """Red de seguridad: resincroniza el catálogo cada `interval_hours`.
+
+    El webhook (`process_webhook_payload`) es el camino rápido para productos
+    nuevos, pero si nunca llega (secreto mal configurado, WordPress no lo
+    dispara, caída puntual) un producto queda invisible para el bot
+    indefinidamente. Este loop no reemplaza al webhook — es la garantía de
+    que, en el peor caso, el catálogo nunca queda desactualizado por más de
+    `interval_hours`. Corre en background, nunca se espera (fire-and-forget
+    desde el arranque de la app).
+    """
+    while True:
+        await sleep_fn(interval_hours * 3600)
+        try:
+            await sync_catalog_from_woocommerce(full_replace=False)
+            if config.QDRANT_ENABLED:
+                from app import vector_store
+                await vector_store.sync_qdrant_from_db()
+        except Exception:
+            log.exception("Resincronización periódica de WooCommerce falló — se reintenta en %.1fh", interval_hours)
 
 
 async def process_webhook_payload(payload: dict, event_topic: str) -> bool:

@@ -107,6 +107,12 @@ async def lifespan(_app: FastAPI):
     elif config.WOOCOMMERCE_SYNC_ENABLED:
         log.info("WooCommerce sync habilitado pero auto-sync desactivado (Hostinger safe) - usa webhook o endpoint manual")
 
+    if config.WOOCOMMERCE_SYNC_ENABLED:
+        from app import woocommerce
+        log.info("Resincronización periódica de WooCommerce cada %.1fh (red de seguridad si falla el webhook)",
+                  config.WOOCOMMERCE_SYNC_INTERVAL_HOURS)
+        asyncio.create_task(woocommerce.periodic_sync_loop(config.WOOCOMMERCE_SYNC_INTERVAL_HOURS))
+
     deleted = await db.purge_old(config.HISTORY_TTL_DAYS)
     if deleted:
         log.info("Purgados %d mensajes viejos (>%dd)", deleted, config.HISTORY_TTL_DAYS)
