@@ -1227,6 +1227,16 @@ async def _recuperar_candidatos(
     peticion_amplia = bool(
         restricciones.get("tipo")
         and not any(restricciones.get(c) for c in _FACETAS_DISCRIMINANTES)
+        # El cliente ya nombró un subtipo concreto ("disfraz de colegiala",
+        # "dildo realista", "lubricante de sabores"): preguntarle una rama es
+        # pedirle que repita lo que acaba de decir. Hace falta mirarlo aparte
+        # porque el vocabulario de facetas y el de subtipos NO son el mismo —
+        # `interpretar_mensaje` devuelve solo {"tipo": "lenceria"} para
+        # "colegiala"— y esa diferencia es la que producía la pregunta absurda.
+        # No se filtra por el subtipo (eso exigiría reclasificar el catálogo y,
+        # sin hacerlo, `atributos @> [...]` daría 0 filas y un handoff): basta
+        # con listar, que el orden por concordancia ya pone delante lo pedido.
+        and not clasif.get("subtipo_detectado")
         and not clasif.get("es_especifico")
         and not _es_ver_mas(user_text)
         and not exclude                      # no interrumpir a mitad de un listado
