@@ -1193,6 +1193,43 @@ def _genero_desde_texto_cliente(texto: str) -> str | None:
     return None
 
 
+# Palabras que indican que el mensaje es una DIRECCIÓN de entrega, no una
+# consulta de producto. Igual que pedidos.py::_DIRECCION_RE pero pensada para
+# detectar (no extraer) — ver clasificar_intencion_cliente().
+_DIRECCION_MARCADORES_RE = _re_mod.compile(
+    r"\b(calle|cll|cl|carrera|cra|kr|kra|diagonal|diag|transversal|transv|"
+    r"avenida|av|manzana|mz|conjunto\s+residencial|torre|apto|apartamento|"
+    r"interior|int\.|barrio|casa\s+\d|piso\s+\d)\b",
+    _re_mod.IGNORECASE,
+)
+_DIRECCION_NUMERO_RE = _re_mod.compile(r"#?\s*\d{1,3}\s*[a-z]?\s*-\s*\d{1,3}|#\s*\d{1,4}")
+
+
+def _parece_direccion_envio(texto: str) -> bool:
+    """True si el texto tiene forma de dirección de entrega colombiana.
+
+    Se usa para que clasificar_intencion_cliente() NO reclasifique categoría
+    cuando el cliente está dando su dirección (bug: "Conjunto Residencial..."
+    disparaba la categoría "lencería" porque "conjunto" es también una clave
+    de producto, y eso reseteaba el estado de la conversación a mitad del
+    cierre de venta).
+    """
+    if not texto:
+        return False
+    haystack = _normalizar_texto(texto)
+    tiene_marcador = bool(_DIRECCION_MARCADORES_RE.search(haystack))
+    tiene_numero_de_direccion = bool(_DIRECCION_NUMERO_RE.search(texto))
+    if not (tiene_marcador or tiene_numero_de_direccion):
+        return False
+    # Si además nombra un producto real, no es SOLO una dirección (ej. "quiero
+    # un conjunto de lencería" tiene "conjunto" pero también intención clara
+    # de producto) — en ese caso sí debe clasificarse normalmente.
+    tiene_producto = any(
+        _re_mod.search(rf"\b{_re_mod.escape(n)}\b", haystack) for n in _NOUN_KEYWORDS
+    )
+    return not tiene_producto
+
+
 def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
     """Extrae (intencion, sustantivo) del mensaje del cliente.
 
@@ -1265,6 +1302,17 @@ async def clasificar_intencion_cliente(user_text: str,
         return {
             "intencion": None, "categoria_funcional": None, "genero": None,
             "calificado": False, "pide_fotos": False, "sustantivo": None,
+        }
+
+    if _parece_direccion_envio(user_text):
+        # El cliente está dando su dirección de entrega, no pidiendo un
+        # producto nuevo: no reclasificar categoría (evita que "conjunto",
+        # "kit" u otra clave de producto que aparezca dentro de la dirección
+        # dispare un cambio de tema falso y resetee productos_mostrados).
+        return {
+            "intencion": None, "categoria_funcional": categoria_estado,
+            "genero": None, "calificado": bool(categoria_estado),
+            "pide_fotos": False, "sustantivo": None,
         }
 
     # Corregir typos comunes del cliente (anl→anal, mjer→mujer, dldo→dildo...)
