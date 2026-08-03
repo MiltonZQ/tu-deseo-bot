@@ -1002,6 +1002,16 @@ def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     return False
 
 
+# Categorías "amplias" que requieren calificación (ver prompts/system.md,
+# sección "Calificación de 2 pasos"): son las que tienen suficiente variedad
+# interna para que el desempate por palabra clave se quede corto con
+# variantes no listadas (ver Tarea 2 del plan de 2026-08-02).
+_CATEGORIAS_AMPLIAS = {
+    "lubricantes-y-cuidado", "dildos", "lenceria", "anal",
+    "anillos-y-fundas", "vibradores",
+}
+
+
 
 async def _recuperar_candidatos(
     user_text: str, history: list[dict], estado: dict | None,
@@ -1460,6 +1470,21 @@ async def _recuperar_candidatos(
         # `exclude` se limpia y volver a calificar es lo correcto.
         "ya_vio_productos": bool(exclude),
     }
+
+    # Reordenar por relevancia real cuando hay varios candidatos de una
+    # categoría amplia: el filtro por palabras clave (categoria/subtipo) no
+    # puede cubrir todo el vocabulario posible del cliente. Nunca cambia QUÉ
+    # productos se muestran (esos ya fueron validados arriba) — solo el
+    # orden. Si falla o no responde a tiempo, se deja el orden de siempre.
+    if candidatos and len(candidatos) > 1 and cat_func in _CATEGORIAS_AMPLIAS and debe_mostrar:
+        try:
+            orden = await openai_client.reordenar_candidatos_por_relevancia(user_text, candidatos)
+            if orden:
+                por_id = {c["id"]: c for c in candidatos}
+                candidatos = [por_id[i] for i in orden if i in por_id]
+        except Exception:
+            log.warning("Reordenar candidatos por LLM falló — se mantiene el orden determinístico")
+
     return candidatos, info
 
 

@@ -418,3 +418,68 @@ async def clasificar_intencion_llm(user_message: str) -> dict | None:
     except Exception as exc:
         log.warning("Clasificador LLM falló (%s) — fallback a determinístico", type(exc).__name__)
         return None
+
+
+_REORDENAR_PROMPT = (
+    "Eres un asistente que ordena productos de un sex shop por relevancia. "
+    "Dado lo que el cliente escribió y una lista de productos candidatos "
+    "(id: nombre), devuelve SOLO un JSON con los ids ordenados del más al "
+    "menos relevante para lo que el cliente pidió literalmente. Usa "
+    "EXCLUSIVAMENTE ids de la lista dada — nunca inventes ids nuevos. Si "
+    "ninguno es claramente más relevante que otro, devuelve los ids en el "
+    "mismo orden en que se te dieron.\n\n"
+    'Formato: {"ids": [id1, id2, ...]}'
+)
+
+
+async def reordenar_candidatos_por_relevancia(
+    user_text: str, candidatos: list[dict]
+) -> list[int] | None:
+    """Reordena candidatos YA filtrados por categoría/género, según qué tan
+    bien coinciden con lo que el cliente escribió literalmente.
+
+    No reemplaza el filtro determinístico de catalog.py (categoría y género
+    ya se validaron antes de llegar aquí) — es un desempate más inteligente
+    que "por longitud de nombre" cuando varios candidatos empatan en el score
+    de palabras clave (ej. "colegiala" entre 9 disfraces, ninguno de los
+    cuales tiene por qué estar en una lista de sinónimos mantenida a mano).
+
+    Nunca puede devolver un id que no estaba en `candidatos`: cualquier id
+    fuera de ese conjunto se descarta antes de usar el resultado. Si falla,
+    tarda más de 3s, o no devuelve nada utilizable, devuelve None y el
+    llamador debe conservar el orden original.
+    """
+    if not user_text or len(candidatos) < 2:
+        return None
+    ids_validos = {c["id"] for c in candidatos}
+    lista = "\n".join(f'{c["id"]}: {c["nombre"]}' for c in candidatos[:20])
+    messages = [
+        {"role": "system", "content": _REORDENAR_PROMPT},
+        {"role": "user", "content": f"Cliente pidió: {user_text}\n\nCandidatos:\n{lista}"},
+    ]
+    try:
+        resp = await _get_client().chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=messages,
+            max_tokens=200,
+            temperature=0.0,
+            timeout=3.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        import json as _json
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            return None
+        data = _json.loads(m.group(0))
+        ids = [int(i) for i in data.get("ids", [])]
+        ids_filtrados = [i for i in ids if i in ids_validos]
+        if not ids_filtrados:
+            return None
+        # Completar con los candidatos que el LLM no mencionó, en su orden original.
+        vistos = set(ids_filtrados)
+        faltantes = [c["id"] for c in candidatos if c["id"] not in vistos]
+        return ids_filtrados + faltantes
+    except Exception:
+        log.warning("Reordenar candidatos por LLM falló — se mantiene orden determinístico")
+        return None
