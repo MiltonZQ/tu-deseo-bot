@@ -1213,8 +1213,13 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
     intencion = None
     for clave, cat_func in sorted(_INTENCION_A_CATEGORIA_FUNCIONAL.items(),
                                   key=lambda kv: -len(kv[0])):
-        # 1) Coincidencia directa de substring (caso general)
-        if clave in haystack:
+        # 1) Coincidencia de FRASE COMPLETA (límites de palabra a ambos lados).
+        # Antes era substring suelto (`clave in haystack`): una clave corta podía
+        # aparecer como fragmento de una palabra más larga sin relación (ej.
+        # "kit" dentro de una palabra que lo contenga) y disparar una categoría
+        # que el cliente no pidió. Mismo criterio ya usado en
+        # _genero_desde_texto_cliente (línea 1171) para el mismo problema.
+        if _re_mod.search(rf"\b{_re_mod.escape(clave)}\b", haystack):
             intencion = clave
             break
         # 2) Matching por raíz: la clave (≥5 chars) es prefijo de una palabra del
