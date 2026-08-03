@@ -993,7 +993,12 @@ def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
     # Revisar mensajes recientes del asistente para asegurar que no se reenvíen fotos durante el checkout
     ultimo_bot = next((m for m in reversed(history or []) if m.get("role") == "assistant"), None)
     asistentes = [m.get("content", "").lower() for m in reversed(history or []) if m.get("role") == "assistant"]
-    for c in asistentes[:3]:
+    # Ventana ampliada de 3 a 6: con 3, un par de preguntas de seguimiento
+    # del cliente durante el checkout (horario de entrega, quién puede
+    # recibir...) empujaban fuera de rango el mensaje donde el bot pidió los
+    # datos de envío, y la fase de venta revertía a exploración a mitad del
+    # cierre.
+    for c in asistentes[:6]:
         if any(f in c for f in _BOT_ABRIO_CHECKOUT):
             return True
         if any(w in c for w in _BOT_OFRECIO_CROSS_SELLING):

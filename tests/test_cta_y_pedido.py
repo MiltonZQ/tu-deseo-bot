@@ -183,3 +183,21 @@ def test_un_producto_que_ya_no_existe_no_corre_los_numeros():
     assert len(lineas) == 2, lineas
     assert lineas[1].strip().startswith("3️⃣"), lineas
     assert "Tres" in lineas[1]
+
+
+def test_fase_venta_no_se_pierde_tras_varias_preguntas_intermedias():
+    """El cliente pidio datos de envio, luego hizo varias preguntas de
+    seguimiento (horario, envio, quien recibe, empaque) antes de confirmar —
+    la fase de venta no debe revertir a exploracion solo porque el mensaje de
+    checkout salio de una ventana de 3 turnos de asistente."""
+    history = [
+        {"role": "assistant", "content": "¡Perfecto! Por favor indícame tu nombre completo, ciudad y dirección de entrega."},
+        {"role": "user", "content": "¿A qué hora llega?"},
+        {"role": "assistant", "content": "El envío llega en el transcurso del día, en horas de la tarde."},
+        {"role": "user", "content": "¿Y si no estoy puedo dejar a alguien más?"},
+        {"role": "assistant", "content": "Claro, cualquier persona mayor de edad puede recibirlo."},
+        {"role": "user", "content": "¿Viene en empaque discreto?"},
+        {"role": "assistant", "content": "Sí, siempre en bolsa negra sellada, sin ningún logo."},
+        {"role": "user", "content": "listo, ya está: Ana, Calle 1#32a-47"},
+    ]
+    assert main._es_fase_venta("listo, ya está: Ana, Calle 1#32a-47", history)
