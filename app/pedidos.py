@@ -79,6 +79,15 @@ _DIRECCION_RE = re.compile(
 )
 _TELEFONO_RE = re.compile(r"(?:tel[eé]fono:?\s*|cel(?:ular)?:?\s*|whatsapp:?\s*|n[uú]mero:?\s*)?(\+?\d[\d\s\-]{7,15}\d)")
 
+# Selección de uno o varios índices de la lista mostrada ("1", "el 1", "1 y 3",
+# "1, 2 y 3"). El mensaje completo debe ser SOLO números y conectores — así no
+# confunde una dirección o un teléfono con una selección de productos.
+_SELECCION_MULTIPLE_RE = re.compile(
+    r"^\s*(?:el|los|las|la|dame|quiero)?\s*\d{1,2}\s*"
+    r"(?:(?:y|,|&|\+)\s*(?:el\s*)?\d{1,2}\s*)*[\.,!]?\s*$",
+    re.IGNORECASE,
+)
+
 
 def _joined_history(history: list[dict]) -> str:
     """Concatena el contenido del historial reciente (user + assistant)."""
@@ -184,21 +193,25 @@ async def _resolver_productos_y_total(
         })
         total += precio
 
-    # 0) PRIORIDAD MÁXIMA: Si el cliente eligió por número (ej. "1", "el 1") de la lista mostrada
-    num_elegido = None
+    # 0) PRIORIDAD MÁXIMA: si el cliente eligió por número de la lista mostrada
+    # ("1", "el 1", "1 y 3", "1, 2 y 3"). Antes solo se reconocía un único
+    # número: una selección múltiple caía al fallback (solo el primero
+    # mostrado), y el total del pedido no sumaba lo que el cliente pidió.
+    indices_elegidos: list[int] = []
     if productos_mostrados_ids:
         for msg in reversed(history):
             if msg.get("role") == "user":
                 txt = msg.get("content", "").strip()
-                m = re.search(r"^\s*(?:el\s+)?(\d{1,2})\s*$", txt, re.IGNORECASE)
-                if m:
-                    idx = int(m.group(1)) - 1
-                    if 0 <= idx < len(productos_mostrados_ids):
-                        num_elegido = idx
+                if _SELECCION_MULTIPLE_RE.match(txt):
+                    numeros = [int(n) for n in re.findall(r"\d{1,2}", txt)]
+                    indices_elegidos = [
+                        n - 1 for n in numeros if 0 <= n - 1 < len(productos_mostrados_ids)
+                    ]
+                    if indices_elegidos:
                         break
 
-    if num_elegido is not None and productos_mostrados_ids:
-        pid = productos_mostrados_ids[num_elegido]
+    for idx in indices_elegidos:
+        pid = productos_mostrados_ids[idx]
         p = await catalog.get_producto_by_id(pid)
         if p:
             _agregar(p)
