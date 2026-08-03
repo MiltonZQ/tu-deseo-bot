@@ -472,6 +472,8 @@ _ALIASES_TYPO = {
     "womanicer": "womanizer", "wumanizer": "womanizer", "womanizer": "womanizer",
     "lelo": "lelo", "lello": "lelo",
     "camtoys": "camtoyz", "cam toy": "camtoyz", "camtoy": "camtoyz", "camtoyz": "camtoyz",
+    # disfraz
+    "dizfraz": "disfraz", "disfras": "disfraz", "difraz": "disfraz",
 }
 
 _ALIASES_TYPO_RE = re.compile(
@@ -870,7 +872,12 @@ _SUBTIPO_KEYWORDS = (
     "desensibiliz", "caliente",
     # Lencería
     "funda", "fundas", "funda para el pene",
-    "arnes", "arnés", "liguero", "pechera", "encaje", "body", "bodies", "bodys", "disfraz",
+    "arnes", "arnés", "liguero", "pechera", "encaje", "body", "bodies", "bodys",
+    # Disfraces por tipo (van ANTES de "disfraz": la clave más específica debe
+    # ganar cuando el mensaje trae ambas, ej. "disfraz colegiala").
+    "colegiala", "coneja", "conejita", "diabla", "enfermera", "mucama",
+    "playboy", "policia", "sailor moon",
+    "disfraz",
     "suspensorio", "conjunto",
     # Bondage / BDSM (pareja-y-bondage)
     "esposas", "esposa", "antifaz", "antifaces", "fustas", "fusta",
@@ -902,6 +909,9 @@ _SUBTIPO_A_CATEGORIA = {
     "body": "lenceria", "bodies": "lenceria", "bodys": "lenceria",
     "disfraz": "lenceria", "suspensorio": "lenceria",
     "conjunto": "lenceria",
+    "colegiala": "lenceria", "coneja": "lenceria", "conejita": "lenceria",
+    "diabla": "lenceria", "enfermera": "lenceria", "mucama": "lenceria",
+    "playboy": "lenceria", "policia": "lenceria", "sailor moon": "lenceria",
     "funda": "fundas-pene", "fundas": "fundas-pene", "funda para el pene": "fundas-pene",
     "arnes": "pareja-y-bondage", "arnés": "pareja-y-bondage",
     "esposas": "pareja-y-bondage", "esposa": "pareja-y-bondage",
@@ -964,6 +974,15 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "control app": ["con app", "control por app", "control app", "app control", "app"],
     "control remoto": ["control remoto", "control por app", "con app", "app control"],
     "desensibiliz": ["anal", "desensibilizante", "desensibiliz", "anestesico", "anestésico", "relajante anal", "lubricante anal"],
+    "colegiala": ["colegiala"],
+    "coneja": ["coneja", "conejita"],
+    "conejita": ["coneja", "conejita"],
+    "diabla": ["diabla"],
+    "enfermera": ["enfermera"],
+    "mucama": ["mucama"],
+    "playboy": ["playboy"],
+    "policia": ["policia"],
+    "sailor moon": ["sailor moon"],
 }
 
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
