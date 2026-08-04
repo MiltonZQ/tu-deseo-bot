@@ -6,6 +6,7 @@ la petición del número en vez de otra página de catálogo.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -201,3 +202,42 @@ def test_fase_venta_no_se_pierde_tras_varias_preguntas_intermedias():
         {"role": "user", "content": "listo, ya está: Ana, Calle 1#32a-47"},
     ]
     assert main._es_fase_venta("listo, ya está: Ana, Calle 1#32a-47", history)
+
+
+# ── El caption de cada foto no repite el precio ──
+# El precio ya va en la lista numerada del texto. Repetirlo en cada foto hacía
+# que el cliente viera cada precio dos veces. El número SÍ se conserva: es lo
+# que sostiene la selección por índice.
+
+def test_el_caption_de_la_foto_no_repite_el_precio():
+    enviados = []
+
+    class _WA:
+        @staticmethod
+        async def send_image(wa_id, url, caption):
+            enviados.append(caption)
+
+    prods = [{"id": 1, "nombre": "Disfraz Colegiala Inocente Lerot",
+              "precio": 119800, "imagen_url": "http://x/1.jpg"}]
+    orig = main.whatsapp_client
+    main.whatsapp_client = _WA
+    try:
+        asyncio.run(main._enviar_fotos_productos("57300", prods))
+    finally:
+        main.whatsapp_client = orig
+
+    assert len(enviados) == 1, enviados
+    assert "Disfraz Colegiala Inocente Lerot" in enviados[0], enviados[0]
+    assert "1️⃣" in enviados[0], enviados[0]
+    assert "119.800" not in enviados[0], enviados[0]
+    assert "💰" not in enviados[0], enviados[0]
+
+
+def test_la_lista_del_texto_sigue_mostrando_el_precio():
+    """Al quitar el precio del caption, el texto es el ÚNICO sitio donde el
+    cliente ve el precio: si también se cayera de ahí, el fix sería una
+    regresión."""
+    txt = main._texto_desde_candidatos(
+        [{"id": 1, "nombre": "Disfraz Colegiala Inocente Lerot", "precio": 119800}],
+        {"intencion": "lenceria", "hay_mas": False})
+    assert "119.800" in txt, txt

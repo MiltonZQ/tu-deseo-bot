@@ -720,10 +720,12 @@ async def _enviar_fotos_productos(
             log.warning("Candidato sin imagen_url omitido id=%s", pid)
             continue
         seen_ids.add(pid)
-        precio = p.get("precio", 0)
-        precio_fmt = f"{int(precio):,}".replace(",", ".") if precio else "0"
         nombre = (p.get("nombre") or "")[:60]
-        caption = f"{_numero_lista(idx)} *{nombre}*\n💰 ${precio_fmt}"
+        # Sin el precio: ya va en la lista numerada del texto, que se envía
+        # siempre (aunque alguna foto falle). Repetirlo aquí hacía que el
+        # cliente viera cada precio dos veces. El número SÍ se conserva: es
+        # lo que le permite responder "quiero el 3".
+        caption = f"{_numero_lista(idx)} *{nombre}*"
         # El try/except va DENTRO del bucle: antes envolvía el bucle entero, así que
         # la primera imagen que fallara (URL rota, formato que WhatsApp rechaza,
         # rate limit) cancelaba en silencio TODAS las fotos restantes. El cliente
