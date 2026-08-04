@@ -126,7 +126,7 @@ def test_no_se_rellena_soltando_el_atributo_que_pidio_el_cliente():
     realistas."""
     consultas = []
 
-    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text="", subtipo=None):
         consultas.append(dict(restricciones))
         return [] if restricciones.get("atributos") else [dict(DILDOS[1])]
 
@@ -142,7 +142,7 @@ def test_no_se_rellena_soltando_el_atributo_que_pidio_el_cliente():
 
 def test_un_solo_producto_se_muestra_solo_el():
     """El principio, literal: si solo hay uno de lo que pidió, se muestra ese."""
-    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text="", subtipo=None):
         return [dict(DILDOS[0])]
 
     with parchar(catalog, _consultar_restricciones=fake_consultar):
@@ -156,7 +156,7 @@ def test_un_solo_producto_se_muestra_solo_el():
 def test_sin_atributos_la_escalera_sigue_cediendo():
     """La relajación existe por una razón: un vibrador 'con control remoto' que
     no existe debe poder devolver vibradores, avisando."""
-    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text="", subtipo=None):
         if restricciones.get("control"):
             return []
         return [dict(DILDOS[1])]

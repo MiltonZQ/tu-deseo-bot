@@ -153,7 +153,7 @@ def test_sin_texto_del_cliente_el_orden_no_cambia():
 def test_buscar_por_restricciones_propaga_el_texto():
     visto = {}
 
-    async def fake_consultar(restricciones, exclude_ids, limit, user_text=""):
+    async def fake_consultar(restricciones, exclude_ids, limit, user_text="", subtipo=None):
         visto["user_text"] = user_text
         return [dict(p) for p in SUCCIONADORES[:5]]
 

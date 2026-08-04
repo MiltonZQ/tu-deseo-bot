@@ -985,6 +985,35 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "sailor moon": ["sailor moon"],
 }
 
+
+def _filtrar_por_subtipo(filas: list[dict], subtipo: str | None) -> list[dict]:
+    """Deja solo los productos cuyo nombre/descripción nombran el subtipo pedido.
+
+    Misma semántica que el filtro del camino legacy (`_filtrar`), pero aplicable
+    al camino por restricciones, que no lo tenía: pedir "disfraz de colegiala"
+    devolvía las 20 lencerías y el orden por concordancia no bastaba para
+    separarlas ("Mucama Lerot" empata con "Colegiala Lerot" en los tokens
+    "disfraz" y "lerot").
+
+    Se compara sobre texto NORMALIZADO en ambos lados —no con ILIKE en SQL—
+    porque el catálogo tiene "Disfraz Policía Lerot" y el cliente escribe
+    "policia": sin quitar tildes en los dos lados no hay coincidencia.
+    """
+    if not subtipo:
+        return filas
+    sinonimos = [_normalizar_texto(s)
+                 for s in _SUBTIPO_SINONIMOS.get(subtipo, [subtipo])]
+    sinonimos = [s for s in sinonimos if s]
+    if not sinonimos:
+        return filas
+    out = []
+    for p in filas:
+        nd = _normalizar_texto(f"{p.get('nombre', '')} {p.get('descripcion', '')}")
+        if any(s in nd for s in sinonimos):
+            out.append(p)
+    return out
+
+
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
 # juguetes con calentamiento. "cola" puede ser plug anal o lencería. "clitor"/
 # "clitori" suelen ser vibradores pero también succionadores. Estos NO se mapean
@@ -1988,16 +2017,14 @@ async def _fetch_restricciones(sql: str, *params) -> list[dict]:
 
 
 async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] | None,
-                                   limit: int, user_text: str = "") -> list[dict]:
+                                   limit: int, user_text: str = "",
+                                   subtipo: str | None = None) -> list[dict]:
     """Una consulta SQL con las restricciones dadas. Filtra en la DB, no en Python.
 
-    Con `user_text`, decide por CONCORDANCIA qué productos entran en la página.
-    Esto no es cosmético: el ORDER BY era LENGTH(nombre) ASC y el LIMIT cortaba
-    ahí, así que al pedir "succionadores" los 5 productos llamados
-    "Succionador ..." caían en las posiciones 5,7,9,10,11 del catálogo de 12 y
-    el cliente recibía cuatro Satisfyer. El SQL no puede ordenar por relevancia
-    —no sabe qué escribió el cliente—, así que se trae el conjunto que cumple
-    las facetas y se ordena aquí.
+    Con `user_text` ordena por CONCORDANCIA en Python: el SQL no sabe qué
+    escribió el cliente, y el viejo ORDER BY LENGTH(nombre) dejaba los
+    "Succionador ..." fuera del LIMIT. `subtipo` filtra además por
+    nombre/descripción (ver `_filtrar_por_subtipo`).
     """
     where = ["(stock_status IS NULL OR stock_status <> 'outofstock')",
              "imagen_url IS NOT NULL AND imagen_url != ''"]
@@ -2032,6 +2059,18 @@ async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] |
         f" ORDER BY (activo IS TRUE) DESC, LENGTH(nombre) ASC LIMIT {int(n_filas)}"
     )
     filas = await _fetch_restricciones(sql, *params)
+    if subtipo:
+        filtradas = _filtrar_por_subtipo(filas, subtipo)
+        # Degradación deliberada: hay subtipos cuyo vocabulario no está en los
+        # nombres del catálogo ("con app", "primera vez"). Filtrar a ciegas ahí
+        # convertiría un listado válido en un escalado a humano. Solo se cede
+        # cuando NO hay exclusiones: en un "ver más" el vacío ES la respuesta
+        # ("ya viste todas las colegialas"), no una excusa para traer Mucamas.
+        if filtradas or exclude_ids:
+            filas = filtradas
+        else:
+            log.info("Subtipo %r sin coincidencias en %s — se muestra la categoría",
+                     subtipo, restricciones)
     if not user_text:
         return filas[:limit]
     for p in filas:
@@ -2042,7 +2081,8 @@ async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] |
     return filas[:limit]
 
 
-async def contar_por_restricciones(restricciones: dict) -> int:
+async def contar_por_restricciones(restricciones: dict,
+                                   subtipo: str | None = None) -> int:
     """Cuántos productos ofrecibles cumplen EXACTAMENTE estas restricciones.
 
     Es lo que decide si tiene sentido ofrecer "ver más": con 3 opciones en total
@@ -2053,7 +2093,7 @@ async def contar_por_restricciones(restricciones: dict) -> int:
     if not restricciones:
         return 0
     try:
-        filas = await _consultar_restricciones(restricciones, None, 500)
+        filas = await _consultar_restricciones(restricciones, None, 500, subtipo=subtipo)
         return len(filas)
     except Exception:
         return 0
@@ -2101,7 +2141,8 @@ async def buscar_por_restricciones(restricciones: dict,
                                    exclude_ids: list[int] | None = None,
                                    limit: int = 5,
                                    permitir_relajar: bool = True,
-                                   user_text: str = "") -> Resultado:
+                                   user_text: str = "",
+                                   subtipo: str | None = None) -> Resultado:
     """Busca productos que cumplan las restricciones, cediendo de forma explícita.
 
     1. Intenta la combinación exacta.
@@ -2116,7 +2157,8 @@ async def buscar_por_restricciones(restricciones: dict,
     if not restricciones:
         return Resultado(restricciones=restricciones)
 
-    exactos = await _consultar_restricciones(restricciones, exclude_ids, limit, user_text)
+    exactos = await _consultar_restricciones(restricciones, exclude_ids, limit, user_text,
+                                             subtipo=subtipo)
     if exactos:
         return Resultado(productos=exactos, restricciones=restricciones)
 
@@ -2133,7 +2175,8 @@ async def buscar_por_restricciones(restricciones: dict,
         aflojadas = {k: v for k, v in restricciones.items() if k != campo}
         if not aflojadas.get("tipo") and not aflojadas.get("zona"):
             continue  # soltar eso dejaría la búsqueda sin ancla
-        encontrados = await _consultar_restricciones(aflojadas, exclude_ids, limit, user_text)
+        encontrados = await _consultar_restricciones(aflojadas, exclude_ids, limit, user_text,
+                                                     subtipo=subtipo)
         if encontrados:
             log.info("Restricción relajada: %s (quedan %s) → %d productos",
                      campo, aflojadas, len(encontrados))
@@ -2151,7 +2194,8 @@ async def buscar_por_restricciones(restricciones: dict,
     ancla = "zona" if restricciones.get("zona") else "tipo"
     if restricciones.get(ancla) and not restricciones.get("atributos"):
         solo = {ancla: restricciones[ancla]}
-        encontrados = await _consultar_restricciones(solo, exclude_ids, limit, user_text)
+        encontrados = await _consultar_restricciones(solo, exclude_ids, limit, user_text,
+                                                     subtipo=subtipo)
         if encontrados:
             log.info("Solo se pudo respetar %s=%s → %d productos",
                      ancla, restricciones[ancla], len(encontrados))
