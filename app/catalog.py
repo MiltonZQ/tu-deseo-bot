@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterable
 
-from app import config, db
+from app import config, db, facetas
 
 log = logging.getLogger("catalog")
 
@@ -1012,6 +1012,25 @@ def _filtrar_por_subtipo(filas: list[dict], subtipo: str | None) -> list[dict]:
         if any(s in nd for s in sinonimos):
             out.append(p)
     return out
+
+
+def _subtipo_ya_en_restricciones(subtipo: str | None, restricciones: dict) -> bool:
+    """¿Las facetas ya filtraron por exactamente lo mismo que dice el subtipo?
+
+    "dildo con ventosa" llega como {"tipo": "dildo", "atributos": ["ventosa"]}:
+    el SQL ya devolvió los etiquetados con ventosa. Volver a exigir la palabra
+    en el NOMBRE deja fuera productos bien etiquetados —"Dildo Realista Baru 21
+    cm" lo está y no la lleva— y con el filtro estricto eso no muestra menos:
+    pausa el bot y abre un ticket por una venta que sí teníamos.
+
+    Solo se mira `atributos`, que es una equivalencia EXACTA. La zona no vale:
+    "próstata" está dentro de zona=anal, no es lo mismo, y saltarse el filtro
+    ahí le daría todos los plugs anales a quien pidió uno de próstata.
+    """
+    if not subtipo or not restricciones:
+        return False
+    pedidos = set((facetas.interpretar_mensaje(subtipo) or {}).get("atributos") or [])
+    return bool(pedidos) and pedidos <= set(restricciones.get("atributos") or [])
 
 
 # Subtipos AMBIGUOS: "calor"/"frío" pueden ser lubricantes (sensaciones) O
@@ -2070,7 +2089,7 @@ async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] |
         f" ORDER BY (activo IS TRUE) DESC, LENGTH(nombre) ASC LIMIT {int(n_filas)}"
     )
     filas = await _fetch_restricciones(sql, *params)
-    if subtipo:
+    if subtipo and not _subtipo_ya_en_restricciones(subtipo, restricciones):
         filtradas = _filtrar_por_subtipo(filas, subtipo)
         # Degradación deliberada: hay subtipos cuyo vocabulario no está en los
         # nombres del catálogo ("con app", "primera vez"). Filtrar a ciegas ahí
