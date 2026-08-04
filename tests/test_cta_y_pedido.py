@@ -241,3 +241,33 @@ def test_la_lista_del_texto_sigue_mostrando_el_precio():
         [{"id": 1, "nombre": "Disfraz Colegiala Inocente Lerot", "precio": 119800}],
         {"intencion": "lenceria", "hay_mas": False})
     assert "119.800" in txt, txt
+
+
+# ── El rótulo sale de lo que se buscó, no del historial ──
+# Pasó en producción: el cliente había pedido consoladores y al pedir disfraces
+# el bot dijo "Te muestro estas opciones de consoladores" sobre fotos de
+# disfraces. "disfraz" no es clave del mapa de intenciones, así que la intención
+# se heredaba del historial.
+
+def test_el_rotulo_no_usa_una_intencion_heredada_de_otra_categoria():
+    txt = main._texto_desde_candidatos(PRODS, {
+        "intencion": "consoladores", "intencion_heredada": True,
+        "categoria_funcional": "dildos", "subtipo_detectado": "colegiala",
+        "restricciones": {"tipo": "lenceria"}, "hay_mas": False})
+    assert "consolador" not in txt.lower(), txt
+    assert "colegiala" in txt.lower(), txt
+
+
+def test_el_rotulo_de_una_intencion_fresca_conserva_la_palabra_del_cliente():
+    """Si el cliente acaba de escribir 'consoladores', se le responde con SU
+    palabra, no con la etiqueta interna."""
+    txt = main._texto_desde_candidatos(PRODS, {
+        "intencion": "consoladores", "intencion_heredada": False,
+        "restricciones": {"tipo": "dildo"}, "hay_mas": True})
+    assert "consoladores" in txt.lower(), txt
+
+
+def test_el_rotulo_cae_al_tipo_buscado_cuando_no_hay_intencion():
+    txt = main._texto_desde_candidatos(PRODS, {
+        "intencion": None, "restricciones": {"tipo": "vibrador"}, "hay_mas": False})
+    assert "vibradores" in txt.lower(), txt

@@ -587,13 +587,48 @@ def _describir_pedido(restricciones: dict) -> str:
     return " ".join(partes).strip()
 
 
+# Cómo se nombran los disfraces. `_TIPOS_EN_TEXTO["lenceria"]` dice "prendas",
+# que no es lo que pidió quien escribió "disfraz de colegiala".
+_SUBTIPOS_EN_TEXTO = {
+    "disfraz": "disfraces",
+    "colegiala": "disfraces de colegiala",
+    "coneja": "disfraces de coneja", "conejita": "disfraces de coneja",
+    "diabla": "disfraces de diabla", "enfermera": "disfraces de enfermera",
+    "mucama": "disfraces de mucama", "playboy": "disfraces Playboy",
+    "policia": "disfraces de policía", "sailor moon": "disfraces Sailor Moon",
+}
+
+
+def _nombre_categoria(info: dict) -> str:
+    """Cómo se le nombra al cliente lo que se le está mostrando.
+
+    Antes salía siempre de `intencion`, el sustantivo CRUDO que el cliente
+    tecleó alguna vez. Pero "disfraz" no es clave del mapa de intenciones, así
+    que al pedir disfraces la intención se heredaba del historial y el bot
+    rotulaba cinco fotos de disfraces como "opciones de consoladores".
+
+    Regla: si el cliente nombró un subtipo con nombre propio, ese manda; si la
+    intención es heredada (puede venir de otra categoría), se usa el tipo por el
+    que REALMENTE se buscó; solo si es fresca se conserva su palabra.
+    """
+    sub = info.get("subtipo_detectado")
+    if sub and sub in _SUBTIPOS_EN_TEXTO:
+        return _SUBTIPOS_EN_TEXTO[sub]
+    intencion = info.get("intencion")
+    if intencion and not info.get("intencion_heredada"):
+        return intencion.replace("-", " ")
+    tipo = (info.get("restricciones") or {}).get("tipo")
+    if tipo and tipo in _TIPOS_EN_TEXTO:
+        return _TIPOS_EN_TEXTO[tipo]
+    return (intencion or info.get("categoria_funcional") or "productos").replace("-", " ")
+
+
 def _texto_agotado(info: dict) -> str:
     """El turno en que ya se mostró todo lo que cumple lo que pidió el cliente."""
     if info.get("agotado_por_facetas"):
         que = _describir_pedido(info.get("restricciones") or {})
     else:
-        que = (info.get("intencion") or info.get("categoria_funcional")
-               or "productos").replace("-", " ")
+        que = _nombre_categoria(info)
     return (f"Te mostré todas las opciones de {que} disponibles 😊 "
             f"¿Cuál te gustaría llevar para continuar con tu pedido? 😊")
 
@@ -658,8 +693,7 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     cliente pide "ver más" y como reemplazo si el LLM redacta productos que no
     corresponden a los que se van a enviar.
     """
-    cat_nombre = (info.get("intencion") or info.get("categoria_funcional")
-                  or "productos").replace("-", " ")
+    cat_nombre = _nombre_categoria(info)
     lineas, marcadores = [], []
     # offset: cuántos productos ya vio el cliente en esta misma búsqueda. La
     # numeración CONTINÚA (6️⃣, 7️⃣…) en vez de reiniciar en 1️⃣, porque al final se
@@ -1051,12 +1085,17 @@ async def _recuperar_candidatos(
     cat_func = clasif["categoria_funcional"]
     genero = clasif["genero"]
     intencion = clasif["intencion"]
+    intencion_heredada = bool(clasif.get("intencion_heredada"))
     estado_tiene_cat = bool(estado and estado.get("categoria_funcional"))
 
     if estado:
         if not cat_func and estado.get("categoria_funcional"):
             cat_func = estado["categoria_funcional"]
-            intencion = intencion or estado.get("categoria_busqueda")
+            if not intencion and estado.get("categoria_busqueda"):
+                intencion = estado["categoria_busqueda"]
+                intencion_heredada = True
+            else:
+                intencion = intencion or estado.get("categoria_busqueda")
         if not genero and estado.get("genero"):
             genero = estado["genero"]
 
@@ -1455,6 +1494,7 @@ async def _recuperar_candidatos(
 
     info = {
         "intencion": intencion,
+        "intencion_heredada": intencion_heredada,
         "categoria_funcional": cat_func,
         "genero": genero,
         "calificado": clasif["calificado"] or (debe_mostrar and bool(candidatos)),
@@ -1477,6 +1517,7 @@ async def _recuperar_candidatos(
         "sin_inventario": sin_inventario,
         "agotado_por_facetas": agotado_por_facetas,
         "debe_mostrar": debe_mostrar and bool(candidatos),
+        "subtipo_detectado": clasif.get("subtipo_detectado"),
         "restricciones": restricciones,
         "relajado": relajado,
         # Texto que originó la búsqueda activa. Se persiste para que el "ver

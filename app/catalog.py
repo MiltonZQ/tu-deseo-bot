@@ -1353,6 +1353,12 @@ async def clasificar_intencion_cliente(user_text: str,
     # historial). Es lo que distingue "el cliente nombró otra categoría" de "el
     # cliente respondió algo corto y seguimos en la misma".
     intencion_propia = intencion
+    # ¿La intención salió del MENSAJE ACTUAL o se heredó del historial? Es lo
+    # que distingue un rotulo fresco ("estas opciones de consoladores") de uno
+    # heredado de OTRA categoría: "disfraz" no es clave del mapa de intenciones,
+    # así que al pedir disfraces se heredaba "consoladores" y el bot titulaba
+    # cinco fotos de disfraces como "opciones de consoladores".
+    intencion_heredada = False
     genero = _genero_desde_texto_cliente(user_text)
     pide_fotos = bool(_FOTO_REQUEST_RE.search(user_text))
 
@@ -1373,6 +1379,10 @@ async def clasificar_intencion_cliente(user_text: str,
             h_int, h_sus = _intencion_desde_texto(c)
             if h_int and not intencion:
                 intencion = h_int
+                # Heredada de un mensaje anterior: puede ser de OTRA categoría.
+                # Sirve para buscar, pero rotular con ella produjo
+                # "opciones de consoladores" sobre fotos de disfraces.
+                intencion_heredada = True
                 if not sustantivo:
                     sustantivo = h_sus
             # Solo heredar género si el mensaje actual NO trae subtipo propio.
@@ -1588,6 +1598,7 @@ async def clasificar_intencion_cliente(user_text: str,
 
     return {
         "intencion": intencion,
+        "intencion_heredada": intencion_heredada,
         "categoria_funcional": categoria_funcional,
         "genero": genero,
         "calificado": calificado,
