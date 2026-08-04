@@ -86,14 +86,23 @@ def test_el_subtipo_con_tilde_en_el_catalogo_tambien_matchea():
     assert [p["nombre"] for p in res.productos] == ["Disfraz Policía Lerot"], res.productos
 
 
-def test_un_subtipo_sin_vocabulario_en_el_catalogo_no_deja_al_cliente_sin_nada():
-    """Degradación: 'con app' no aparece en ningún nombre de disfraz. Filtrar a
-    ciegas ahí convertiría un listado válido en un escalado a humano."""
+def test_un_subtipo_sin_coincidencias_devuelve_vacio_en_vez_de_la_categoria():
+    """La degradación se quitó a propósito.
+
+    Antes, un subtipo sin coincidencias mostraba la categoría entera "para no
+    dejar al cliente sin fotos": quien pedía una fusta recibía cinco esposas.
+    Ahora devuelve vacío y el orquestador escala a un asesor, que sí puede
+    confirmar si entró mercancía que el catálogo aún no refleja.
+
+    El riesgo de esto —que un hueco de vocabulario escale una venta real— se
+    cierra aparte: `scripts/auditar_subtipos.py` falla si algún subtipo se
+    queda sin cobertura sin estar declarado en `_SUBTIPOS_SIN_COBERTURA`.
+    """
     with _catalogo_fake(DISFRACES):
         res = asyncio.run(catalog.buscar_por_restricciones(
             {"tipo": "lenceria"}, exclude_ids=[], limit=5,
-            user_text="disfraces", subtipo="con app"))
-    assert len(res.productos) == 5, res.productos
+            user_text="disfraz de fusta", subtipo="fusta"))
+    assert res.productos == [], [p["nombre"] for p in res.productos]
 
 
 def test_en_ver_mas_el_filtro_es_duro_y_no_rellena_con_otros_disfraces():

@@ -154,3 +154,49 @@ def test_los_sinonimos_con_tilde_casan_porque_se_normalizan_los_dos_lados():
     comparar en crudo, esto lo caza."""
     prods = [{"nombre": "Estimulador de Próstata Ferro", "descripcion": ""}]
     assert catalog._filtrar_por_subtipo(prods, "prostat"), "sin match con tilde"
+
+
+def test_un_subtipo_que_no_vendemos_devuelve_vacio_para_que_escale():
+    """Antes se degradaba a la categoría completa "para no dejarlo sin fotos".
+
+    El cliente pedía una fusta y recibía esposas y antifaces: saturarlo con lo
+    que no pidió. Ahora devuelve vacío, y el orquestador lo convierte en
+    `sin_stock_subtipo` → pasa la conversación a un asesor, que además puede
+    confirmar si entró mercancía que el catálogo aún no refleja.
+    """
+    bondage = [
+        _prod(30, "Esposas Peluche Rojas", tipo="bondage"),
+        _prod(31, "Antifaz Satinado Negro", tipo="bondage"),
+    ]
+    with _catalogo_fake(bondage):
+        res = asyncio.run(catalog.buscar_por_restricciones(
+            {"tipo": "bondage"}, exclude_ids=[], limit=5,
+            user_text="tienen fustas", subtipo="fusta"))
+    assert res.productos == [], [p["nombre"] for p in res.productos]
+
+
+def test_el_conteo_tambien_da_cero_y_no_promete_ver_mas():
+    """Si el conteo siguiera contando la categoría, el bot ofrecería "ver más"
+    de algo que no va a poder mostrar."""
+    bondage = [_prod(30, "Esposas Peluche Rojas", tipo="bondage")]
+    with _catalogo_fake(bondage):
+        n = asyncio.run(catalog.contar_por_restricciones(
+            {"tipo": "bondage"}, subtipo="fusta"))
+    assert n == 0, n
+
+
+def test_la_degradacion_no_revive_por_la_puerta_de_la_relajacion():
+    """`buscar_por_restricciones` cede facetas cuando no encuentra nada.
+
+    Esa escalera NO debe servir de degradación encubierta: si se soltara el
+    tipo, "fusta" acabaría devolviendo dildos. El subtipo no se relaja nunca.
+    """
+    mezcla = [
+        _prod(40, "Esposas Peluche Rojas", tipo="bondage"),
+        _prod(41, "Dildo Realista Baru 21 cm", tipo="dildo"),
+    ]
+    with _catalogo_fake(mezcla):
+        res = asyncio.run(catalog.buscar_por_restricciones(
+            {"tipo": "bondage", "genero_uso": "pareja"}, exclude_ids=[], limit=5,
+            permitir_relajar=True, user_text="tienen fustas", subtipo="fusta"))
+    assert res.productos == [], [p["nombre"] for p in res.productos]

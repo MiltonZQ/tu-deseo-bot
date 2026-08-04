@@ -2117,16 +2117,24 @@ async def _consultar_restricciones(restricciones: dict, exclude_ids: list[int] |
     )
     filas = await _fetch_restricciones(sql, *params)
     if subtipo and not _subtipo_ya_en_restricciones(subtipo, restricciones):
-        filtradas = _filtrar_por_subtipo(filas, subtipo)
-        # Degradación deliberada: hay subtipos cuyo vocabulario no está en los
-        # nombres del catálogo ("con app", "primera vez"). Filtrar a ciegas ahí
-        # convertiría un listado válido en un escalado a humano. Solo se cede
-        # cuando NO hay exclusiones: en un "ver más" el vacío ES la respuesta
-        # ("ya viste todas las colegialas"), no una excusa para traer Mucamas.
-        if filtradas or exclude_ids:
-            filas = filtradas
-        else:
-            log.info("Subtipo %r sin coincidencias en %s — se muestra la categoría",
+        # Filtro ESTRICTO, sin red de degradación. Si el cliente nombró algo
+        # concreto y no lo tenemos, la respuesta correcta es vacío: el
+        # orquestador lo convierte en `sin_stock_subtipo` y pasa la
+        # conversación a un asesor, que además puede confirmar si entró
+        # mercancía que el catálogo aún no refleja. Antes se mostraba la
+        # categoría entera "para no dejarlo sin fotos", y quien pedía una fusta
+        # recibía cinco esposas: saturarlo con lo que no pidió.
+        #
+        # Esto solo es seguro porque antes se cerraron las dos fuentes de falso
+        # negativo, y cada una tiene su guardia:
+        #   - doble filtrado → `_subtipo_ya_en_restricciones` (arriba),
+        #   - huecos de vocabulario → `scripts/auditar_subtipos.py`, que falla
+        #     si un subtipo se queda sin cobertura sin estar declarado.
+        # Los subtipos SOFT ("primera vez", "sencillo") no llegan aquí con
+        # cero: el orquestador los relaja antes (main.py:1372-1398).
+        filas = _filtrar_por_subtipo(filas, subtipo)
+        if not filas:
+            log.info("Subtipo %r sin coincidencias en %s → vacío (escalará)",
                      subtipo, restricciones)
     if not user_text:
         return filas[:limit]

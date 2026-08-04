@@ -1801,13 +1801,20 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # Registro directo: `record_if_escalated` decide buscando frases como
         # "especialista te responderá" en la respuesta del bot, y ninguna copia
         # de este camino las contiene — pausaba sin dejar rastro en el panel.
+        # El subtipo va en el detalle porque es lo que hace falta para decidir
+        # qué hacer con el escalado: si se repite "fusta" es una compra que
+        # falta en el catálogo, y si aparece un subtipo que sí vendemos es un
+        # hueco de vocabulario que hay que cerrar en `_SUBTIPO_SINONIMOS`.
+        subtipo_pedido = info.get("subtipo_detectado")
         await escalations.registrar(
             wa_id=wa_id, reason="sin_inventario",
-            reason_detail=f"El cliente pidió {pedido} y no hay ninguno ofrecible.",
+            reason_detail=(f"El cliente pidió {pedido}"
+                           + (f" (subtipo: {subtipo_pedido})" if subtipo_pedido else "")
+                           + " y no hay ninguno ofrecible."),
             issue_summary=user_text, history=history,
             bot_reply=HANDOFF_SIN_INVENTARIO)
-        log.info("Handoff por inventario sin coincidencias (%s) para %s — bot pausado",
-                 pedido, wa_id)
+        log.info("Handoff por inventario sin coincidencias (%s, subtipo=%s) para %s "
+                 "— bot pausado", pedido, subtipo_pedido, wa_id)
         return
 
     if info["reset_state"] and estado_previo:
