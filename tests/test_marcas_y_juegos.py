@@ -136,10 +136,10 @@ def _estado_vibradores():
 
 def _sin_catalogo(**extra):
     async def sin_restricciones(restricciones, exclude_ids=None, limit=5,
-                                permitir_relajar=True, user_text=""):
+                                permitir_relajar=True, user_text="", subtipo=None):
         return catalog.Resultado(relajado="sin_resultado", restricciones=restricciones)
 
-    async def contar(_r):
+    async def contar(_r, **kwargs):
         return 20
 
     async def sin_facetas(_r):
@@ -185,7 +185,7 @@ def test_un_color_no_puede_secuestrar_el_listado():
         return [dict(CALEXOTICS[0])]
 
     async def con_productos(restricciones, exclude_ids=None, limit=5,
-                            permitir_relajar=True, user_text=""):
+                            permitir_relajar=True, user_text="", subtipo=None):
         return catalog.Resultado(productos=[dict(CALEXOTICS[0])],
                                  restricciones=restricciones)
 
@@ -206,7 +206,7 @@ def test_una_respuesta_sin_marca_no_dispara_busqueda_por_nombre():
         return []
 
     async def con_productos(restricciones, exclude_ids=None, limit=5,
-                            permitir_relajar=True, user_text=""):
+                            permitir_relajar=True, user_text="", subtipo=None):
         return catalog.Resultado(productos=[dict(CALEXOTICS[0])],
                                  restricciones=restricciones)
 

@@ -190,14 +190,14 @@ def _catalogo(total=20, disponibles=None, productos=None):
     disponibles = DISP_REAL if disponibles is None else disponibles
     productos = PRODS if productos is None else productos
 
-    async def contar(restricciones):
+    async def contar(restricciones, **kwargs):
         return total
 
     async def disp(restricciones):
         return disponibles
 
     async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True,
-                     user_text=""):
+                     user_text="", subtipo=None):
         return catalog.Resultado(productos=list(productos), restricciones=restricciones)
 
     # Los caminos de respaldo (búsqueda por nombre, corrección de typos) tocan el
@@ -351,7 +351,7 @@ def _recuperar_espiando_exclude(mensaje, estado, productos=()):
     vistos = []
 
     async def buscar(restricciones, exclude_ids=None, limit=5, permitir_relajar=True,
-                     user_text=""):
+                     user_text="", subtipo=None):
         vistos.append(list(exclude_ids or []))
         return catalog.Resultado(productos=list(productos), restricciones=restricciones)
 

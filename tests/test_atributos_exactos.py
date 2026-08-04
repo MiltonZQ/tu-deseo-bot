@@ -255,10 +255,10 @@ def _catalogo_vacio(total: int):
         return []
 
     async def sin_restricciones(restricciones, exclude_ids=None, limit=5,
-                                permitir_relajar=True, user_text=""):
+                                permitir_relajar=True, user_text="", subtipo=None):
         return catalog.Resultado(relajado="sin_resultado", restricciones=restricciones)
 
-    async def contar(_r):
+    async def contar(_r, **kwargs):
         return total
 
     async def sin_facetas(_r):

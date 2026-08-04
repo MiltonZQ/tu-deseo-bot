@@ -172,7 +172,7 @@ main = importar_main()
 
 def _sin_db(**extra):
     """Silencia todas las consultas del pipeline salvo las que interesan."""
-    async def sin_contar(r):
+    async def sin_contar(r, **kwargs):
         return 12
 
     async def sin_facetas(r):
@@ -210,7 +210,7 @@ def _espiar_texto(mensaje, estado, producto=None):
     visto = {}
 
     async def fake_buscar(restricciones, exclude_ids=None, limit=5,
-                          permitir_relajar=True, user_text=""):
+                          permitir_relajar=True, user_text="", subtipo=None):
         visto["user_text"] = user_text
         p = producto or SUCCIONADORES[4]
         return catalog.Resultado(
@@ -333,7 +333,7 @@ def test_sin_faceta_propia_la_categoria_sigue_heredandose():
 
 def _turno_cambiando_de_tipo(mensaje, estado):
     async def fake_buscar(restricciones, exclude_ids=None, limit=5,
-                          permitir_relajar=True, user_text=""):
+                          permitir_relajar=True, user_text="", subtipo=None):
         return catalog.Resultado(
             productos=[{"id": 99, "nombre": "Multiorgasmos Original X 30 Ml",
                         "precio": 36900, "imagen_url": "http://x/a.jpg",

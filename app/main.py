@@ -1233,9 +1233,10 @@ async def _recuperar_candidatos(
         # porque el vocabulario de facetas y el de subtipos NO son el mismo —
         # `interpretar_mensaje` devuelve solo {"tipo": "lenceria"} para
         # "colegiala"— y esa diferencia es la que producía la pregunta absurda.
-        # No se filtra por el subtipo (eso exigiría reclasificar el catálogo y,
-        # sin hacerlo, `atributos @> [...]` daría 0 filas y un handoff): basta
-        # con listar, que el orden por concordancia ya pone delante lo pedido.
+        # El subtipo SÍ se filtra: va como parámetro a `buscar_por_restricciones`
+        # y a `contar_por_restricciones` (filtrado por nombre/descripción, no por
+        # `atributos`, que no está clasificado). Ese mismo filtro es el que hace
+        # que el conteo de "ver más" cuente colegialas y no lencerías.
         and not clasif.get("subtipo_detectado")
         and not clasif.get("es_especifico")
         and not _es_ver_mas(user_text)
@@ -1288,7 +1289,8 @@ async def _recuperar_candidatos(
         res = await catalog.buscar_por_restricciones(
             restricciones, exclude_ids=exclude, limit=5,
             permitir_relajar=not es_ver_mas,
-            user_text=texto_busqueda)
+            user_text=texto_busqueda,
+            subtipo=clasif.get("subtipo_detectado"))
         if res.productos:
             candidatos = res.productos
             relajado = res.relajado
@@ -1304,7 +1306,8 @@ async def _recuperar_candidatos(
     agotado_por_facetas = False
     if debe_mostrar and not candidatos and restricciones.get("atributos") \
             and restricciones.get("tipo"):
-        total_del_pedido = await catalog.contar_por_restricciones(restricciones)
+        total_del_pedido = await catalog.contar_por_restricciones(
+            restricciones, subtipo=clasif.get("subtipo_detectado"))
         if total_del_pedido:
             agotado_por_facetas = True
         else:
@@ -1431,7 +1434,8 @@ async def _recuperar_candidatos(
             total_en_categoria = len(candidatos)
             hay_mas = False
         elif restricciones.get("tipo") and not relajado:
-            total_en_categoria = await catalog.contar_por_restricciones(restricciones)
+            total_en_categoria = await catalog.contar_por_restricciones(
+                restricciones, subtipo=clasif.get("subtipo_detectado"))
             hay_mas = bool(candidatos) and total_en_categoria > (len(exclude) + len(candidatos))
         elif relajado:
             # Se cedió en algo para poder responder: no prometer más de lo mismo.
