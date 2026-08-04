@@ -118,3 +118,39 @@ def test_la_zona_no_cuenta_como_faceta_que_ya_filtro():
             user_text="estimulador de prostata", subtipo="prostat"))
     assert [p["nombre"] for p in res.productos] == ["Estimulador de Próstata Ferro"], \
         [p["nombre"] for p in res.productos]
+
+
+def test_lo_declarado_sin_cobertura_existe_y_no_se_contradice():
+    """`_SUBTIPOS_SIN_COBERTURA` dice "esto no lo vendemos, escala".
+
+    Una entrada que no es un subtipo real no escala nada (nunca se detecta), y
+    una que además tiene sinónimos se contradice a sí misma: los sinónimos
+    existen para encontrar producto, y la declaración para admitir que no hay.
+    """
+    desconocidos = set(catalog._SUBTIPOS_SIN_COBERTURA) - set(catalog._SUBTIPO_KEYWORDS)
+    assert not desconocidos, f"no son subtipos detectables: {desconocidos}"
+    contradictorios = set(catalog._SUBTIPOS_SIN_COBERTURA) & set(catalog._SUBTIPO_SINONIMOS)
+    assert not contradictorios, (
+        f"declarados sin cobertura pero con sinónimos: {contradictorios}")
+
+
+def test_las_variantes_de_un_mismo_subtipo_comparten_sinonimos():
+    """Regresión de los huecos que encontró la auditoría.
+
+    "bodies" daba 0 y "body" 8; "antifaces" 0 y "antifaz" 2. Con el filtro
+    estricto ese plural no muestra menos productos: pausa el bot. Las variantes
+    de una misma prenda tienen que resolver al mismo conjunto.
+    """
+    for variantes in (("body", "bodies", "bodys"), ("antifaz", "antifaces")):
+        conjuntos = [set(catalog._SUBTIPO_SINONIMOS.get(v, [v])) for v in variantes]
+        base = conjuntos[0]
+        for v, c in zip(variantes, conjuntos):
+            assert base & c, f"{v!r} no comparte vocabulario con {variantes[0]!r}"
+
+
+def test_los_sinonimos_con_tilde_casan_porque_se_normalizan_los_dos_lados():
+    """Las entradas acentuadas de la tabla ("próstata", "cánula") solo funcionan
+    porque `_filtrar_por_subtipo` normaliza ambos lados. Si alguien vuelve a
+    comparar en crudo, esto lo caza."""
+    prods = [{"nombre": "Estimulador de Próstata Ferro", "descripcion": ""}]
+    assert catalog._filtrar_por_subtipo(prods, "prostat"), "sin match con tilde"

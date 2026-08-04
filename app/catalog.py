@@ -983,7 +983,34 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "playboy": ["playboy"],
     "policia": ["policia"],
     "sailor moon": ["sailor moon"],
+    # Variantes que el cliente escribe y el catálogo no: sin estas entradas el
+    # filtro estricto daría 0 y escalaría una venta que sí tenemos. Medido con
+    # `scripts/auditar_subtipos.py` sobre el catálogo real (247 ofrecibles):
+    # bodies→8, antifaces→2, vendas→2, inalambrico→18.
+    "bodies": ["body", "bodies", "bodys"],
+    "bodys": ["body", "bodies", "bodys"],
+    "antifaces": ["antifaz", "antifaces", "mascara", "máscara", "venda", "vendas"],
+    "vendas": ["venda", "vendas", "antifaz", "antifaces", "tapa ojos", "tapaojos"],
+    "inalambrico": ["inalambrico", "inalámbrico", "control remoto", "sin cable",
+                    "recargable"],
+    "inalámbrico": ["inalambrico", "inalámbrico", "control remoto", "sin cable",
+                    "recargable"],
 }
+
+# Subtipos que el catálogo NO cubre y para los que escalar a un asesor es la
+# respuesta correcta: el cliente pidió algo concreto que no vendemos, y
+# mostrarle la categoría completa sería saturarlo con lo que no pidió.
+#
+# Se llena con la salida de `scripts/auditar_subtipos.py`, no a ojo: el CSV de
+# `prompts/knowledge/` está congelado y sin descripciones, y medir con él da 27
+# subtipos en cero que en el catálogo real sí existen.
+#
+# "fusta" no se mapea a "paleta" a propósito: sería inventar una equivalencia
+# comercial que nadie validó. Si Sebastián confirma que lo son, se mueve a
+# `_SUBTIPO_SINONIMOS` y se saca de aquí.
+_SUBTIPOS_SIN_COBERTURA: frozenset[str] = frozenset({
+    "fusta", "fustas",
+})
 
 
 def _filtrar_por_subtipo(filas: list[dict], subtipo: str | None) -> list[dict]:
