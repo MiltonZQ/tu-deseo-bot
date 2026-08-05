@@ -1277,42 +1277,13 @@ def test_bug16_reglas_categoria_orden_lubricante_antes_que_anal_generico():
 # contra las RONDAS del estado, no buscando keycaps en el texto del historial:
 # aquello obligaba a que la marca de "hay una lista viva" fuera visible para el
 # cliente, y era lo que ataba el mecanismo a la numeración.
-
-_RONDA_DILDOS = [{"categoria": "dildos", "productos": [
-    {"id": 1, "nombre": "Consolador King Cock Light Prepucio", "precio": 80000},
-    {"id": 2, "nombre": "Consolador King Cock Squirting", "precio": 60000},
-    {"id": 3, "nombre": "Dildo Realista Ayami Camtoyz", "precio": 100000},
-]}]
-
-
-def test_bug17_la_seleccion_multiple_se_reconoce():
-    """El caso EXACTO del chat: 'El 2 y 3' elige dos productos, y por tanto el
-    pipeline NO vuelve a mostrar fotos."""
-    from app import seleccion
-    assert sorted(seleccion.resolver("El 2 y 3", _RONDA_DILDOS).ids) == [2, 3]
-
-
-def test_bug17_formas_de_seleccion_del_reporte():
-    from app import seleccion
-    for caso in ("El 2 y 3", "el 2 y 3", "2 y 3", "el 1", "dame el 1",
-                 "quiero el 3", "los 2 y 4", "1,3", "3"):
-        assert seleccion.resolver(caso, _RONDA_DILDOS).ids, caso
-
-
-def test_bug17_no_falsos_positivos_en_mensajes_normales():
-    """No debe activarse con mensajes de exploración o datos personales."""
-    from app import seleccion
-    for caso in ("vidrio", "mas diseños", "hola", "vivo en bogota",
-                 "mi telefono es 3216549870", "quiero comprar", "tienen anillos"):
-        assert not seleccion.resolver(caso, _RONDA_DILDOS).ids, caso
-
-
-def test_bug17_sin_rondas_un_numero_no_selecciona_nada():
-    """Si el bot no mostró nada, un número suelto (respondiendo otra pregunta,
-    una edad, una cantidad) no puede ser una selección de producto."""
-    from app import seleccion
-    assert not seleccion.resolver("2", []).ids
-
+#
+# La cobertura de COMPORTAMIENTO (qué mensajes cuentan como selección) vive en
+# `tests/test_seleccion.py`, sección "Regresión BUG 17". Aquí se queda solo la
+# comprobación estructural, que es la que puede hacerse leyendo el fuente: este
+# fichero no importa módulos de `app` a propósito (ver el docstring de arriba),
+# y meter un `from app import seleccion` lo dejaba dependiendo de que otro test
+# stubeara los drivers antes — pasaba en la suite completa y fallaba aislado.
 
 def test_bug17_override_existe_en_recuperar_candidatos():
     """El override sigue conectado en _recuperar_candidatos (main.py), con la

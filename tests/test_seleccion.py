@@ -148,3 +148,48 @@ def test_los_typos_del_cliente_se_corrigen_antes_de_resolver():
 def test_no_se_repite_un_id_aunque_se_nombre_dos_veces():
     r = seleccion.resolver("el euforia, si, el euforia ese", RONDAS)
     assert r.ids == [3], r
+
+
+# ── Regresión BUG 17 ──
+#
+# Caso reportado: el bot muestra 5 dildos, el cliente responde "El 2 y 3"
+# (eligiendo), el LLM confirma la venta correctamente y ofrece lubricante, PERO el
+# sistema además reenvía las 5 fotos otra vez — `calificado=True` persistido hacía
+# que cualquier mensaje sin categoría nueva disparara `mostrar_por_estado=True`.
+#
+# La detección vivía en `_SELECCION_NUMERICA_RE` (main.py) y exigía encontrar
+# keycaps en el texto del historial para confirmar que había una lista viva. Eso
+# ataba el mecanismo a que la numeración fuera visible para el cliente. Ahora se
+# resuelve aquí, contra las rondas del estado.
+#
+# Los nombres son los del chat real: forman parte de lo que documenta el caso.
+_RONDA_DILDOS = [{"categoria": "dildos", "productos": [
+    {"id": 1, "nombre": "Consolador King Cock Light Prepucio", "precio": 80000},
+    {"id": 2, "nombre": "Consolador King Cock Squirting", "precio": 60000},
+    {"id": 3, "nombre": "Dildo Realista Ayami Camtoyz", "precio": 100000},
+]}]
+
+
+def test_bug17_la_seleccion_multiple_se_reconoce():
+    """El caso EXACTO del chat: 'El 2 y 3' elige dos productos, y por tanto el
+    pipeline NO vuelve a mostrar fotos."""
+    assert sorted(seleccion.resolver("El 2 y 3", _RONDA_DILDOS).ids) == [2, 3]
+
+
+def test_bug17_formas_de_seleccion_del_reporte():
+    for caso in ("El 2 y 3", "el 2 y 3", "2 y 3", "el 1", "dame el 1",
+                 "quiero el 3", "los 2 y 4", "1,3", "3"):
+        assert seleccion.resolver(caso, _RONDA_DILDOS).ids, caso
+
+
+def test_bug17_no_falsos_positivos_en_mensajes_normales():
+    """No debe activarse con mensajes de exploración o datos personales."""
+    for caso in ("vidrio", "mas diseños", "hola", "vivo en bogota",
+                 "mi telefono es 3216549870", "quiero comprar", "tienen anillos"):
+        assert not seleccion.resolver(caso, _RONDA_DILDOS).ids, caso
+
+
+def test_bug17_sin_rondas_un_numero_no_selecciona_nada():
+    """Si el bot no mostró nada, un número suelto (respondiendo otra pregunta,
+    una edad, una cantidad) no puede ser una selección de producto."""
+    assert not seleccion.resolver("2", []).ids
