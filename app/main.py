@@ -1673,7 +1673,22 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             if handled:
                 log.info("Comprobante de pago procesado por visión para %s", wa_id)
                 return
-        log.info("Imagen (no comprobante) recibida de %s", wa_id)
+        # Imagen que NO es comprobante (foto de un producto, captura, etc.).
+        # La regla del negocio es explícita: escalar a asesor. Antes esto era un
+        # `return` silencioso — el cliente enviaba una foto y el bot no hacía
+        # nada. Ahora responde con MEDIA_REPLY y registra el escalado, igual que
+        # el Caso C (video/documento/sticker) de abajo.
+        log.info("Imagen (no comprobante) recibida de %s — escala a asesor", wa_id)
+        reply = MEDIA_REPLY
+        saved_user_msg = user_text or "[envió una imagen]"
+        await db.save_message(wa_id, "user", saved_user_msg)
+        await db.save_message(wa_id, "assistant", reply)
+        await whatsapp_client.send_text(wa_id, reply)
+        await escalations.record_if_escalated(
+            wa_id=wa_id, user_text=saved_user_msg, bot_reply=reply,
+            message_type=mtype, media_type="image", history=history,
+        )
+        await follow_ups.schedule(wa_id)
         return
 
     # ── Caso B: audio/voz → transcripción con Whisper ──

@@ -190,6 +190,40 @@ async def _analyze_comprobante(image_b64: str, monto_esperado: int | None) -> di
     return _parse_vision_response(content)
 
 
+# Palabras que indican que el cliente está hablando de pago. Sirven para decidir
+# si una imagen entrante es comprobante (hay que procesarla con visión) o una
+# foto de producto (hay que escalar a asesor). Sin contexto de pago, la imagen
+# no se procesa: se escala.
+_PALABRAS_PAGO = (
+    "pago", "pagar", "pagué", "pague", "pagado", "comprobante", "compruebaante",
+    "transferencia", "transferir", "transferí", "transfieri", "consignacion",
+    "consignación", "consigné", "consigne", "nequi", "daviplata", "bancolombia",
+    "deposito", "depósito", "abono", "abonar", "aboné", "foto", "recibo",
+    "factura", "soporte", "envie", "envié",
+)
+
+
+def _contexto_habla_de_pago(caption: str | None, history: list[dict]) -> bool:
+    """¿El caption o el historial reciente indican que se habla de pago?
+
+    Si el cliente envía una imagen sin pedido pendiente, esta función decide
+    si vale la pena procesarla como comprobante (caption/historial mencionan
+    pago) o si es una foto ajena (debe escalar). Mira el caption y los últimos
+    4 mensajes del historial.
+    """
+    import unicodedata
+
+    def _norm(s):
+        return unicodedata.normalize("NFKD", (s or "").lower()).encode("ascii", "ignore").decode()
+
+    textos = [caption or ""]
+    for msg in (history or [])[-4:]:
+        if msg.get("role") == "user":
+            textos.append(msg.get("content") or "")
+    joined = _norm(" ".join(textos))
+    return any(_norm(p) in joined for p in _PALABRAS_PAGO)
+
+
 async def handle_inbound_image(
     *,
     wa_id: str,
@@ -209,6 +243,15 @@ async def handle_inbound_image(
         return False
 
     monto_esperado, pedido_id = await _get_monto_esperado(wa_id)
+
+    # GUARD DE CONTEXTO: si no hay pedido pendiente Y el caption/historial no
+    # habla de pago, la imagen NO es comprobante. Devolver False sin llamar a
+    # GPT-4o vision para no gastar la llamada ni contaminar la tabla abonos con
+    # falsos positivos (foto de un producto → abono espurio registrado).
+    # La regla del negocio es explícita: "imágenes con foto de producto escalar".
+    if not pedido_id and not _contexto_habla_de_pago(caption, history):
+        log.info("Imagen de %s sin contexto de pago — no se trata como comprobante", wa_id)
+        return False
 
     # 1) Descargar
     image_b64 = await _download_image_as_b64(image_url)
