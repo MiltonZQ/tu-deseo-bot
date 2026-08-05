@@ -180,6 +180,8 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     genero TEXT,                    -- 'hombre'|'mujer'|'pareja'|'anal'
     calificado BOOLEAN NOT NULL DEFAULT FALSE,
     productos_mostrados BIGINT[] NOT NULL DEFAULT '{}',  -- ids ya enviados (no repetir)
+    rondas JSONB NOT NULL DEFAULT '[]',     -- [{categoria, ids}] en orden de envío
+    carrito JSONB NOT NULL DEFAULT '[]',    -- lo que el cliente ya eligió
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 """
@@ -266,6 +268,31 @@ async def run_migrations() -> None:
         # el mensaje "Ver más" no tiene tokens de producto.
         await conn.execute(
             "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS texto_busqueda TEXT"
+        )
+        # Rondas de productos enviadas al cliente, en orden y con su categoría:
+        # [{"categoria": "disfraces", "ids": [12, 45, 7]}, ...]
+        #
+        # `productos_mostrados` no sirve para esto: se acumula con
+        # `ARRAY(SELECT DISTINCT unnest(...))`, y DISTINCT no garantiza el orden
+        # (Postgres puede resolverlo con hash agg). Como conjunto para el filtro
+        # anti-repetición está bien —solo se consulta la pertenencia—, pero
+        # indexar por posición sobre él es leer un orden accidental. Además es
+        # plano: un índice "2" no dice de QUÉ lista, que es exactamente el bug de
+        # elegir "el disfraz y el juego 2" tras recorrer tres categorías.
+        await conn.execute(
+            "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS "
+            "rondas JSONB NOT NULL DEFAULT '[]'"
+        )
+        # Lo que el cliente YA eligió, con nombre y precio congelados al elegir:
+        # [{"producto_id": 12, "nombre": "...", "precio": 40000}, ...]
+        #
+        # Antes la selección no se registraba en ningún sitio: se reconstruía al
+        # cerrar la venta releyendo el texto del historial. Escribirla en el
+        # momento en que se entiende es lo que permite elegir de varias
+        # categorías sin que la primera elección se pierda por el camino.
+        await conn.execute(
+            "ALTER TABLE conversation_state ADD COLUMN IF NOT EXISTS "
+            "carrito JSONB NOT NULL DEFAULT '[]'"
         )
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_productos_facetas ON productos(tipo, zona)"
@@ -666,18 +693,25 @@ async def save_summary(wa_id: str, summary: str, message_count: int) -> None:
 
 # ── Estado de conversación (pipeline determinístico) ──
 
+# Cuántas rondas de productos se recuerdan. Es el mundo cerrado contra el que se
+# resuelve "el que me mostraste": pasado ese punto el cliente tampoco se acuerda,
+# y un conjunto pequeño es lo que hace seguro resolver por un nombre parcial.
+MAX_RONDAS = 4
+
+
 async def get_conversation_state(wa_id: str) -> dict | None:
     """Devuelve el estado de conversación del cliente, o None si no existe.
 
     Campos: categoria_busqueda, categoria_funcional, genero, calificado,
-    productos_mostrados (lista de int), restricciones, preguntas_hechas.
+    productos_mostrados (lista de int), restricciones, preguntas_hechas,
+    rondas (lista de {categoria, ids}) y carrito (lista de items elegidos).
     """
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT categoria_busqueda, categoria_funcional, genero, calificado,
                    productos_mostrados, restricciones, preguntas_hechas,
-                   texto_busqueda
+                   texto_busqueda, rondas, carrito
             FROM conversation_state WHERE wa_id = $1
             """,
             wa_id,
@@ -693,7 +727,26 @@ async def get_conversation_state(wa_id: str) -> dict | None:
         "restricciones": json.loads(row["restricciones"]) if row["restricciones"] else {},
         "preguntas_hechas": list(row["preguntas_hechas"] or []),
         "texto_busqueda": row["texto_busqueda"],
+        "rondas": _json_lista(row["rondas"]),
+        "carrito": _json_lista(row["carrito"]),
     }
+
+
+def _json_lista(valor) -> list:
+    """JSONB → lista de Python, tolerante a la forma en que llegue.
+
+    asyncpg puede devolver el JSONB ya decodificado o como texto según cómo esté
+    configurado el codec. Y una fila anterior a la migración trae NULL. Los tres
+    casos acaban en lista.
+    """
+    if not valor:
+        return []
+    if isinstance(valor, str):
+        try:
+            valor = json.loads(valor)
+        except (ValueError, TypeError):
+            return []
+    return list(valor) if isinstance(valor, list) else []
 
 
 async def upsert_conversation_state(
@@ -706,6 +759,8 @@ async def upsert_conversation_state(
     restricciones: dict | None = None,
     add_pregunta_hecha: str | None = None,
     texto_busqueda: str | None = None,
+    add_ronda: dict | None = None,
+    carrito: list | None = None,
     reset: bool = False,
 ) -> None:
     """Crea o actualiza el estado de conversación de un cliente.
@@ -715,12 +770,22 @@ async def upsert_conversation_state(
     - add_productos_mostrados añade IDs a los ya mostrados (sin duplicados).
     - add_pregunta_hecha registra el tipo por el que ya se preguntó, para no
       volver a preguntar lo mismo.
+    - add_ronda añade una ronda de productos enviados ({categoria, ids}) al
+      final de la lista, conservando el orden y podando las más viejas.
+    - carrito reemplaza la lista completa de lo elegido (el resolvedor siempre
+      la recalcula entera, así que no hay que acumular aquí).
     - reset=True reinicia estado (ej: cliente cambia radicalmente de tema); en
-      ese caso los campos pasan a su default, productos_mostrados se vacía y
-      preguntas_hechas también: en un tema nuevo, volver a preguntar es correcto.
+      ese caso los campos pasan a su default, productos_mostrados y rondas se
+      vacían y preguntas_hechas también: en un tema nuevo, volver a preguntar es
+      correcto. El CARRITO no se toca — ver la nota en la query.
     """
     async with _pool.acquire() as conn:
         if reset:
+            # OJO: `carrito` está deliberadamente ausente de este SET. Cambiar de
+            # tema (disfraces → juegos) reinicia lo que se está MOSTRANDO, que es
+            # lo correcto: son otras opciones. Pero lo que el cliente ya ELIGIÓ
+            # sigue siendo suyo; preguntar por otra categoría no es retractarse.
+            # Ese es justo el caso de elegir un producto de cada categoría.
             await conn.execute(
                 """
                 INSERT INTO conversation_state (wa_id, calificado, productos_mostrados, updated_at)
@@ -731,6 +796,7 @@ async def upsert_conversation_state(
                     genero = NULL,
                     calificado = FALSE,
                     productos_mostrados = '{}',
+                    rondas = '[]',
                     restricciones = NULL,
                     preguntas_hechas = '{}',
                     texto_busqueda = NULL,
@@ -806,6 +872,32 @@ async def upsert_conversation_state(
                 f"ARRAY(SELECT DISTINCT unnest(conversation_state.preguntas_hechas || ${idx}::text[]))",
                 f"${idx}::text[]",
             )
+        if add_ronda:
+            # Se concatena el array JSONB y se poda a las últimas MAX_RONDAS.
+            #
+            # A diferencia de productos_mostrados, aquí NO se deduplica: el orden
+            # ES el dato. "El 2" se resuelve contra la última ronda, así que un
+            # DISTINCT (que Postgres puede resolver con hash agg, sin orden
+            # garantizado) convertiría la referencia en una lotería.
+            #
+            # La poda mantiene pequeño el conjunto sobre el que se resuelve una
+            # referencia, que es lo que permite bajar el umbral de matching por
+            # nombre sin arriesgar falsos positivos.
+            _campo(
+                "rondas",
+                json.dumps([add_ronda]),
+                f"(SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb) "
+                f"FROM jsonb_array_elements(conversation_state.rondas || ${idx}::jsonb) "
+                f"WITH ORDINALITY AS t(elem, ord) "
+                f"WHERE ord > jsonb_array_length(conversation_state.rondas || ${idx}::jsonb) "
+                f"- {MAX_RONDAS})",
+                f"${idx}::jsonb",
+            )
+        if carrito is not None:
+            # Reemplazo, no acumulación: quien llama resuelve el carrito completo
+            # en cada turno (lo que ya había + lo que se acaba de elegir), así que
+            # acumular aquí duplicaría. Y permite quitar items sin una query aparte.
+            _campo("carrito", json.dumps(carrito), f"${idx}::jsonb", f"${idx}::jsonb")
         cols.append("updated_at")
         vals.append("now()")
         sets.append("updated_at = now()")

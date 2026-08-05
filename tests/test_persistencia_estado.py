@@ -130,6 +130,83 @@ def test_reset_sigue_vaciando_el_estado():
     assert params == ("573001112233",)
 
 
+# ── Rondas y carrito ──
+#
+# `productos_mostrados` es un conjunto sin orden garantizado: se acumula con
+# `ARRAY(SELECT DISTINCT unnest(...))` y Postgres puede reordenar. Sirve para el
+# filtro anti-repetición (pertenencia), no para decir "el segundo". Las `rondas`
+# guardan ESE dato: qué se envió, en qué orden y bajo qué categoría, de forma que
+# "el 2" tenga un ámbito acotado y visible en vez de un índice sobre el acumulado.
+
+def test_la_ronda_se_anade_en_las_dos_ramas_del_upsert():
+    """Mismo fallo que tenía productos_mostrados: si la ronda solo estuviera en el
+    ON CONFLICT, la primera ronda de cada contacto nuevo se perdería."""
+    sql, params = _upsert(add_ronda={"categoria": "disfraces", "ids": [12, 45]})
+    cabecera = sql.split("ON CONFLICT")[0]
+    assert "rondas" in cabecera, (
+        f"rondas debe ir en las columnas del INSERT.\nSQL: {sql}")
+    assert "'[]'" not in cabecera, (
+        f"el INSERT no puede escribir un array vacío fijo.\nSQL: {sql}")
+    assert any("disfraces" in str(p) for p in params), params
+
+
+def test_las_rondas_se_acumulan_conservando_el_orden():
+    """El orden es el dato: 'el 2' de la última ronda depende de él. Por eso se
+    concatena el array JSONB en vez de deduplicar como productos_mostrados."""
+    sql, _ = _upsert(add_ronda={"categoria": "juegos", "ids": [7]})
+    conflicto = sql.split("ON CONFLICT")[1]
+    assert "conversation_state.rondas ||" in conflicto, (
+        f"el UPDATE debe acumular sobre las rondas existentes.\nSQL: {sql}")
+    assert "ORDER BY ord" in conflicto, (
+        f"la reagregación debe fijar el orden explícitamente; sin ORDER BY, "
+        f"Postgres no lo garantiza y 'el 2' pasa a ser una lotería.\nSQL: {sql}")
+
+
+def test_solo_se_conservan_las_ultimas_rondas():
+    """Más allá de unas pocas rondas el cliente ya no se acuerda, y el conjunto
+    sobre el que se resuelve una referencia debe seguir siendo pequeño."""
+    sql, _ = _upsert(add_ronda={"categoria": "juegos", "ids": [7]})
+    conflicto = sql.split("ON CONFLICT")[1]
+    assert "jsonb_array_length" in conflicto, (
+        f"el UPDATE debe podar las rondas viejas.\nSQL: {sql}")
+
+
+def test_el_carrito_se_escribe_en_las_dos_ramas():
+    carrito = [{"producto_id": 12, "nombre": "Disfraz Policia", "precio": 40000}]
+    sql, params = _upsert(carrito=carrito)
+    cabecera = sql.split("ON CONFLICT")[0]
+    assert "carrito" in cabecera, f"carrito debe ir en el INSERT.\nSQL: {sql}"
+    # Se serializa con json.dumps, igual que `restricciones`: llega como texto
+    # con los no-ASCII escapados y Postgres lo normaliza al parsear el JSONB.
+    assert any("Disfraz Policia" in str(p) and "40000" in str(p) for p in params), params
+
+
+def test_el_reset_vacia_las_rondas_pero_NO_el_carrito():
+    """El caso multi-categoría entero depende de esto.
+
+    Cambiar de tema (disfraces → juegos) dispara reset y limpia lo que se ha
+    MOSTRADO, que es correcto: son otras opciones. Pero lo que el cliente ya
+    ELIGIÓ no se toca — cambiar de tema no es cambiar de opinión. Antes de las
+    rondas esto ni se planteaba porque no había dónde guardar la elección.
+    """
+    sql, _ = _upsert(reset=True)
+    assert "rondas = '[]'" in sql, f"el reset debe vaciar las rondas.\nSQL: {sql}"
+    assert "carrito" not in sql, (
+        f"el reset NO puede tocar el carrito: el cliente perdería lo ya elegido "
+        f"al preguntar por otra categoría.\nSQL: {sql}")
+
+
+def test_los_placeholders_coinciden_con_rondas_y_carrito():
+    import re
+    sql, params = _upsert(categoria_funcional="disfraces",
+                          add_productos_mostrados=[1, 2],
+                          add_ronda={"categoria": "disfraces", "ids": [1, 2]},
+                          carrito=[{"producto_id": 1, "nombre": "X", "precio": 100}])
+    usados = {int(n) for n in re.findall(r"\$(\d+)", sql)}
+    assert usados == set(range(1, len(params) + 1)), (
+        f"placeholders {sorted(usados)} vs {len(params)} parámetros.\nSQL: {sql}")
+
+
 # ── Facetas de producto ──
 # El sync de WooCommerce corre periódicamente y reclasifica. Si pisara las
 # correcciones hechas a mano desde el panel, el operador tendría que volver a
