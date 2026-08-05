@@ -1,0 +1,173 @@
+[
+ {
+  "id": "demorar",
+  "grupo": "fases",
+  "mensaje": "hola, busco algo para demorar",
+  "nota": "Fase 2: el LLM debe sacar el atributo desensibilizante y llegar a retardantes, no a lubricantes cualesquiera.",
+  "productos_correctos": ["Retardante", "Desensibilizante"]
+ },
+ {
+  "id": "demorar-2-turnos",
+  "grupo": "fases",
+  "mensaje": "si, eso mismo",
+  "turnos": ["hola, busco algo para demorar", "si, eso mismo"],
+  "nota": "El caso completo de la Fase 2: el primer turno es una pregunta de calificacion, asi que el atributo solo puede pagar en el segundo. Aqui es donde deberia verse la diferencia con la base.",
+  "productos_correctos": ["Retardante", "Desensibilizante"]
+ },
+ {
+  "id": "demorar-responde-faceta",
+  "grupo": "fases",
+  "mensaje": "anal desensibilizante",
+  "turnos": ["hola, busco algo para demorar", "anal desensibilizante"],
+  "nota": "El cliente responde la pregunta de calificacion con una de las opciones que el propio bot ofrecio.",
+  "productos_correctos": ["Retardante", "Desensibilizante", "Anal"]
+ },
+ {
+  "id": "erecion",
+  "grupo": "fases",
+  "mensaje": "quiero algo para una buena ereccion",
+  "nota": "Fase 2: descripcion por funcion, sin nombrar el producto. Deberia llegar a anillos o potenciadores.",
+  "productos_correctos": ["Anillo", "Potencializador", "BliX"]
+ },
+ {
+  "id": "disfraz-policia",
+  "grupo": "fases",
+  "mensaje": "quiero un disfraz de policia",
+  "nota": "Fase 1: el LLM aporta el subtipo policia. Solo hay un producto y es el correcto.",
+  "productos_correctos": ["Disfraz Policía Lerot"]
+ },
+ {
+  "id": "asesoria-sabor",
+  "grupo": "fases",
+  "mensaje": "ese tiene sabor?",
+  "nota": "El ejemplo que cita la Fase 3. Ojo: 'sabor' es tambien palabra de subtipo, asi que el turno puede leerse como busqueda nueva en vez de como asesoria.",
+  "historial": [
+   {"role": "user", "content": "muestrame lubricantes"},
+   {"role": "assistant", "content": "1️⃣ Lubricante Anal Electrizante x 30 Ml Sen Intimo — $30.000"}
+  ],
+  "estado": {"categoria_funcional": "lubricantes-y-cuidado", "calificado": true},
+  "usar_producto_activo": "Lubricante Anal Electrizante"
+ },
+ {
+  "id": "asesoria-frio-calor",
+  "grupo": "fases",
+  "mensaje": "ese da frio y calor?",
+  "nota": "Otro ejemplo de la Fase 3, con la misma colision: 'calor' y 'frio' son palabras de subtipo.",
+  "historial": [
+   {"role": "user", "content": "tienen cremas de sensaciones"},
+   {"role": "assistant", "content": "1️⃣ Crema Íntima de Sensaciones XUE Ritual Intense 30 ml — $40.000"}
+  ],
+  "estado": {"categoria_funcional": "lubricantes-y-cuidado", "calificado": true},
+  "usar_producto_activo": "Crema Íntima de Sensaciones"
+ },
+ {
+  "id": "asesoria-contraindicaciones",
+  "grupo": "fases",
+  "mensaje": "ese tiene alguna contraindicacion? soy alergica al latex",
+  "nota": "Asesoria limpia, sin palabras de subtipo: aqui SI se ejercita la ficha del producto activo. La respuesta debe apoyarse en su descripcion real.",
+  "historial": [
+   {"role": "user", "content": "muestrame lubricantes"},
+   {"role": "assistant", "content": "1️⃣ Lubricante Anal Electrizante x 30 Ml Sen Intimo — $30.000"}
+  ],
+  "estado": {"categoria_funcional": "lubricantes-y-cuidado", "calificado": true},
+  "usar_producto_activo": "Lubricante Anal Electrizante"
+ },
+ {
+  "id": "asesoria-como-se-usa",
+  "grupo": "fases",
+  "mensaje": "y ese como se usa exactamente?",
+  "nota": "Asesoria sobre modo de uso. Sin la ficha el LLM contesta de memoria y puede describir otro producto.",
+  "historial": [
+   {"role": "user", "content": "tienen algo para limpieza anal"},
+   {"role": "assistant", "content": "1️⃣ Enema para limpieza Anal Lito — $45.000"}
+  ],
+  "estado": {"categoria_funcional": "anal", "calificado": true},
+  "usar_producto_activo": "Enema para limpieza Anal Lito"
+ },
+
+ {
+  "id": "colegiala",
+  "grupo": "transcript",
+  "mensaje": "Me gustaría un disfraz de colegiala",
+  "nota": "Transcript real de produccion. Hay tres colegialas en catalogo.",
+  "productos_correctos": ["Disfraz Colegiala"]
+ },
+ {
+  "id": "colegiala-para-ella",
+  "grupo": "transcript",
+  "mensaje": "para ella",
+  "nota": "Transcript real: el turno siguiente, respondiendo la pregunta de calificacion. No debe volver a preguntar.",
+  "historial": [
+   {"role": "user", "content": "Me gustaría un disfraz de colegiala"},
+   {"role": "assistant", "content": "¡Claro que sí! Cuéntame, ¿la buscas para *ella* o para *él*? 😊"}
+  ],
+  "estado": {"categoria_funcional": "lenceria", "calificado": false},
+  "productos_correctos": ["Disfraz Colegiala"]
+ },
+ {
+  "id": "consolador-madera",
+  "grupo": "transcript",
+  "mensaje": "Tienen consoladores de madeera",
+  "nota": "Transcript real, con la errata. No vendemos consoladores de madera: no debe inventarse que si.",
+  "productos_correctos": []
+ },
+
+ {
+  "id": "dildo-ventosa",
+  "grupo": "regresion",
+  "mensaje": "quiero un dildo con ventosa",
+  "nota": "El falso negativo que protege _subtipo_ya_en_restricciones: la faceta ya filtro por ventosa, no hay que reexigir la palabra en el nombre.",
+  "productos_correctos": ["Ventosa", "Dildo", "Consolador"]
+ },
+ {
+  "id": "fusta",
+  "grupo": "regresion",
+  "mensaje": "tienen fustas de cuero",
+  "nota": "Unico subtipo declarado sin cobertura. Debe ESCALAR a asesor, no mostrar cinco esposas.",
+  "debe_escalar": true
+ },
+ {
+  "id": "primera-vez",
+  "grupo": "regresion",
+  "mensaje": "es mi primera vez, que me recomiendan",
+  "nota": "Subtipo SOFT: no debe escalar aunque el filtro por nombre de cero; se relaja antes.",
+  "debe_escalar": false
+ },
+ {
+  "id": "ver-mas",
+  "grupo": "regresion",
+  "mensaje": "muestrame mas diseños",
+  "nota": "El ver mas no debe soltar la zona ni rellenar con productos de otra categoria.",
+  "historial": [
+   {"role": "user", "content": "quiero un plug anal"},
+   {"role": "assistant", "content": "Mira estos 👇"}
+  ],
+  "estado": {"categoria_funcional": "anal", "calificado": true, "restricciones": {"tipo": "plug"}}
+ },
+ {
+  "id": "direccion-entrega",
+  "grupo": "regresion",
+  "mensaje": "vivo en la calle 45 con carrera 30, barrio Laureles",
+  "nota": "Una direccion no debe leerse como cambio de categoria ni disparar una busqueda nueva.",
+  "historial": [
+   {"role": "user", "content": "quiero el numero 2"},
+   {"role": "assistant", "content": "¡Perfecto! ¿Me confirmas tu dirección de entrega?"}
+  ],
+  "estado": {"categoria_funcional": "vibradores", "calificado": true},
+  "debe_escalar": false
+ },
+ {
+  "id": "saludo",
+  "grupo": "regresion",
+  "mensaje": "hola buenas tardes",
+  "nota": "Un saludo no clasifica categoria ni busca productos.",
+  "productos_correctos": []
+ },
+ {
+  "id": "kit-bdsm",
+  "grupo": "regresion",
+  "mensaje": "tienen kits de sadomasoquismo",
+  "nota": "Jerga que las listas estaticas no cubren: el LLM deberia mapearla a pareja-y-bondage.",
+  "productos_correctos": ["Esposas", "Antifaz", "Látigo", "Kit", "Venda", "Mordaza", "Amarre"]
+ }
+]

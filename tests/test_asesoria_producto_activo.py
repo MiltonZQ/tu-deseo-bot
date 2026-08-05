@@ -131,3 +131,45 @@ def test_el_bloque_ficha_es_distinto_del_bloque_candidatos():
     assert prompt is not None
     # El bloque de ficha (descripción completa) debe estar:
     assert "A base de agua" in prompt
+
+
+def test_get_producto_by_id_selecciona_las_facetas():
+    """La ficha se arma con lo que `get_producto_by_id` TRAE de la DB.
+
+    Los tests de arriba construyen el dict a mano, así que pasaban aunque la
+    consulta no seleccionara `atributos`, `tipo` ni `zona` — que es lo que
+    pasaba en producción: el bloque de ficha se emitía sin esas líneas y el LLM
+    volvía a contestar de memoria. Aquí se mira la consulta real.
+    """
+    import types as _types
+
+    from app import catalog, db
+
+    capturado = {"sql": None}
+
+    class _Conn:
+        async def fetchrow(self, sql, *params):
+            capturado["sql"] = sql
+            return None
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    orig = getattr(db, "_pool", None)
+    db._pool = _types.SimpleNamespace(acquire=lambda: _Acquire())
+    try:
+        asyncio.run(catalog.get_producto_by_id(1))
+    finally:
+        db._pool = orig
+
+    sql = capturado["sql"]
+    assert sql, "no se ejecutó la consulta"
+    seleccion = sql.split("FROM")[0]
+    for columna in ("tipo", "zona", "vibra", "atributos"):
+        assert columna in seleccion, (
+            f"`{columna}` no se selecciona: la ficha del producto activo "
+            f"llegaría al LLM sin ese campo")

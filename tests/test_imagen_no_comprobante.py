@@ -35,6 +35,28 @@ def test_contexto_habla_de_pago_detecta_palabras_clave():
     assert payments._contexto_habla_de_pago(None, [{"role": "user", "content": "ya pagué"}])
 
 
+def test_hablar_de_fotos_no_es_hablar_de_pago():
+    """El caso que anulaba el guard entero.
+
+    "foto" estaba en `_PALABRAS_PAGO`, y en este bot el cliente pide fotos
+    continuamente. Con esa palabra dentro, casi toda imagen entrante se trataba
+    como comprobante: se gastaba la llamada a visión y se arriesgaba un abono
+    espurio, que es justo lo que este guard venía a impedir.
+    """
+    assert not payments._contexto_habla_de_pago(
+        "mira esta foto, tienen algo asi?", [])
+    assert not payments._contexto_habla_de_pago(
+        None, [{"role": "user", "content": "me puedes enviar una foto del vibrador?"}])
+    assert not payments._contexto_habla_de_pago(
+        "es esta", [{"role": "user", "content": "me envie una foto porfa"}])
+    # "soporte" y "envie" salieron por lo mismo: son vocabulario de producto y
+    # de envío antes que de pago.
+    assert not payments._contexto_habla_de_pago(
+        None, [{"role": "user", "content": "que soporte tiene el arnes?"}])
+    assert not payments._contexto_habla_de_pago(
+        None, [{"role": "user", "content": "me lo envie a Medellin"}])
+
+
 def test_contexto_sin_pago_no_dispara():
     assert not payments._contexto_habla_de_pago("vi este producto en instagram", [])
     assert not payments._contexto_habla_de_pago(None, [])

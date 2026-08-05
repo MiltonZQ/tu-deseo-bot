@@ -626,11 +626,19 @@ _CATEGORIAS_ALTERNATIVAS_POR_GENERO = {
 
 
 async def get_producto_by_id(producto_id: int) -> dict | None:
-    """Devuelve un producto por su ID (para resolver marcadores [FOTO:ID] del LLM)."""
+    """Devuelve un producto por su ID (para resolver marcadores [FOTO:ID] del LLM).
+
+    Trae también las facetas porque este es el producto que `main.py` pasa como
+    `producto_activo` en los turnos de asesoría: la ficha que se le da al LLM
+    (`openai_client.complete`) enumera atributos, tipo y zona, y sin estas
+    columnas esas líneas salían vacías —el LLM volvía a contestar "¿tiene
+    sabor?" con sentido común, que es justo lo que la ficha venía a evitar.
+    """
     async with db._pool.acquire() as conn:  # type: ignore[attr-defined]
         row = await conn.fetchrow(
             """
-            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink
+            SELECT id, nombre, descripcion, categoria, precio, imagen_url, galeria_urls, permalink,
+                   tipo, zona, vibra, control, genero_uso, atributos
             FROM productos
             WHERE id = $1 AND (stock_status IS NULL OR stock_status <> 'outofstock')
             """,
@@ -869,7 +877,11 @@ _SUBTIPO_KEYWORDS = (
     "ducha", "enema",
     # Lubricantes
     "base de agua", "silicona", "calor", "frío", "frio", "sabores", "sabor",
-    "desensibiliz", "caliente",
+    # La forma completa va ANTES que la truncada: es la que el clasificador LLM
+    # emite, y `facetas.interpretar_mensaje` solo reconoce esta —con la truncada
+    # devuelve {} y `_subtipo_ya_en_restricciones` no ve que el atributo ya
+    # filtró, así que reexigía la palabra en el nombre.
+    "desensibilizante", "desensibiliz", "caliente",
     # Lencería
     "funda", "fundas", "funda para el pene",
     "arnes", "arnés", "liguero", "pechera", "encaje", "body", "bodies", "bodys",
@@ -899,6 +911,7 @@ _SUBTIPO_A_CATEGORIA = {
     "sabores": "lubricantes-y-cuidado", "sabor": "lubricantes-y-cuidado",
     "base de agua": "lubricantes-y-cuidado", "silicona": "lubricantes-y-cuidado",
     "desensibiliz": "lubricantes-y-cuidado",
+    "desensibilizante": "lubricantes-y-cuidado",
     "realista": "dildos", "ventosa": "dildos", "vidrio": "dildos",
     "cristal": "dildos", "doble": "dildos", "textura piel": "dildos", "textura": "dildos", "piel": "dildos",
     "rabbit": "vibradores", "punto g": "vibradores", "hitachi": "vibradores",
@@ -973,7 +986,8 @@ _SUBTIPO_SINONIMOS: dict[str, list[str]] = {
     "control por app": ["con app", "control por app", "control app", "app control", "app", "con aplicacion"],
     "control app": ["con app", "control por app", "control app", "app control", "app"],
     "control remoto": ["control remoto", "control por app", "con app", "app control"],
-    "desensibiliz": ["anal", "desensibilizante", "desensibiliz", "anestesico", "anestésico", "relajante anal", "lubricante anal"],
+    "desensibiliz": ["anal", "desensibilizante", "desensibiliz", "anestesico", "anestésico", "relajante anal", "lubricante anal", "retardante"],
+    "desensibilizante": ["anal", "desensibilizante", "desensibiliz", "anestesico", "anestésico", "relajante anal", "lubricante anal", "retardante"],
     "colegiala": ["colegiala"],
     "coneja": ["coneja", "conejita"],
     "conejita": ["coneja", "conejita"],
@@ -1352,20 +1366,35 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
     return intencion, sustantivo
 
 
-# Mapeo inverso de categoría funcional legacy → tipo de faceta. Se usa cuando
+# Mapeo inverso de categoría funcional legacy → tipos de faceta. Se usa cuando
 # el LLM clasifica una categoría (lubricantes-y-cuidado) y aporta un atributo
-# (desensibilizante): hay que asegurar que las restricciones lleven el `tipo`
-# coherente (lubricante) para que el atributo aplique al catálogo correcto.
-# Es el inverso de facetas._TIPO_A_CATEGORIA_LEGACY; algunas categorías legacy
-# mapean a dos tipos (cosmetica/lubricante) y aquí se prefiere el más común.
-_CATEGORIA_FUNCIONAL_A_TIPO = {
-    "vibradores": "vibrador", "succionadores": "succionador",
-    "anal": "plug", "pareja-y-bondage": "bondage",
-    "dildos": "dildo", "anillos-y-fundas": "anillo",
-    "fundas-pene": "funda", "masturbadores": "masturbador",
-    "bombas-pene": "bomba", "lubricantes-y-cuidado": "lubricante",
-    "lenceria": "lenceria", "juegos-y-accesorios": "juego",
+# (desensibilizante): conviene que las restricciones lleven el `tipo` coherente
+# para que el atributo aplique al catálogo correcto — un desensibilizante sobre
+# tipo=vibrador no tiene sentido y daría 0 filas.
+#
+# Los valores son TUPLAS porque varias categorías legacy cubren más de un tipo, y
+# elegir "el más común" descartaba el resto: con `lubricantes-y-cuidado` →
+# `lubricante` se perdían los tres "Retardante en Spray/Crema" del catálogo, que
+# son `cosmetica`, o sea justo los productos que el cliente pedía al escribir
+# "algo para demorar". Cuando la categoría es ambigua no se fija `tipo`: el
+# atributo es ancla suficiente y de todas formas el SQL no sabe filtrar por un
+# conjunto de tipos.
+_CATEGORIA_FUNCIONAL_A_TIPOS: dict[str, tuple[str, ...]] = {
+    "vibradores": ("vibrador",), "succionadores": ("succionador",),
+    "anal": ("plug", "bolas", "enema"),
+    "pareja-y-bondage": ("arnes", "bondage"),
+    "dildos": ("dildo",), "anillos-y-fundas": ("anillo", "funda"),
+    "fundas-pene": ("funda",), "masturbadores": ("masturbador",),
+    "bombas-pene": ("bomba",),
+    "lubricantes-y-cuidado": ("lubricante", "cosmetica"),
+    "lenceria": ("lenceria",), "juegos-y-accesorios": ("juego", "accesorio"),
 }
+
+
+def _tipo_inequivoco(categoria_funcional: str | None) -> str | None:
+    """El tipo de una categoría legacy, solo si no hay ninguna duda."""
+    tipos = _CATEGORIA_FUNCIONAL_A_TIPOS.get(categoria_funcional or "")
+    return tipos[0] if tipos and len(tipos) == 1 else None
 
 
 async def clasificar_intencion_cliente(user_text: str,
@@ -1676,20 +1705,39 @@ async def clasificar_intencion_cliente(user_text: str,
     # SQL filtre por `atributos @> [...]`. Sin esto el atributo se perdía y el
     # cliente que pedía retardantes recibía lubricantes cualesquiera.
     #
-    # También se asegura de que el `tipo` sea coherente con la categoría que el
-    # LLM clasificó: si dijo "lubricantes-y-cuidado", el tipo debe ser
-    # "lubricante" (o "cosmetica") para que el atributo aplique al catálogo
-    # correcto — un atributo desensibilizante sobre tipo=vibrador no tiene
-    # sentido y daría 0 filas.
+    # PERO este atributo lo INFIRIÓ el LLM: el cliente no lo dijo. Y un atributo
+    # es un filtro duro —`_ESCALERA_RELAJACION` lo excluye a propósito, y con
+    # cero filas `main.py` escala y pausa el bot—, severidad que solo merece lo
+    # que el cliente nombró de verdad. Medido: "quiero algo para una buena
+    # erección" daba 5 productos sin atributo, 1 con `principiante` y 0 —bot
+    # pausado— con `realista`, según qué campo rellenara el modelo esa vez.
+    #
+    # Por eso se comprueba ANTES de inyectar que las restricciones resultantes
+    # tienen productos. Si no, se descarta el atributo y la búsqueda sigue con lo
+    # que el cliente sí dijo. Así el invariante "una suposición del LLM nunca
+    # deja la búsqueda vacía" es cierto por construcción, sin tocar la escalera
+    # de relajación ni el escalado, que son correctos para el otro caso.
     if atributo_llm and atributo_llm not in (restricciones.get("atributos") or []):
-        tipo_coherente = _CATEGORIA_FUNCIONAL_A_TIPO.get(categoria_funcional)
-        if tipo_coherente and not restricciones.get("tipo"):
-            restricciones["tipo"] = tipo_coherente
-        restricciones.setdefault("atributos", [])
-        if atributo_llm not in restricciones["atributos"]:
-            restricciones["atributos"].append(atributo_llm)
-        log.info("Atributo %r inyectado por el LLM (cat=%s, tipo=%s)",
-                 atributo_llm, categoria_funcional, restricciones.get("tipo"))
+        candidatas = dict(restricciones)
+        # Con una categoría que cubre varios tipos no se fija ninguno: elegir
+        # "el más común" descartaba el resto (ver `_CATEGORIA_FUNCIONAL_A_TIPOS`).
+        tipo_coherente = _tipo_inequivoco(categoria_funcional)
+        if tipo_coherente and not candidatas.get("tipo"):
+            candidatas["tipo"] = tipo_coherente
+        candidatas["atributos"] = list(candidatas.get("atributos") or []) + [atributo_llm]
+        # `contar_por_restricciones` ya devuelve 0 si la DB falla, y eso es
+        # exactamente lo que se quiere: sin poder comprobarlo no se arriesga,
+        # porque el coste de equivocarse es pausar el bot por algo que el
+        # cliente no pidió.
+        hay = await contar_por_restricciones(candidatas, subtipo=subtipo_detectado)
+        if hay:
+            restricciones.clear()
+            restricciones.update(candidatas)
+            log.info("Atributo %r inyectado por el LLM (cat=%s, tipo=%s) → %d productos",
+                     atributo_llm, categoria_funcional, restricciones.get("tipo"), hay)
+        else:
+            log.info("Atributo %r del LLM descartado: dejaría la búsqueda en cero (%s)",
+                     atributo_llm, candidatas)
 
     return {
         "intencion": intencion,

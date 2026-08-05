@@ -405,16 +405,21 @@ _CLASIFICADOR_PROMPT = (
     "colegiala, coneja, conejita, diabla, enfermera, mucama, playboy, policia, "
     "sailor moon, disfraz, realista, ventosa, vidrio, cristal, doble, textura, "
     "piel, rabbit, punto g, hitachi, bala, huevo vibr, prostat, cola, ducha, "
-    "enema, base de agua, silicona, sabores, sabor, desensibiliz, calor, frio, "
+    "enema, base de agua, silicona, sabores, sabor, desensibilizante, calor, frio, "
     "funda, arnes, liguero, pechera, encaje, body, suspensorio, conjunto, "
     "esposas, antifaz, fusta, latigo, amarre, mordaza, vendas, con app, "
-    "control remoto, recargable, inalambrico, sencilla, primera vez.\n\n"
+    "control remoto, recargable, inalambrico, sencillo, primera vez.\n\n"
     "Atributo (opcional): si el cliente describe una característica funcional "
     "(no un nombre), ponla en \"atributo\". Claves válidas (una, minúsculas, o null):\n"
     "realista, ventosa, vidrio, sabor, agua, silicona, hibrido, desensibilizante, "
     "calor, frio, principiante, recargable, impermeable.\n"
-    "Ejemplos: \"para demorar\" → atributo desensibilizante; \"con ventosa\" → "
-    "atributo ventosa; \"disfraz de policia\" → subtipo policia.\n\n"
+    "IMPORTANTE — claves que valen para los DOS campos (realista, ventosa, vidrio, "
+    "sabor, silicona, calor, frio, recargable, desensibilizante): rellena AMBOS con "
+    "la misma clave, nunca elijas uno solo. No es redundante: el subtipo busca la "
+    "palabra en el nombre y el atributo filtra por la ficha del producto.\n"
+    "Ejemplos: \"para demorar\" → subtipo desensibilizante + atributo desensibilizante; "
+    "\"con ventosa\" → subtipo ventosa + atributo ventosa; \"disfraz de policia\" → "
+    "subtipo policia, atributo null (policia no es un atributo).\n\n"
     "Responde SOLO el JSON, sin texto extra. Formato:\n"
     '{"categoria": "<clave o ninguna>", "genero": "<o null>", '
     '"subtipo": "<o null>", "atributo": "<o null>"}'
@@ -430,7 +435,7 @@ _SUBTIPOS_LLM_VALIDOS = frozenset({
     "playboy", "policia", "sailor moon", "disfraz", "realista", "ventosa",
     "vidrio", "cristal", "doble", "textura", "piel", "rabbit", "punto g",
     "hitachi", "bala", "huevo vibr", "prostat", "cola", "ducha", "enema",
-    "base de agua", "silicona", "sabores", "sabor", "desensibiliz", "calor",
+    "base de agua", "silicona", "sabores", "sabor", "desensibilizante", "calor",
     "frio", "funda", "arnes", "liguero", "pechera", "encaje", "body",
     "suspensorio", "conjunto", "esposas", "antifaz", "fusta", "latigo",
     "amarre", "mordaza", "vendas", "con app", "control remoto", "recargable",

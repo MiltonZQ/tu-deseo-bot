@@ -194,20 +194,33 @@ def test_el_cache_devuelve_los_4_campos():
 from app import catalog  # noqa: E402
 
 
-def _clasificar_con_llm(user_text, respuesta_llm, history=None, estado=None):
-    """Llama a clasificar_intencion_cliente con el LLM mockeado."""
+def _clasificar_con_llm(user_text, respuesta_llm, history=None, estado=None,
+                        productos_en_catalogo=7):
+    """Llama a clasificar_intencion_cliente con el LLM mockeado.
+
+    `productos_en_catalogo` es lo que devolvería `contar_por_restricciones`: el
+    atributo del LLM solo se inyecta si la búsqueda resultante tiene productos,
+    así que sin este stub la suite mediría el camino de "no se pudo comprobar".
+    """
     openai_client.clasificar_intencion_llm = _LLM_REAL
     openai_client._cache_clasif.clear()
 
     async def _llm_mock(_texto):
         return respuesta_llm
+
+    async def _contar_mock(_restricciones, subtipo=None):
+        return productos_en_catalogo
+
     orig_llm = openai_client.clasificar_intencion_llm
+    orig_contar = catalog.contar_por_restricciones
     openai_client.clasificar_intencion_llm = _llm_mock
+    catalog.contar_por_restricciones = _contar_mock
     try:
         return asyncio.run(catalog.clasificar_intencion_cliente(
             user_text, history or [], estado))
     finally:
         openai_client.clasificar_intencion_llm = orig_llm
+        catalog.contar_por_restricciones = orig_contar
 
 
 def test_para_demorar_el_atributo_llega_a_restricciones():
@@ -220,7 +233,9 @@ def test_para_demorar_el_atributo_llega_a_restricciones():
     assert r["categoria_funcional"] == "lubricantes-y-cuidado", r
     restricciones = r["restricciones"]
     assert "desensibilizante" in (restricciones.get("atributos") or []), restricciones
-    assert restricciones.get("tipo") in ("lubricante", "cosmetica"), restricciones
+    # No se fija `tipo`: "lubricantes-y-cuidado" cubre lubricante Y cosmetica, y
+    # elegir uno dejaba fuera los retardantes en spray/crema, que son cosmetica.
+    assert not restricciones.get("tipo"), restricciones
 
 
 def test_para_una_buena_ereccion_llega_a_restricciones():
@@ -232,6 +247,42 @@ def test_para_una_buena_ereccion_llega_a_restricciones():
     assert "desensibilizante" in (r["restricciones"].get("atributos") or []), r["restricciones"]
 
 
+def test_un_atributo_del_llm_que_deja_la_busqueda_vacia_se_descarta():
+    """El cliente no dijo ese atributo: el LLM lo dedujo. No puede pausar el bot.
+
+    Medido en producción: "quiero algo para una buena erección" devolvía 5
+    productos, 1, o CERO —bot pausado y escalado— según si el modelo rellenaba
+    `atributo` con nada, con `principiante` o con `realista`, para el mismo
+    mensaje. Como `_ESCALERA_RELAJACION` excluye `atributos` a propósito, un
+    atributo inventado no tenía forma de recuperarse.
+    """
+    r = _clasificar_con_llm(
+        "quiero algo para una buena ereccion",
+        {"categoria": "anillos-y-fundas", "genero": "hombre",
+         "subtipo": None, "atributo": "realista"},
+        productos_en_catalogo=0)
+    assert "realista" not in (r["restricciones"].get("atributos") or []), r["restricciones"]
+
+
+def test_si_el_catalogo_tiene_productos_el_atributo_si_entra():
+    """La contraparte: el guard no debe tragarse los atributos que sí sirven."""
+    r = _clasificar_con_llm(
+        "quiero algo para una buena ereccion",
+        {"categoria": "anillos-y-fundas", "genero": "hombre",
+         "subtipo": None, "atributo": "realista"},
+        productos_en_catalogo=4)
+    assert "realista" in (r["restricciones"].get("atributos") or []), r["restricciones"]
+
+
+def test_una_categoria_de_un_solo_tipo_si_fija_el_tipo():
+    """Sin ambigüedad, el `tipo` sigue anclando la búsqueda al catálogo correcto."""
+    r = _clasificar_con_llm(
+        "algo que se pegue en la pared",
+        {"categoria": "dildos", "genero": None,
+         "subtipo": None, "atributo": "ventosa"})
+    assert r["restricciones"].get("tipo") == "dildo", r["restricciones"]
+
+
 def test_el_subtipo_del_llm_se_propaga_al_dict():
     """Si el LLM aporta un subtipo que las listas no detectaron, debe llegar al
     campo subtipo_detectado (que alimenta el filtro por nombre)."""
@@ -240,6 +291,55 @@ def test_el_subtipo_del_llm_se_propaga_al_dict():
         {"categoria": "lenceria", "genero": "mujer",
          "subtipo": "policia", "atributo": None})
     assert r["subtipo_detectado"] == "policia", r
+
+
+def _claves_ofrecidas_en_el_prompt(etiqueta: str) -> set[str]:
+    """Las claves que el prompt le enumera al LLM bajo `etiqueta`.
+
+    El prompt lista las opciones en prosa, separadas por comas y cerradas con un
+    punto; se recorta ese tramo y se parte por comas.
+    """
+    import re
+    tramo = re.search(
+        etiqueta + r".*?minúsculas, o null\):\n(.*?)\.\n", openai_client._CLASIFICADOR_PROMPT,
+        re.S)
+    assert tramo, f"no se encontró el listado de {etiqueta} en el prompt"
+    return {c.strip() for c in tramo.group(1).replace("\n", " ").split(",") if c.strip()}
+
+
+def test_lo_que_el_prompt_ofrece_es_lo_que_el_validador_acepta():
+    """El prompt y el vocabulario cerrado tienen que decir lo mismo.
+
+    Si el prompt ofrece una clave que el validador no acepta, el LLM obedece y
+    la respuesta se descarta en silencio: el cliente pierde la clasificación fina
+    y no queda rastro de por qué. Pasó con `sencilla`/`sencillo`. Al revés
+    tampoco sirve: una clave válida que el prompt no menciona es vocabulario
+    muerto que el LLM nunca va a usar.
+    """
+    subtipos = _claves_ofrecidas_en_el_prompt("Subtipo")
+    assert subtipos == set(openai_client._SUBTIPOS_LLM_VALIDOS), {
+        "solo en el prompt": sorted(subtipos - openai_client._SUBTIPOS_LLM_VALIDOS),
+        "solo en el validador": sorted(openai_client._SUBTIPOS_LLM_VALIDOS - subtipos),
+    }
+    atributos = _claves_ofrecidas_en_el_prompt("Atributo")
+    assert atributos == set(openai_client._ATRIBUTOS_LLM_VALIDOS), {
+        "solo en el prompt": sorted(atributos - openai_client._ATRIBUTOS_LLM_VALIDOS),
+        "solo en el validador": sorted(openai_client._ATRIBUTOS_LLM_VALIDOS - atributos),
+    }
+
+
+def test_el_vocabulario_del_llm_lo_sabe_filtrar_el_catalogo():
+    """Cada clave que el LLM puede devolver tiene que existir aguas abajo.
+
+    Un subtipo que `_SUBTIPO_KEYWORDS` no conoce, o un atributo que no está en
+    `facetas.ATRIBUTOS`, no filtra nada: en modo estricto eso no muestra menos
+    productos, escala a un asesor.
+    """
+    from app import catalog, facetas
+    huerfanos = openai_client._SUBTIPOS_LLM_VALIDOS - set(catalog._SUBTIPO_KEYWORDS)
+    assert not huerfanos, f"subtipos que el catálogo no sabe filtrar: {sorted(huerfanos)}"
+    huerfanos = openai_client._ATRIBUTOS_LLM_VALIDOS - set(facetas.ATRIBUTOS)
+    assert not huerfanos, f"atributos que no existen en facetas: {sorted(huerfanos)}"
 
 
 def test_cuando_el_llm_dice_ninguna_las_listas_siguen_funcionando():

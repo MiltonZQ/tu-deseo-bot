@@ -194,12 +194,22 @@ async def _analyze_comprobante(image_b64: str, monto_esperado: int | None) -> di
 # si una imagen entrante es comprobante (hay que procesarla con visión) o una
 # foto de producto (hay que escalar a asesor). Sin contexto de pago, la imagen
 # no se procesa: se escala.
+#
+# El criterio es de PRECISIÓN, no de recall, y no es simétrico: un falso
+# positivo gasta una llamada a visión y puede registrar un abono espurio; un
+# falso negativo solo manda el comprobante a un asesor, que lo resuelve. Por eso
+# aquí no entra vocabulario que un cliente use hablando de productos:
+#   - "foto": el cliente pide fotos todo el tiempo ("mándame una foto del
+#     vibrador"), así que dejarla aquí abría el guard en el caso más común y
+#     anulaba la regla entera.
+#   - "soporte": en Colombia significa comprobante, pero también soporte del
+#     producto. "comprobante" y "recibo" ya cubren ese sentido.
+#   - "envie"/"envié": aparece en cualquier petición de envío o de foto.
 _PALABRAS_PAGO = (
     "pago", "pagar", "pagué", "pague", "pagado", "comprobante", "compruebaante",
     "transferencia", "transferir", "transferí", "transfieri", "consignacion",
     "consignación", "consigné", "consigne", "nequi", "daviplata", "bancolombia",
-    "deposito", "depósito", "abono", "abonar", "aboné", "foto", "recibo",
-    "factura", "soporte", "envie", "envié",
+    "deposito", "depósito", "abono", "abonar", "aboné", "recibo", "factura",
 )
 
 

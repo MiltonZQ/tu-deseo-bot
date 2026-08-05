@@ -1323,7 +1323,14 @@ async def _recuperar_candidatos(
     # vez de bajar el catálogo entero y clasificarlo en Python. Es lo que permite
     # expresar "vibrador anal" como intersección y no como un cajón.
     relajado = None
-    if not candidatos and debe_mostrar and restricciones.get("tipo"):
+    # Basta un ANCLA: `tipo` o `atributos`. Antes se exigía `tipo`, y eso dejaba
+    # el camino muerto justo cuando la categoría cubre varios tipos y por eso no
+    # se fija ninguno (`lubricantes-y-cuidado` → lubricante Y cosmetica): con
+    # solo `{atributos: [desensibilizante]}` se saltaba el filtro por facetas y
+    # se caía al listado de la categoría, que devolvía Blow Pop y limpiador de
+    # juguetes a quien pidió algo para demorar.
+    if not candidatos and debe_mostrar and (restricciones.get("tipo")
+                                            or restricciones.get("atributos")):
         # En un "ver más" NO se relaja: el cliente pide más de LO MISMO. Si ya
         # se mostró todo lo que cumple, la respuesta es "no queda más", no
         # rellenar con productos de otra zona o tipo.
@@ -1345,8 +1352,7 @@ async def _recuperar_candidatos(
     # en que ya los vio todos (se le dice que ya los vio).
     sin_inventario = False
     agotado_por_facetas = False
-    if debe_mostrar and not candidatos and restricciones.get("atributos") \
-            and restricciones.get("tipo"):
+    if debe_mostrar and not candidatos and restricciones.get("atributos"):
         total_del_pedido = await catalog.contar_por_restricciones(
             restricciones, subtipo=clasif.get("subtipo_detectado"))
         if total_del_pedido:
