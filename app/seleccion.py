@@ -44,10 +44,14 @@ class Resolucion:
     - `hay_intencion_compra`: dijo que quiere comprar, con o sin objeto. Es lo
       que distingue "quiero pedir" (pídele el nombre) de "cuánto vale el envío"
       (no hay nada que resolver).
+    - `parece_seleccion`: el cliente está claramente eligiendo, pero no se puede
+      decir CUÁL. Pasa con las rondas sin orden fiable (ver `resolver`). Basta
+      para no reenviarle el catálogo a alguien que está cerrando.
     """
     ids: list[int] = field(default_factory=list)
     ambiguos: list[dict] = field(default_factory=list)
     hay_intencion_compra: bool = False
+    parece_seleccion: bool = False
 
 
 # El cliente dice que quiere comprar. Dos formas, ambas venían de main.py:
@@ -129,6 +133,13 @@ def resolver(user_text: str, rondas: list[dict]) -> Resolucion:
     `rondas` llega con los productos ya resueltos:
         [{"categoria": "juegos", "productos": [{"id", "nombre", "precio"}, ...]}]
 
+    Una ronda puede traer `"orden_fiable": False` (por defecto se asume True).
+    Significa que sus productos son los correctos pero su ORDEN no: es el caso
+    de la ronda de respaldo que se sintetiza desde `productos_mostrados` para las
+    conversaciones que estaban en vuelo al desplegar. Ahí el nombre, el atributo
+    y el precio siguen sirviendo —ninguno depende del orden— pero contar
+    posiciones sería una apuesta, así que no se hace.
+
     Cascada, primera que acierta gana. El orden va de la señal más específica a
     la más frágil: un nombre identifica siempre, una posición solo mientras el
     cliente esté mirando la última lista.
@@ -160,9 +171,17 @@ def resolver(user_text: str, rondas: list[dict]) -> Resolucion:
     if ids:
         return Resolucion(ids=ids, hay_intencion_compra=intencion)
 
-    ids = _por_posicion(texto, rondas)
-    if ids:
-        return Resolucion(ids=ids, hay_intencion_compra=intencion)
+    if rondas[-1].get("orden_fiable", True):
+        ids = _por_posicion(texto, rondas)
+        if ids:
+            return Resolucion(ids=ids, hay_intencion_compra=intencion)
+    elif _es_posicional(texto):
+        # No se puede decir CUÁL, pero sí que está eligiendo y no pidiendo ver
+        # más catálogo. Con eso basta para no reenviarle las fotos a alguien que
+        # está cerrando; el producto concreto lo resuelve `pedidos.py` por nombre
+        # sobre el historial al cerrar la venta.
+        return Resolucion(ambiguos=ambiguos, hay_intencion_compra=intencion,
+                          parece_seleccion=True)
 
     return Resolucion(ambiguos=ambiguos, hay_intencion_compra=intencion)
 
@@ -252,6 +271,21 @@ def _por_precio(texto: str, productos: list[dict]) -> list[int]:
             if int(p.get("precio") or 0) == valor and p["id"] not in ids:
                 ids.append(p["id"])
     return ids
+
+
+def es_referencia_posicional(texto: str) -> bool:
+    """¿El mensaje es una referencia por posición ("el 2", "el 1 y el 3", "el
+    primero")? Sin decir a qué apunta — eso depende de la ronda.
+
+    Público porque `main` lo necesita para el caso en que no hay NADA persistido
+    contra lo que resolver, donde saber que el cliente está eligiendo basta para
+    no reenviarle el catálogo.
+    """
+    return bool(_POSICION_NUMERICA_RE.match(_normalizar(texto or ""))
+                or _POSICION_ORDINAL_RE.match(_normalizar(texto or "")))
+
+
+_es_posicional = es_referencia_posicional
 
 
 def _por_posicion(texto: str, rondas: list[dict]) -> list[int]:

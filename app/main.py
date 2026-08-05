@@ -1018,7 +1018,42 @@ def _pregunta_desambiguacion(ambiguos: list[dict]) -> str:
     return f"Para no equivocarme 😊 ¿te refieres a {opciones}?"
 
 
-async def _resolver_seleccion(user_text: str, estado: dict | None):
+# Una lista de productos en un mensaje del bot, en CUALQUIERA de los dos
+# formatos: el actual (`*Nombre* — $40.000`) y el heredado con keycap
+# (`1️⃣ Nombre — $40.000`), que es el que tienen en el historial las
+# conversaciones que venían en vuelo al desplegar el cambio de presentación.
+#
+# Va aparte de `_LISTA_PRODUCTOS_RE` a propósito: aquella es la guardia
+# anti-alucinación y tiene que ser estricta para no reemplazar texto legítimo.
+# Esta solo decide si CALLAR, así que puede permitirse ser laxa.
+_LISTA_EN_HISTORIAL_RE = re.compile(
+    r"\*[^*\n]{3,80}\*\s*—\s*\$\s*[\d.,]+"
+    r"|[1-9]️⃣[^\n]*\$\s*[\d.,]+"
+)
+
+
+def _ultimo_reply_listo_productos(history: list[dict]) -> bool:
+    """¿El bot listó productos con precio en sus últimos mensajes?
+
+    Señal de ÚLTIMO recurso, y solo para no reenviar el catálogo — nunca para
+    decidir qué producto quiere el cliente. El estado es la fuente buena; esto
+    cubre el hueco en que el bot listó productos pero no persistió sus IDs
+    (fallaron las fotos y salió la lista en texto, o la escribió el LLM), donde
+    no hay ni rondas ni `productos_mostrados` de los que tirar.
+
+    Inferir la selección del texto del historial era el mecanismo viejo, y su
+    problema era que ataba todo a que la marca fuera visible para el cliente.
+    Aquí se usa solo para callar, que es una decisión que no puede equivocarse
+    de producto.
+    """
+    for m in reversed((history or [])[-4:]):
+        if m.get("role") == "assistant" and _LISTA_EN_HISTORIAL_RE.search(m.get("content") or ""):
+            return True
+    return False
+
+
+async def _resolver_seleccion(user_text: str, estado: dict | None,
+                              history: list[dict] | None = None):
     """A qué producto de los mostrados se refiere el cliente.
 
     Reúne las tres piezas: las rondas del estado (resueltas a productos reales),
@@ -1032,21 +1067,54 @@ async def _resolver_seleccion(user_text: str, estado: dict | None):
     viva buscando keycaps en el texto del historial; ahora las rondas son un dato
     del estado, no una lectura del texto.
     """
-    rondas: list[dict] = []
-    for r in ((estado or {}).get("rondas") or []):
-        productos = []
-        for pid in (r.get("ids") or []):
+    async def _productos_de(ids: list[int]) -> list[dict]:
+        salida = []
+        for pid in (ids or []):
             try:
                 p = await catalog.get_producto_by_id(pid)
             except Exception:
                 log.warning("No se pudo resolver el producto %s de una ronda", pid)
                 continue
             if p:
-                productos.append(p)
+                salida.append(p)
+        return salida
+
+    rondas: list[dict] = []
+    for r in ((estado or {}).get("rondas") or []):
+        productos = await _productos_de(r.get("ids") or [])
         if productos:
             rondas.append({"categoria": r.get("categoria"), "productos": productos})
 
+    # RONDA DE RESPALDO para las conversaciones que estaban en vuelo al desplegar
+    # esto: tienen productos en `productos_mostrados` pero ninguna ronda todavía.
+    # Sin ella, un cliente a mitad de cierre recibía otra vez el catálogo en vez
+    # de que se le tomara la selección.
+    #
+    # Va marcada `orden_fiable: False` porque `productos_mostrados` se acumula con
+    # `ARRAY(SELECT DISTINCT unnest(...))` y Postgres no garantiza ese orden. El
+    # nombre, el atributo y el precio siguen resolviendo —ninguno depende del
+    # orden—; contar posiciones sobre él sería reintroducir el bug original.
+    if not rondas and (estado or {}).get("productos_mostrados"):
+        productos = await _productos_de(list(estado["productos_mostrados"])[-5:])
+        if productos:
+            log.info("Sin rondas persistidas: ronda de respaldo con %d productos "
+                     "ya mostrados (sin resolución posicional)", len(productos))
+            rondas.append({"categoria": (estado or {}).get("categoria_funcional"),
+                           "orden_fiable": False, "productos": productos})
+
     res = seleccion.resolver(user_text, rondas)
+
+    # Sin NADA persistido —ni rondas ni productos mostrados— pero con una lista
+    # de productos en los últimos mensajes del bot: pasa cuando fallaron las
+    # fotos y salió la lista en texto, o cuando la escribió el LLM. Si además el
+    # cliente responde con una posición, está eligiendo; no se puede saber cuál,
+    # pero sí callar en vez de reenviarle el catálogo entero.
+    if (not rondas and not res.ids
+            and seleccion.es_referencia_posicional(user_text)
+            and _ultimo_reply_listo_productos(history or [])):
+        log.info("Sin estado persistido, pero el bot listó productos y el cliente "
+                 "responde con una posición — se frena el reenvío")
+        res.parece_seleccion = True
 
     # REFINAR NO ES ELEGIR. "quiero un dildo realista" nombra una CLASE de
     # producto: el tipo y un calificador del tipo. "quiero el realista" o "quiero
@@ -1181,7 +1249,7 @@ async def _recuperar_candidatos(
     # A qué producto de los ya mostrados se refiere el cliente. Se resuelve una
     # sola vez por turno y alimenta las dos palancas de más abajo y la escritura
     # del carrito.
-    res_seleccion = await _resolver_seleccion(user_text, estado_al_entrar)
+    res_seleccion = await _resolver_seleccion(user_text, estado_al_entrar, history)
 
     # Fusionar con estado previo (el estado recalifica categoría/género si el
     # nuevo mensaje los aclara; si no, conserva lo persistido).
@@ -1317,13 +1385,14 @@ async def _recuperar_candidatos(
     # pero las rondas son la memoria de qué ha visto el cliente y siguen siendo
     # válidas. Sin esto, pedir otra categoría borraría la posibilidad de elegir
     # algo visto antes — justo el caso multi-categoría.
-    if res_seleccion.ids or res_seleccion.ambiguos:
+    if res_seleccion.ids or res_seleccion.ambiguos or res_seleccion.parece_seleccion:
         if debe_mostrar:
             debe_mostrar = False
             clasif["calificado"] = False
             log.info("El cliente está eligiendo de lo ya mostrado (%s) — "
                      "fotos desactivadas este turno",
-                     res_seleccion.ids or [p["id"] for p in res_seleccion.ambiguos])
+                     res_seleccion.ids or [p["id"] for p in res_seleccion.ambiguos]
+                     or "sin identificar cuál")
 
     # REGLA DE PEDIDO SIN PRODUCTO IDENTIFICADO: el cliente dice que quiere
     # comprar pero no se pudo saber cuál ("quiero pedir", "dame ese"). Palanca
@@ -1346,11 +1415,22 @@ async def _recuperar_candidatos(
     nombra_algo_nuevo = bool(propias_msg) and not (
         list(propias_msg) == ["tipo"] and propias_msg["tipo"] == tipo_activo)
 
+    # `parece_seleccion` queda fuera: ahí el cliente YA dijo cuál a su manera
+    # (dio una posición) y solo falla la traducción a producto. Pedirle el nombre
+    # sería ignorar lo que acaba de decir; el turno va al LLM, que tiene el bloque
+    # de productos mostrados con nombres y precios para confirmar.
+    #
+    # La condición de "hay algo que elegir" mira también `productos_mostrados`,
+    # no solo `rondas`: durante la migración no hay rondas y el cliente igual
+    # tiene productos delante.
+    hay_algo_mostrado = bool((estado_al_entrar or {}).get("rondas")
+                             or (estado_al_entrar or {}).get("productos_mostrados"))
     pide_numero_de_lista = bool(
         res_seleccion.hay_intencion_compra
         and not res_seleccion.ids and not res_seleccion.ambiguos
+        and not res_seleccion.parece_seleccion
         and not nombra_algo_nuevo
-        and (estado_al_entrar or {}).get("rondas"))
+        and hay_algo_mostrado)
     if pide_numero_de_lista:
         debe_mostrar = False
         log.info("Intención de compra sin producto identificado — se le pide el nombre")
@@ -1691,7 +1771,13 @@ async def _recuperar_candidatos(
         # ¿Este cliente ya vio productos de lo que está mirando? Sale de
         # `exclude` y no del estado crudo a propósito: si cambió de tema,
         # `exclude` se limpia y volver a calificar es lo correcto.
-        "ya_vio_productos": bool(exclude),
+        # Una selección detectada ES prueba de que ya vio productos, aunque
+        # `exclude` venga vacío porque no se persistieron sus IDs. Sin esto, un
+        # cliente que contesta "el 1" tras una lista recibía la pregunta de
+        # calificación — el caso exacto que documenta `_pregunta_de_calificacion`.
+        "ya_vio_productos": bool(exclude) or bool(
+            res_seleccion.ids or res_seleccion.ambiguos
+            or res_seleccion.parece_seleccion),
     }
 
     # Reordenar por relevancia real cuando hay varios candidatos de una

@@ -193,3 +193,55 @@ def test_bug17_sin_rondas_un_numero_no_selecciona_nada():
     """Si el bot no mostró nada, un número suelto (respondiendo otra pregunta,
     una edad, una cantidad) no puede ser una selección de producto."""
     assert not seleccion.resolver("2", []).ids
+
+
+# ── Rondas sin orden fiable (conversaciones en vuelo al desplegar) ──
+#
+# Un cliente a mitad de conversación cuando se despliega esto tiene productos en
+# `productos_mostrados` pero ninguna ronda todavía. Se le sintetiza una ronda de
+# respaldo con esos IDs para no perder la selección, PERO ese array se acumula
+# con `ARRAY(SELECT DISTINCT unnest(...))` y su orden no está garantizado.
+#
+# De ahí `orden_fiable: False`: se puede resolver por nombre, atributo o precio
+# (nada de eso depende del orden), pero NO por posición — contar sobre un orden
+# accidental es el bug que motivó todo el cambio.
+
+_RONDA_SIN_ORDEN = [{"categoria": "vibradores", "orden_fiable": False, "productos": [
+    {"id": 21, "nombre": "Vibrador Lush 3 Lovense", "precio": 629800},
+    {"id": 22, "nombre": "Bala Vibradora Hazel Lolly", "precio": 45000},
+]}]
+
+
+def test_por_nombre_si_resuelve_aunque_el_orden_no_sea_fiable():
+    """El nombre no depende del orden, así que la selección se conserva."""
+    assert seleccion.resolver("quiero el Lush", _RONDA_SIN_ORDEN).ids == [21]
+
+
+def test_por_precio_tambien_resuelve_sin_orden_fiable():
+    assert seleccion.resolver("el de 45 mil", _RONDA_SIN_ORDEN).ids == [22]
+
+
+def test_la_posicion_NO_resuelve_si_el_orden_no_es_fiable():
+    """"el 1" sobre un array cuyo orden Postgres no garantiza es una apuesta.
+    Mejor no elegir que elegir mal: el cliente no se entera del error."""
+    assert seleccion.resolver("el 1", _RONDA_SIN_ORDEN).ids == []
+
+
+def test_pero_un_mensaje_posicional_SI_se_reconoce_como_seleccion():
+    """Aunque no se pueda decir CUÁL, se sabe que el cliente está eligiendo y no
+    pidiendo ver más catálogo. Es lo que permite apagar el reenvío de fotos; el
+    producto concreto lo resuelve `pedidos.py` por nombre al cerrar la venta."""
+    r = seleccion.resolver("quiero el 1 y el 3", _RONDA_SIN_ORDEN)
+    assert r.ids == []
+    assert r.parece_seleccion, r
+
+
+def test_con_orden_fiable_la_posicion_sigue_resolviendo():
+    """La ronda normal no lleva la marca, y ahí sí se cuenta."""
+    r = seleccion.resolver("el 1", _RONDA_DILDOS)
+    assert r.ids == [1] and not r.parece_seleccion
+
+
+def test_una_frase_normal_no_parece_seleccion_ni_sin_orden_fiable():
+    for texto in ("tengo 25 años", "hola", "cuanto vale el envio"):
+        assert not seleccion.resolver(texto, _RONDA_SIN_ORDEN).parece_seleccion, texto

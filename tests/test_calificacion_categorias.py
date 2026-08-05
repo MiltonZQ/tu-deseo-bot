@@ -1294,8 +1294,8 @@ def test_bug17_override_existe_en_recuperar_candidatos():
             src = ast.get_source_segment(_MAIN.read_text(), node)
             assert "res_seleccion.ids or res_seleccion.ambiguos" in src, (
                 "la palanca anti-reenvío debe leer el resultado del resolvedor")
-            idx = src.index("if res_seleccion.ids or res_seleccion.ambiguos:")
-            bloque = src[idx:idx + 300]
+            idx = src.index("if res_seleccion.ids or res_seleccion.ambiguos")
+            bloque = src[idx:idx + 400]
             assert "debe_mostrar = False" in bloque
             assert 'clasif["calificado"] = False' in bloque
             return

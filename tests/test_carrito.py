@@ -43,7 +43,7 @@ _ESTADO_TRES_RONDAS = {
 }
 
 
-def _resolver(user_text, estado=None, respuesta_llm=None):
+def _resolver(user_text, estado=None, respuesta_llm=None, history=None):
     """Ejecuta `_resolver_seleccion` con el catálogo y el LLM fingidos."""
     async def _get_producto(pid):
         return _CATALOGO.get(pid)
@@ -57,7 +57,8 @@ def _resolver(user_text, estado=None, respuesta_llm=None):
     main.openai_client.seleccionar_producto_llm = _llm
     try:
         return asyncio.run(main._resolver_seleccion(
-            user_text, _ESTADO_TRES_RONDAS if estado is None else estado))
+            user_text, _ESTADO_TRES_RONDAS if estado is None else estado,
+            history or []))
     finally:
         main.catalog.get_producto_by_id = orig_cat
         main.openai_client.seleccionar_producto_llm = orig_llm
@@ -148,6 +149,67 @@ def test_señalar_uno_concreto_si_es_elegir():
     """La contraparte: nombrar UNA cosa sola señala, no describe una clase."""
     estado = {"rondas": [{"categoria": "disfraces", "ids": [1, 2]}]}
     assert _resolver("quiero el disfraz de policia", estado=estado).ids == [1]
+
+
+# ── Conversaciones en vuelo al desplegar ──
+#
+# Un cliente a mitad de cierre cuando esto se despliega tiene productos en
+# `productos_mostrados` pero ninguna ronda. Sin respaldo, el turno siguiente le
+# reenviaba el catálogo en vez de tomarle la selección. Lo detectó el arnés de
+# eval (caso `reg-seleccion-numerica`), no la suite: los tests parten siempre de
+# un estado que ya tiene rondas.
+
+_EN_VUELO = {"productos_mostrados": [1, 2], "categoria_funcional": "disfraces"}
+
+
+def test_sin_rondas_el_nombre_sigue_resolviendo():
+    """La ronda de respaldo se sintetiza desde productos_mostrados."""
+    assert _resolver("quiero el disfraz de policia", estado=_EN_VUELO).ids == [1]
+
+
+def test_sin_rondas_la_posicion_no_elige_pero_si_frena_el_reenvio():
+    """No se puede saber CUÁL —el orden de productos_mostrados no está
+    garantizado— pero sí que está eligiendo, que es lo que apaga las fotos."""
+    r = _resolver("quiero el 1 y el 3", estado=_EN_VUELO)
+    assert r.ids == []
+    assert r.parece_seleccion, r
+
+
+def test_sin_nada_mostrado_no_hay_ronda_de_respaldo():
+    r = _resolver("quiero el 1", estado={"productos_mostrados": []})
+    assert r.ids == [] and not r.parece_seleccion
+
+
+# Último recurso: el bot listó productos pero no persistió sus IDs. Pasa cuando
+# fallan las fotos y sale la lista en texto, o cuando la escribe el LLM. No hay
+# ni rondas ni productos_mostrados, así que la única señal es el historial.
+
+_LISTA_VIEJA = [{"role": "assistant",
+                 "content": "1️⃣ Vibrador A — $50.000\n2️⃣ Vibrador B — $60.000"}]
+_LISTA_NUEVA = [{"role": "assistant",
+                 "content": "• *Vibrador A* — $50.000\n• *Vibrador B* — $60.000"}]
+
+
+def test_frena_el_reenvio_con_el_formato_de_lista_actual():
+    r = _resolver("quiero el 1 y el 3", estado={}, history=_LISTA_NUEVA)
+    assert r.parece_seleccion and r.ids == [], r
+
+
+def test_frena_el_reenvio_con_el_formato_heredado_de_keycaps():
+    """Las conversaciones en vuelo al desplegar tienen el formato viejo en el
+    historial. Si el detector solo mirara el nuevo, quedarían descubiertas."""
+    r = _resolver("quiero el 1 y el 3", estado={}, history=_LISTA_VIEJA)
+    assert r.parece_seleccion, r
+
+
+def test_sin_lista_en_el_historial_un_numero_no_frena_nada():
+    historial = [{"role": "assistant", "content": "¿Buscas algo realista?"}]
+    assert not _resolver("quiero el 1 y el 3", estado={}, history=historial).parece_seleccion
+
+
+def test_una_frase_normal_no_frena_el_reenvio():
+    for texto in ("muestrame mas", "hola", "tengo 25 años"):
+        assert not _resolver(texto, estado={}, history=_LISTA_NUEVA).parece_seleccion, texto
 
 
 def test_la_ambiguedad_no_se_resuelve_al_azar():
