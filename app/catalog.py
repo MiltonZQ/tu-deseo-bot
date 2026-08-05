@@ -1199,6 +1199,13 @@ def _misma_familia(a: str, b: str) -> bool:
     return a.startswith(b) or b.startswith(a)
 
 
+import os as _os
+
+# Caracteres iniciales que un token y su corrección deben compartir. Ver la tabla
+# del docstring de `corregir_typos_contra_catalogo`.
+_PREFIJO_MINIMO_TYPO = 4
+
+
 async def corregir_typos_contra_catalogo(user_text: str) -> str:
     """Corrige typos de nombres de producto/marca comparando con el catálogo real.
 
@@ -1206,6 +1213,30 @@ async def corregir_typos_contra_catalogo(user_text: str) -> str:
     y que tienen al menos 5 letras, y solo si hay UNA coincidencia cercana de
     alta confianza. Si no hay match claro, devuelve el texto sin cambios: es
     preferible no encontrar nada a buscar un producto equivocado.
+
+    CUÁNDO ALGO ES UN TYPO Y CUÁNDO NO. "No es vocabulario conocido" incluye
+    cualquier palabra española que no describa una categoría —verbos, adjetivos,
+    adverbios—, así que un criterio flojo convierte lenguaje normal en nombres de
+    marca. Pasó en producción: "Hola necesito algo para durar mas" acabó
+    mostrando un Vibrador Durba de $250.000, porque "durar" se parecía lo justo a
+    "durba".
+
+    Se piden DOS señales, porque ninguna sola tiene margen suficiente:
+
+                        similitud   prefijo común
+        durar    ~ durba      0.800      3     ← palabra normal, NO corregir
+        lovence  ~ lovense    0.857      5     ← typo real, sí corregir
+        consolodor~consolador 0.900      6
+        lovenese ~ lovense    0.933      5
+        satisfayer~satisfyer  0.947      6
+
+    Por similitud sola, el corte tendría que caer entre 0.800 y 0.857 — siete
+    milésimas de margen sobre un typo legítimo, que es fiarlo todo al filo. El
+    prefijo separa los mismos casos con holgura (3 frente a 5+) y por una razón
+    real: al teclear mal se falla en medio o al final de la palabra mucho más que
+    en el arranque, mientras que un parecido casual diverge desde temprano.
+
+    Las dos juntas dejan fuera lo fortuito sin rozar los typos de verdad.
     """
     tokens = [t for t in _tokens_no_reconocidos(user_text) if len(t) >= 5]
     if not tokens:
@@ -1219,8 +1250,15 @@ async def corregir_typos_contra_catalogo(user_text: str) -> str:
     for token in tokens:
         if token in vocabulario:
             continue  # ya es una palabra real del catálogo, no es typo
-        cercanas = difflib.get_close_matches(token, candidatas, n=2, cutoff=0.8)
+        cercanas = difflib.get_close_matches(token, candidatas, n=2, cutoff=0.85)
         if not cercanas:
+            continue
+        # Segunda señal: un typo conserva el arranque de la palabra. Ver la tabla
+        # del docstring — es lo que separa "durar"/"durba" (3) de los typos
+        # reales (5+) con margen, donde la similitud sola no lo hace.
+        if len(_os.path.commonprefix([token, cercanas[0]])) < _PREFIJO_MINIMO_TYPO:
+            log.info("Descartada la corrección %r → %r: comparten muy poco arranque",
+                     token, cercanas[0])
             continue
         # No elegir al azar entre dos palabras DISTINTAS igual de parecidas (sería
         # adivinar de qué producto habla el cliente). Variantes de la misma palabra

@@ -676,6 +676,47 @@ _SUBTIPOS_EN_TEXTO = {
 }
 
 
+def _filtrar_incoherentes(productos: list[dict], categoria: str | None) -> list[dict]:
+    """Descarta lo que la búsqueda por nombre encontró en OTRA categoría.
+
+    La búsqueda por nombre existe para las marcas y modelos que el clasificador
+    no conoce ("Icicles", "King Cock"): son nombres propios que ninguna lista
+    cubre. Su problema es que acierta demasiado — un token cualquiera del mensaje
+    puede casar con el nombre de un producto sin ninguna relación con lo que el
+    cliente pidió, y ese acierto marca `es_especifico`, con lo que ese producto
+    pasa a ser el ÚNICO candidato del turno y sustituye a la clasificación.
+
+    En producción, "Hola necesito algo para durar mas" acabó devolviendo un
+    Vibrador Durba de $250.000 a quien buscaba un retardante: el LLM había
+    clasificado bien (`lubricantes-y-cuidado`), pero "durar" se "corrigió" a
+    "durba" y la búsqueda por nombre encontró el vibrador.
+
+    Esta es la misma idea que `_validar_envio` —lo que no cumple lo que el
+    cliente pidió no se envía— un nivel más arriba: en vez de comprobar las
+    facetas del producto, comprueba a qué categoría pertenece.
+
+    Las marcas siguen funcionando porque son coherentes: el Lush ES un vibrador.
+    Lo que se cae es el ruido.
+
+    Sin categoría clasificada no se filtra: ahí la búsqueda por nombre es la
+    única señal que hay, y descartarla dejaría el turno sin candidatos, que es
+    justo cuando el LLM se inventa productos.
+    """
+    if not categoria:
+        return productos
+    coherentes = []
+    for p in productos:
+        suya = catalog._categoria_normalizada(
+            p.get("nombre") or "", p.get("descripcion") or "",
+            p.get("categoria") or "")
+        if suya == categoria:
+            coherentes.append(p)
+        else:
+            log.info("Descartado por incoherencia: %r es %s, se buscaba %s",
+                     (p.get("nombre") or "")[:40], suya, categoria)
+    return coherentes
+
+
 def _nombre_categoria(info: dict) -> str:
     """Cómo se le nombra al cliente lo que se le está mostrando.
 
@@ -1329,9 +1370,11 @@ async def _recuperar_candidatos(
         tokens_extra = catalog._tokens_no_reconocidos(user_text)
         if tokens_extra:
             exclude_previo = estado.get("productos_mostrados", []) if estado else []
-            producto_por_nombre = await catalog.buscar_producto_especifico(
-                user_text, limit=5, exclude_ids=exclude_previo,
-                tipo=restricciones.get("tipo"))
+            producto_por_nombre = _filtrar_incoherentes(
+                await catalog.buscar_producto_especifico(
+                    user_text, limit=5, exclude_ids=exclude_previo,
+                    tipo=restricciones.get("tipo")),
+                cat_func)
             if not producto_por_nombre:
                 # El término puede venir con un typo ("multiorgarmo"). Corregirlo
                 # contra los nombres reales del catálogo y reintentar: sin esto el
@@ -1339,9 +1382,14 @@ async def _recuperar_candidatos(
                 # inventarse una lista de productos.
                 texto_corregido = await catalog.corregir_typos_contra_catalogo(user_text)
                 if texto_corregido != user_text:
-                    producto_por_nombre = await catalog.buscar_producto_especifico(
-                        texto_corregido, limit=5, exclude_ids=exclude_previo,
-                        tipo=restricciones.get("tipo"))
+                    # El reintento pasa por el mismo filtro, y con más motivo: es
+                    # el camino por el que "durar" llegó a ser "durba" y trajo un
+                    # vibrador a una búsqueda de retardantes.
+                    producto_por_nombre = _filtrar_incoherentes(
+                        await catalog.buscar_producto_especifico(
+                            texto_corregido, limit=5, exclude_ids=exclude_previo,
+                            tipo=restricciones.get("tipo")),
+                        cat_func)
             if producto_por_nombre:
                 clasif["es_especifico"] = True
                 clasif["calificado"] = True
@@ -1535,8 +1583,15 @@ async def _recuperar_candidatos(
     # Satisfyer Pro 2), buscar por NOMBRE primero (más preciso que categoría).
     # Así "Lovense Lush" muestra Lovense, no vibradores genéricos al azar.
     if clasif.get("es_especifico") and debe_mostrar:
-        especificos = producto_por_nombre or await catalog.buscar_producto_especifico(
-            user_text, limit=5, exclude_ids=exclude, tipo=restricciones.get("tipo"))
+        # El fallback pasa por el mismo filtro de coherencia que el bloque de
+        # arriba: aquí es donde `candidatos` se sustituye por completo, así que
+        # colar un producto de otra categoría por este camino tiene el mismo
+        # efecto —el cliente recibe algo que no pidió— aunque el otro lo filtre.
+        especificos = producto_por_nombre or _filtrar_incoherentes(
+            await catalog.buscar_producto_especifico(
+                user_text, limit=5, exclude_ids=exclude,
+                tipo=restricciones.get("tipo")),
+            cat_func)
         if especificos:
             candidatos = especificos
             log.info("Producto específico encontrado por nombre: %d", len(candidatos))
