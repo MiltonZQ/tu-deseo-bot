@@ -183,3 +183,73 @@ def test_el_cache_devuelve_los_4_campos():
     assert r1 == r2, (r1, r2)
     assert r2["subtipo"] == "ventosa", r2
     assert r2["atributo"] == "ventosa", r2
+
+
+# ── Integración: el atributo del LLM llega a las restricciones ──
+# Estos tests mockean clasificar_intencion_llm y llaman a
+# clasificar_intencion_cliente, que es el orquestador real. Verifican que el
+# atributo funcional detectado por el LLM se propaga al dict de restricciones,
+# que es lo que el SQL usa con `atributos @> [...]`.
+
+from app import catalog  # noqa: E402
+
+
+def _clasificar_con_llm(user_text, respuesta_llm, history=None, estado=None):
+    """Llama a clasificar_intencion_cliente con el LLM mockeado."""
+    openai_client.clasificar_intencion_llm = _LLM_REAL
+    openai_client._cache_clasif.clear()
+
+    async def _llm_mock(_texto):
+        return respuesta_llm
+    orig_llm = openai_client.clasificar_intencion_llm
+    openai_client.clasificar_intencion_llm = _llm_mock
+    try:
+        return asyncio.run(catalog.clasificar_intencion_cliente(
+            user_text, history or [], estado))
+    finally:
+        openai_client.clasificar_intencion_llm = orig_llm
+
+
+def test_para_demorar_el_atributo_llega_a_restricciones():
+    """La frase que antes se perdía: el LLM la rescata y el atributo llega al
+    dict de restricciones, que es lo que filtra el SQL."""
+    r = _clasificar_con_llm(
+        "algo para demorar y durar mas",
+        {"categoria": "lubricantes-y-cuidado", "genero": "hombre",
+         "subtipo": None, "atributo": "desensibilizante"})
+    assert r["categoria_funcional"] == "lubricantes-y-cuidado", r
+    restricciones = r["restricciones"]
+    assert "desensibilizante" in (restricciones.get("atributos") or []), restricciones
+    assert restricciones.get("tipo") in ("lubricante", "cosmetica"), restricciones
+
+
+def test_para_una_buena_ereccion_llega_a_restricciones():
+    """Conversación real del transcript (Conv 3)."""
+    r = _clasificar_con_llm(
+        "que productos tienen para una buena ereccion",
+        {"categoria": "lubricantes-y-cuidado", "genero": "hombre",
+         "subtipo": None, "atributo": "desensibilizante"})
+    assert "desensibilizante" in (r["restricciones"].get("atributos") or []), r["restricciones"]
+
+
+def test_el_subtipo_del_llm_se_propaga_al_dict():
+    """Si el LLM aporta un subtipo que las listas no detectaron, debe llegar al
+    campo subtipo_detectado (que alimenta el filtro por nombre)."""
+    r = _clasificar_con_llm(
+        "tienen disfraz de policia",
+        {"categoria": "lenceria", "genero": "mujer",
+         "subtipo": "policia", "atributo": None})
+    assert r["subtipo_detectado"] == "policia", r
+
+
+def test_cuando_el_llm_dice_ninguna_las_listas_siguen_funcionando():
+    """El LLM como respaldo: si devuelve 'ninguna', el flujo sigue con las
+    listas. Un mensaje de saludo no debe disparar categoría."""
+    r = _clasificar_con_llm(
+        "hola buenas noches",
+        {"categoria": "ninguna", "genero": None,
+         "subtipo": None, "atributo": None})
+    assert r["categoria_funcional"] is None, r
+    assert r["subtipo_detectado"] is None, r
+    assert not (r["restricciones"].get("atributos")), r["restricciones"]
+

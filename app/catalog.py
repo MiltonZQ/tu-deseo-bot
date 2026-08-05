@@ -1352,6 +1352,22 @@ def _intencion_desde_texto(texto: str) -> tuple[str | None, str | None]:
     return intencion, sustantivo
 
 
+# Mapeo inverso de categoría funcional legacy → tipo de faceta. Se usa cuando
+# el LLM clasifica una categoría (lubricantes-y-cuidado) y aporta un atributo
+# (desensibilizante): hay que asegurar que las restricciones lleven el `tipo`
+# coherente (lubricante) para que el atributo aplique al catálogo correcto.
+# Es el inverso de facetas._TIPO_A_CATEGORIA_LEGACY; algunas categorías legacy
+# mapean a dos tipos (cosmetica/lubricante) y aquí se prefiere el más común.
+_CATEGORIA_FUNCIONAL_A_TIPO = {
+    "vibradores": "vibrador", "succionadores": "succionador",
+    "anal": "plug", "pareja-y-bondage": "bondage",
+    "dildos": "dildo", "anillos-y-fundas": "anillo",
+    "fundas-pene": "funda", "masturbadores": "masturbador",
+    "bombas-pene": "bomba", "lubricantes-y-cuidado": "lubricante",
+    "lenceria": "lenceria", "juegos-y-accesorios": "juego",
+}
+
+
 async def clasificar_intencion_cliente(user_text: str,
                                  history: list[dict] | None = None,
                                  categoria_estado: str | None = None,
@@ -1462,8 +1478,13 @@ async def clasificar_intencion_cliente(user_text: str,
     # reconoció ninguna categoría, pero el mensaje parece buscar un producto
     # (no es saludo/pago/queja), hacer una llamada BARATA al LLM que clasifica
     # en una de las 11 categorías cerradas. Así cubrimos jerga/variantes no
-    # listadas (kits de sadomasoquismo, cinturón de castidad, etc.) sin mantener
-    # listas infinitas. El LLM solo puede elegir una de las 11 o "ninguna".
+    # listadas ("para demorar", "algo para la erección", kits de sadomasoquismo,
+    # cinturón de castidad, etc.) sin mantener listas infinitas. El LLM solo
+    # puede elegir una de las 11 o "ninguna", y ahora también devuelve subtipo
+    # y atributo (vocabulario cerrado) — los propagamos para que el SQL filtre
+    # por la característica funcional que el cliente describió: "para demorar"
+    # → atributo desensibilizante → retardantes, no lubricantes cualesquiera.
+    atributo_llm = None
     if not categoria_funcional and not subtipo_detectado and user_text and len(user_text.strip()) >= 4:
         try:
             from app import openai_client
@@ -1475,6 +1496,14 @@ async def clasificar_intencion_cliente(user_text: str,
                     intencion = res_llm["categoria"]
                 if not genero and res_llm.get("genero"):
                     genero = res_llm["genero"]
+                # El subtipo y el atributo del LLM son la información fina que
+                # las listas no supieron extraer. El subtipo alimenta el filtro
+                # por nombre; el atributo alimenta el filtro SQL.
+                if not subtipo_detectado and res_llm.get("subtipo"):
+                    subtipo_detectado = res_llm["subtipo"]
+                    tiene_subtipo = True
+                if res_llm.get("atributo"):
+                    atributo_llm = res_llm["atributo"]
         except Exception:
             log.warning("Respaldo LLM de clasificación falló — se ignora")
 
@@ -1641,6 +1670,26 @@ async def clasificar_intencion_cliente(user_text: str,
     # en las restricciones para no arrastrar tipos de productos anteriores (ej: bondage).
     if es_filtro_de_lubricantes and restricciones.get("tipo") != "lubricante":
         restricciones["tipo"] = "lubricante"
+
+    # Si el LLM aportó un ATRIBUTO que las listas no detectaron (caso "para
+    # demorar" → desensibilizante), inyectarlo en las restricciones para que el
+    # SQL filtre por `atributos @> [...]`. Sin esto el atributo se perdía y el
+    # cliente que pedía retardantes recibía lubricantes cualesquiera.
+    #
+    # También se asegura de que el `tipo` sea coherente con la categoría que el
+    # LLM clasificó: si dijo "lubricantes-y-cuidado", el tipo debe ser
+    # "lubricante" (o "cosmetica") para que el atributo aplique al catálogo
+    # correcto — un atributo desensibilizante sobre tipo=vibrador no tiene
+    # sentido y daría 0 filas.
+    if atributo_llm and atributo_llm not in (restricciones.get("atributos") or []):
+        tipo_coherente = _CATEGORIA_FUNCIONAL_A_TIPO.get(categoria_funcional)
+        if tipo_coherente and not restricciones.get("tipo"):
+            restricciones["tipo"] = tipo_coherente
+        restricciones.setdefault("atributos", [])
+        if atributo_llm not in restricciones["atributos"]:
+            restricciones["atributos"].append(atributo_llm)
+        log.info("Atributo %r inyectado por el LLM (cat=%s, tipo=%s)",
+                 atributo_llm, categoria_funcional, restricciones.get("tipo"))
 
     return {
         "intencion": intencion,
