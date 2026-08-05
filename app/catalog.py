@@ -2420,6 +2420,38 @@ async def buscar_por_restricciones(restricciones: dict,
             return Resultado(productos=encontrados, relajado=campo,
                              restricciones=aflojadas)
 
+    # VARIOS ATRIBUTOS: soltar uno no es soltarlos todos.
+    #
+    # El último recurso de más abajo se salta a propósito cuando hay atributos, y
+    # con UNO ese razonamiento es correcto: "otros dildos" no es una respuesta
+    # parcial a "un dildo doble", es otro producto.
+    #
+    # Con dos o más la situación es distinta. En producción, un cliente pidió un
+    # dildo "con ventosa" y "para primera vez": hay 11 dildos con ventosa, pero
+    # `principiante` solo está poblado en 1 de 22, así que la intersección daba 0
+    # y el cliente acabó escalado a un humano. Enseñarle los de ventosa respeta
+    # lo que marcó de verdad, y el aviso de `relajado` se lo dice con honestidad.
+    #
+    # Se prueba soltando cada atributo por separado y se conserva el que más
+    # resultados deja: el que se cae es el que el catálogo no puede honrar.
+    atributos = list(restricciones.get("atributos") or [])
+    if len(atributos) > 1:
+        intentos: list[tuple[int, str, list[dict], dict]] = []
+        for soltar in atributos:
+            aflojadas = dict(restricciones)
+            aflojadas["atributos"] = [a for a in atributos if a != soltar]
+            encontrados = await _consultar_restricciones(aflojadas, exclude_ids, limit,
+                                                         user_text, subtipo=subtipo)
+            if encontrados:
+                intentos.append((len(encontrados), soltar, encontrados, aflojadas))
+        if intentos:
+            intentos.sort(key=lambda x: x[0], reverse=True)
+            _, soltado, encontrados, aflojadas = intentos[0]
+            log.info("Atributo relajado: %s (quedan %s) → %d productos",
+                     soltado, aflojadas, len(encontrados))
+            return Resultado(productos=encontrados, relajado=soltado,
+                             restricciones=aflojadas)
+
     # Último recurso. Si el cliente nombró una ZONA, es lo único que se respeta:
     # nunca se cae a "solo el tipo", porque eso devolvería productos de otra parte
     # del cuerpo, que es exactamente el fallo que se corrigió.
