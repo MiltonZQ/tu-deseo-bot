@@ -495,7 +495,7 @@ _VOCABULARIO_CLIENTE: tuple[tuple[tuple[str, ...], dict], ...] = (
     (("succionador", "succionadores", "succion", "satisfyer pro"), {"tipo": "succionador"}),
     (("masturbador", "masturbadores", "huevo masturb"), {"tipo": "masturbador"}),
     (("bomba", "bombas"), {"tipo": "bomba"}),
-    (("plug", "plugs", "tapon"), {"tipo": "plug"}),
+    (("plug", "plugs", "tapon", "dilatador", "dilatadores"), {"tipo": "plug"}),
     (("anillo", "anillos", "cockring"), {"tipo": "anillo"}),
     (("funda", "fundas", "extensor", "engrosador"), {"tipo": "funda"}),
     (("dildo", "dildos", "consolador", "consoladores"), {"tipo": "dildo"}),
