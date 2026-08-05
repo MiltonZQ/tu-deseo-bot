@@ -662,12 +662,33 @@ def fusionar_restricciones(previas: dict | None, nuevas: dict) -> dict:
     return fusion
 
 
+# ── VOCABULARIO CANÓNICO DE CATEGORÍAS ──
+# La ÚNICA lista de categorías funcionales válidas del sistema. Todo lo demás
+# —las listas de palabras de `catalog.py`, el vocabulario cerrado del
+# clasificador LLM, el mapa a tipos, Qdrant y el estado de conversación— debe
+# beber de aquí.
+#
+# Existe porque había dos vocabularios divergentes: las listas estáticas
+# producían `anillos-vibradores`, y el LLM `anillos-y-fundas`, para lo mismo. De
+# 13 categorías solo se compartían 7, y el código lo iba parcheando a mano
+# (`if categoria_funcional in ("anillos-vibradores", "anillos-y-fundas")`). Con
+# dos nombres para una idea, cada camino de recuperación filtraba distinto y el
+# cliente recibía productos de otra categoría.
+#
+# `anillos-vibradores` se retiró a favor de `anillos-y-fundas`, que es la que
+# entiende el LLM y la que describe el catálogo real (anillos Y fundas de pene).
+CATEGORIAS_FUNCIONALES: tuple[str, ...] = (
+    "vibradores", "succionadores", "anal", "dildos", "anillos-y-fundas",
+    "fundas-pene", "masturbadores", "bombas-pene", "lubricantes-y-cuidado",
+    "lenceria", "pareja-y-bondage", "juegos-y-accesorios",
+)
+
 # Puente con la "categoría funcional" que todavía usan el estado de conversación,
 # Qdrant y el prompt. Se mantiene mientras dure la transición.
 _TIPO_A_CATEGORIA_LEGACY = {
     "vibrador": "vibradores", "succionador": "succionadores",
     "plug": "anal", "bolas": "anal", "enema": "anal", "arnes": "pareja-y-bondage",
-    "dildo": "dildos", "anillo": "anillos-vibradores", "funda": "fundas-pene",
+    "dildo": "dildos", "anillo": "anillos-y-fundas", "funda": "fundas-pene",
     "masturbador": "masturbadores", "bomba": "bombas-pene",
     "lubricante": "lubricantes-y-cuidado", "cosmetica": "lubricantes-y-cuidado",
     "lenceria": "lenceria", "bondage": "pareja-y-bondage",

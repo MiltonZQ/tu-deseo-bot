@@ -385,7 +385,14 @@ _CATEGORIAS_LLM = {
     "dildos": "dildos, consoladores, realistas, con ventosa, de vidrio, dobles",
     "anal": "plugs anales, bolas anales, estimulación de próstata, dilatadores, arneses/strap-on",
     "masturbadores": "masturbadores masculinos, huevos, vaginas artificiales, torsos",
-    "anillos-y-fundas": "anillos para pene (vibradores o no), fundas/extensores, bombas de vacío",
+    # `anillos-y-fundas`, `fundas-pene` y `bombas-pene` son categorías distintas
+    # del vocabulario canónico y el catálogo las distingue (tipos anillo, funda y
+    # bomba). Antes esta única clave las describía a las tres, así que el LLM
+    # mandaba a fundas y bombas al cajón de los anillos y el filtro por tipo las
+    # dejaba fuera.
+    "anillos-y-fundas": "anillos para el pene, vibradores o no",
+    "fundas-pene": "fundas, extensores y prótesis que se ponen sobre el pene",
+    "bombas-pene": "bombas de vacío para el pene, manuales o automáticas",
     "pareja-y-bondage": "bondage, BDSM, kits de amarre, esposas, antifaz, fustas, látigos, velos, sadomasoquismo, juegos de pareja",
     "lubricantes-y-cuidado": "lubricantes (base agua/silicona/sabores), estimulantes, retardantes, limpiadores de juguetes, aceites, cremas íntimas",
     "lenceria": "lencería (body, baby doll, disfraz), suspensorios, pecheras, conjuntos masculinos, arneses de lencería",
@@ -398,8 +405,21 @@ _CLASIFICADOR_PROMPT = (
     "Categorías posibles (usa EXACTAMENTE la clave, minúsculas):\n"
     + "\n".join(f"- {k}: {v}" for k, v in _CATEGORIAS_LLM.items())
     + "\n\nGéneros posibles: hombre, mujer, pareja, anal, o null si no se aclara.\n"
-    "Si el mensaje NO busca un producto del catálogo (saludo, pregunta de envío, "
-    "pago, queja, producto que no vendemos), devuelve categoria \"ninguna\".\n\n"
+    "Hay dos claves más, y la diferencia entre ellas importa:\n"
+    "- \"ninguna\": el mensaje NO busca un producto. Saludo, despedida, pregunta "
+    "de envío o de horario, pago o comprobante, queja, o un producto que no "
+    "vendemos.\n"
+    "- \"indefinida\": el cliente SÍ busca un producto pero no dice de cuál "
+    "categoría, así que no se puede elegir ninguna con seguridad. Ejemplos: "
+    "\"quiero un juguete para mi novia\", \"¿qué me recomiendas?\", \"algo "
+    "discreto\", \"quiero probar algo nuevo\", \"¿qué tienen para mujer?\". Con "
+    "esta clave el bot le preguntará qué busca, que es lo correcto: adivinar una "
+    "categoría le mostraría productos que no pidió.\n"
+    "\"indefinida\" es el último recurso: si el mensaje da ALGUNA pista del tipo "
+    "de producto —para pareja, para jugar los dos, de cuero, que vibre, para el "
+    "ano— elige la categoría que corresponda. Úsala solo cuando no haya ninguna "
+    "pista. Y no uses \"ninguna\" para un cliente que quiere comprar algo aunque "
+    "no sepa qué.\n\n"
     "Subtipo (opcional): si el cliente nombra una variante concreta, ponla en "
     "\"subtipo\". Claves válidas (usa EXACTAMENTE una, minúsculas, o null):\n"
     "colegiala, coneja, conejita, diabla, enfermera, mucama, playboy, policia, "
@@ -482,7 +502,12 @@ async def clasificar_intencion_llm(user_message: str) -> dict | None:
             gen = str(gen).strip().lower()
             if gen not in ("hombre", "mujer", "pareja", "anal"):
                 gen = None
-        if cat != "ninguna" and cat not in _CATEGORIAS_LLM:
+        # "indefinida" es una respuesta VÁLIDA, no un fallo: el cliente busca
+        # producto pero no dijo de qué categoría. Distinguirla de "ninguna" es lo
+        # que permite preguntarle en vez de adivinar; antes ambas caían en
+        # "ninguna" y el bot acababa buscando por nombre suelto ("quiero un
+        # juguete para mi novia" → Limpiador De Juguetes).
+        if cat not in _CATEGORIAS_LLM and cat not in ("ninguna", "indefinida"):
             log.warning("LLM clasificó categoría inválida %r — descartada", cat)
             return None
         # subtipo y atributo: vocabulario cerrado. Si el LLM devuelve algo que no

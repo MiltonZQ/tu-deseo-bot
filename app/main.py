@@ -256,6 +256,63 @@ async def auditar_atributos(x_reload_token: str = Header(None)):
     return await clasificacion.auditar_atributos()
 
 
+@app.get("/maintenance/buscar")
+async def diagnosticar_busqueda(q: str, x_reload_token: str = Header(None)):
+    """Qué devuelve cada camino de recuperación para un texto dado. SOLO LEE.
+
+    Hay cuatro caminos que pueden traer productos —Qdrant semántico, el SQL por
+    facetas, el SQL por nombre y la reclasificación en Python de cada
+    candidato— y desde fuera solo se ve el resultado final, así que no hay forma
+    de saber cuál mandó. Qdrant además solo resuelve dentro de la red de Docker:
+    una evaluación desde un portátil lo ve siempre apagado y mide el catálogo
+    equivocado sin enterarse.
+
+    Este endpoint expone el reparto sin abrir el puerto de Qdrant a internet.
+    """
+    if not config.RELOAD_TOKEN or x_reload_token != config.RELOAD_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    def _resumen(productos):
+        return [{"id": p.get("id"), "nombre": p.get("nombre"), "tipo": p.get("tipo"),
+                 "zona": p.get("zona"), "atributos": p.get("atributos")}
+                for p in (productos or [])]
+
+    clasif = await catalog.clasificar_intencion_cliente(q, [], None)
+    salida = {
+        "mensaje": q,
+        "clasificacion": {k: clasif.get(k) for k in (
+            "intencion", "categoria_funcional", "genero", "subtipo_detectado",
+            "restricciones", "calificado", "origen_clasificacion")},
+    }
+
+    try:
+        from app import vector_store
+        semanticos = await vector_store.search_semantic_products(
+            query=q, categoria_funcional=clasif.get("categoria_funcional"),
+            genero=clasif.get("genero"), limit=5)
+        salida["qdrant"] = {"habilitado": config.QDRANT_ENABLED,
+                            "productos": _resumen(semanticos)}
+    except Exception as exc:
+        salida["qdrant"] = {"habilitado": config.QDRANT_ENABLED, "error": str(exc)}
+
+    restricciones = clasif.get("restricciones") or {}
+    if restricciones:
+        res = await catalog.buscar_por_restricciones(
+            restricciones, limit=5, user_text=q,
+            subtipo=clasif.get("subtipo_detectado"))
+        salida["sql_por_facetas"] = {"restricciones": restricciones,
+                                     "relajado": res.relajado,
+                                     "productos": _resumen(res.productos)}
+    else:
+        salida["sql_por_facetas"] = {"restricciones": {}, "productos": []}
+
+    finales = await catalog.get_productos_para_recomendar(
+        clasif.get("categoria_funcional"), clasif.get("genero"), user_text=q,
+        limit=5, subtipo=clasif.get("subtipo_detectado"))
+    salida["resultado_final"] = _resumen(finales)
+    return salida
+
+
 @app.post("/maintenance/reset-all-conversations")
 async def reset_all_conversations(
     x_reload_token: str = Header(None),
@@ -429,6 +486,16 @@ UMBRAL_PREGUNTA_CLARIFICACION = 8
 # es amplia y no hay nada que preguntarle.
 _FACETAS_DISCRIMINANTES = ("zona", "control", "genero_uso", "atributos", "vibra")
 
+
+# Cuando el cliente quiere comprar pero no acotó nada. Ofrece las familias más
+# vendidas como puerta de entrada, en vez de pedirle que adivine el vocabulario
+# del catálogo.
+PREGUNTA_SIN_CATEGORIA = (
+    "¡Claro que sí! Para recomendarte bien, cuéntame un poco más: ¿lo buscas "
+    "para **ti**, para **ella**, para **él** o para **disfrutar en pareja**? "
+    "Y si ya tienes algo en mente —**vibradores**, **lencería**, **lubricantes**, "
+    "**juegos para pareja**— dímelo y te muestro 😊"
+)
 
 _PREGUNTAS_CALIFICACION = {
     "masturbadores": (
@@ -681,7 +748,17 @@ def _pregunta_de_calificacion(info: dict) -> str | None:
     if (info.get("ya_vio_productos") or info.get("en_fase_venta")
             or info.get("pide_numero_de_lista")):
         return None
-    return _PREGUNTAS_CALIFICACION.get(info.get("categoria_funcional") or "")
+    pregunta = _PREGUNTAS_CALIFICACION.get(info.get("categoria_funcional") or "")
+    if pregunta:
+        return pregunta
+    # Quiere comprar pero no dijo qué ("un juguete para mi novia", "algo
+    # discreto", "¿qué me recomiendas?"). Antes esto no tenía rama propia: sin
+    # categoría no había pregunta, así que el turno se iba a buscar por nombre
+    # suelto y devolvía lo que casara con la palabra — a quien pedía un juguete
+    # le llegaba el limpiador de juguetes.
+    if info.get("busca_sin_categoria"):
+        return PREGUNTA_SIN_CATEGORIA
+    return None
 
 
 def _texto_desde_candidatos(candidatos: list[dict], info: dict,
@@ -1136,8 +1213,15 @@ async def _recuperar_candidatos(
     # paginación. Una marca que no esté en `_MARCAS_CONOCIDAS` seguirá sin
     # encontrarse a mitad de conversación hasta que los colores y ordinales
     # dejen de contar como discriminantes.
+    # Tercera guardia del mismo contrato: este camino busca un NOMBRE que el
+    # cliente habría escrito (una marca fuera de las listas). Si el clasificador
+    # dictaminó que el cliente busca producto pero no nombró ninguno, sus
+    # palabras sueltas no son marcas y buscarlas casa cualquier cosa: "juguete"
+    # de "quiero un juguete para mi novia" traía los cuatro Limpiadores De
+    # Juguetes del catálogo.
     producto_por_nombre: list[dict] = []
-    if not clasif.get("es_especifico") and (not estado_tiene_cat or reset_state):
+    if (not clasif.get("es_especifico") and not clasif.get("busca_sin_categoria")
+            and (not estado_tiene_cat or reset_state)):
         tokens_extra = catalog._tokens_no_reconocidos(user_text)
         if tokens_extra:
             exclude_previo = estado.get("productos_mostrados", []) if estado else []
@@ -1437,14 +1521,20 @@ async def _recuperar_candidatos(
                 if candidatos:
                     cat_func = cat_func_fb
 
-        # Si no hay candidatos por categoría, intentar búsqueda por nombre:
-        if not candidatos and (debe_mostrar or clasif.get("es_especifico")):
+        # Búsqueda por NOMBRE. Es el último recurso y el más ciego: casa
+        # palabras del mensaje contra nombre y descripción, sin categoría que lo
+        # ancle. Por eso NO corre cuando el clasificador dijo que el cliente
+        # busca producto pero no acotó cuál: ahí la respuesta correcta es
+        # preguntarle. Sin esta guardia, "quiero un juguete para mi novia"
+        # casaba la palabra "juguete" y devolvía Limpiador De Juguetes.
+        sin_ancla = clasif.get("busca_sin_categoria")
+        if not candidatos and not sin_ancla and (debe_mostrar or clasif.get("es_especifico")):
             especificos = await catalog.buscar_producto_especifico(
                 user_text, limit=5, exclude_ids=exclude)
             if especificos:
                 candidatos = especificos
 
-        if not candidatos and debe_mostrar:
+        if not candidatos and debe_mostrar and not sin_ancla:
             # Último recurso: buscar por el sustantivo/intención detectada.
             termino = clasif["sustantivo"] or intencion or cat_func
             if termino:
@@ -1524,6 +1614,11 @@ async def _recuperar_candidatos(
         "agotado_por_facetas": agotado_por_facetas,
         "debe_mostrar": debe_mostrar and bool(candidatos),
         "subtipo_detectado": clasif.get("subtipo_detectado"),
+        # Quién decidió la categoría ("llm" / "listas" / "subtipo" / "estado").
+        # Viaja hasta aquí para poder auditar una conversación y medir la mezcla.
+        "origen_clasificacion": clasif.get("origen_clasificacion"),
+        # Busca producto pero no dijo cuál: toca preguntar, no adivinar.
+        "busca_sin_categoria": bool(clasif.get("busca_sin_categoria")),
         "restricciones": restricciones,
         "relajado": relajado,
         # Texto que originó la búsqueda activa. Se persiste para que el "ver

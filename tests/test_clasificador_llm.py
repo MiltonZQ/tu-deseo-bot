@@ -353,3 +353,48 @@ def test_cuando_el_llm_dice_ninguna_las_listas_siguen_funcionando():
     assert r["subtipo_detectado"] is None, r
     assert not (r["restricciones"].get("atributos")), r["restricciones"]
 
+
+
+def test_todos_los_caminos_usan_el_vocabulario_canonico():
+    """Una sola lista de categorías, en `facetas.CATEGORIAS_FUNCIONALES`.
+
+    Había dos vocabularios divergentes: las listas estáticas producían
+    `anillos-vibradores` y el LLM `anillos-y-fundas` para lo mismo, así que de 13
+    categorías solo se compartían 7 y el código lo parcheaba a mano
+    (`if categoria_funcional in ("anillos-vibradores", "anillos-y-fundas")`). Con
+    dos nombres para una idea cada camino de recuperación filtra distinto y el
+    cliente recibe productos de otra categoría. Este test impide que vuelvan a
+    separarse: cualquier camino nuevo tiene que declararse en el canon.
+    """
+    from app import catalog, facetas
+
+    canon = set(facetas.CATEGORIAS_FUNCIONALES)
+    fuentes = {
+        "listas de intención": set(catalog._INTENCION_A_CATEGORIA_FUNCIONAL.values()),
+        "listas de subtipo": set(catalog._SUBTIPO_A_CATEGORIA.values()),
+        "vocabulario del LLM": set(openai_client._CATEGORIAS_LLM),
+        "mapa categoría→tipos": set(catalog._CATEGORIA_FUNCIONAL_A_TIPOS),
+        "legacy de facetas": set(facetas._TIPO_A_CATEGORIA_LEGACY.values()),
+        "alternativas por género": {c for v in
+                                    catalog._CATEGORIAS_ALTERNATIVAS_POR_GENERO.values()
+                                    for c in v},
+    }
+    for nombre, categorias in fuentes.items():
+        fuera = sorted(categorias - canon)
+        assert not fuera, f"{nombre} usa categorías que no están en el canon: {fuera}"
+
+
+def test_toda_categoria_canonica_es_utilizable():
+    """Declarar una categoría no basta: hay que poder clasificarla y filtrarla.
+
+    Sin entrada en `_CATEGORIA_FUNCIONAL_A_TIPOS` no se puede anclar la búsqueda
+    al tipo correcto; sin estar en el vocabulario del LLM, el clasificador nunca
+    la elige y la categoría es letra muerta.
+    """
+    from app import catalog, facetas
+
+    canon = set(facetas.CATEGORIAS_FUNCIONALES)
+    sin_tipos = sorted(canon - set(catalog._CATEGORIA_FUNCIONAL_A_TIPOS))
+    assert not sin_tipos, f"categorías sin mapa a tipos: {sin_tipos}"
+    sin_llm = sorted(canon - set(openai_client._CATEGORIAS_LLM))
+    assert not sin_llm, f"categorías que el LLM no puede elegir: {sin_llm}"

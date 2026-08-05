@@ -303,6 +303,77 @@ def _productos_esperados(caso: dict, nombres: list[str]) -> tuple[int, int]:
     return (aciertos, len(nombres) or 1)
 
 
+def _evaluar(caso: dict, dato: dict) -> tuple[str, str]:
+    """(veredicto, detalle) de un caso contra lo que se esperaba de él.
+
+    Cada caso declara solo lo que le importa: la categoría, si debe preguntar en
+    vez de mostrar, si debe escalar, o qué productos son aceptables. Un caso sin
+    expectativas queda en `revisar`, que es honesto: nadie ha dicho todavía qué
+    es lo correcto ahí.
+    """
+    decision = dato["decision"]
+    rama = dato["rama"]
+    fallos = []
+
+    esperada = caso.get("categoria_esperada")
+    if esperada and decision["categoria_funcional"] != esperada:
+        fallos.append(f"categoría {decision['categoria_funcional']!r} ≠ {esperada!r}")
+
+    if caso.get("debe_preguntar") and "calificacion" not in rama:
+        fallos.append(f"debía preguntar y fue a {rama}")
+
+    if caso.get("debe_escalar") is not None:
+        if decision["escala"] != caso["debe_escalar"]:
+            fallos.append("escaló sin deber" if decision["escala"] else "no escaló")
+
+    pistas = caso.get("productos_correctos")
+    nombres = decision["productos"]
+    if pistas == []:
+        if nombres:
+            fallos.append(f"no debía mostrar productos y mostró {len(nombres)}")
+    elif pistas:
+        malos = [n for n in nombres
+                 if not any(p.lower() in n.lower() for p in pistas)]
+        if malos:
+            fallos.append(f"{len(malos)}/{len(nombres)} fuera de lo esperado: {malos[0][:40]!r}")
+
+    if fallos:
+        return "FALLA", "; ".join(fallos)
+    tiene_criterio = any(caso.get(k) is not None for k in
+                         ("categoria_esperada", "debe_preguntar", "debe_escalar",
+                          "productos_correctos"))
+    return ("ok", "") if tiene_criterio else ("revisar", caso.get("nota", ""))
+
+
+def informe(args) -> int:
+    """Puntúa una corrida contra las expectativas declaradas en los casos."""
+    datos = json.loads(Path(args.informe).read_text())["resultados"]
+    conteo = {"ok": 0, "FALLA": 0, "revisar": 0}
+    por_grupo: dict[str, dict[str, int]] = {}
+    fallas = []
+    for cid, dato in datos.items():
+        caso = dato["caso"]
+        veredicto, detalle = _evaluar(caso, dato)
+        conteo[veredicto] += 1
+        grupo = caso.get("grupo", "?")
+        por_grupo.setdefault(grupo, {"ok": 0, "FALLA": 0, "revisar": 0})[veredicto] += 1
+        if veredicto == "FALLA":
+            fallas.append((grupo, cid, caso["mensaje"], detalle))
+
+    print(f"{'grupo':14} {'ok':>4} {'falla':>6} {'revisar':>8}")
+    print("-" * 36)
+    for grupo, c in sorted(por_grupo.items()):
+        print(f"{grupo:14} {c['ok']:4} {c['FALLA']:6} {c['revisar']:8}")
+    print("-" * 36)
+    print(f"{'TOTAL':14} {conteo['ok']:4} {conteo['FALLA']:6} {conteo['revisar']:8}")
+
+    if fallas:
+        print(f"\n{len(fallas)} fallos:")
+        for grupo, cid, mensaje, detalle in fallas:
+            print(f"  [{grupo}] {cid}: {mensaje!r}\n      {detalle}")
+    return 0
+
+
 def comparar(args) -> int:
     base = json.loads(Path(args.comparar[0]).read_text())["resultados"]
     nuevo = json.loads(Path(args.comparar[1]).read_text())["resultados"]
@@ -361,8 +432,12 @@ def main_cli() -> int:
     p.add_argument("--caso", nargs="*", help="ids concretos a correr")
     p.add_argument("--registro-llm", help="JSONL con cada petición y respuesta")
     p.add_argument("--comparar", nargs=2, metavar=("BASE", "NUEVO"))
+    p.add_argument("--informe", metavar="RESULTADOS",
+                   help="puntúa una corrida contra lo que declara cada caso")
     args = p.parse_args()
 
+    if args.informe:
+        return informe(args)
     if args.comparar:
         return comparar(args)
     if not args.arbol or not args.salida:

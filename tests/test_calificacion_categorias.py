@@ -32,6 +32,11 @@ def _extraer_constantes(ruta: Path, nombres: list[str]) -> dict:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id in nombres:
                     out[target.id] = ast.literal_eval(node.value)
+        # También las que llevan anotación de tipo (`X: tuple[str, ...] = (...)`),
+        # como `facetas.CATEGORIAS_FUNCIONALES`.
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+                and node.target.id in nombres and node.value is not None:
+            out[node.target.id] = ast.literal_eval(node.value)
     return out
 
 
@@ -189,12 +194,18 @@ def test_foto_request_re_ver_mas_opciones():
 
 
 def test_anillos_vibradores_mapeo():
-    """Verifica el mapeo real de 'anillos vibradores' en el catálogo."""
+    """'anillos vibradores' y 'anillos-y-fundas' son la MISMA categoría.
+
+    Antes eran dos: las listas estáticas decían `anillos-vibradores` y el LLM
+    `anillos-y-fundas`, y el código las reconciliaba a mano. Con dos nombres para
+    una idea, cada camino de recuperación filtraba distinto. Ahora solo existe la
+    del vocabulario canónico (`facetas.CATEGORIAS_FUNCIONALES`).
+    """
     mapa = _extraer_constantes(_CAT, ["_INTENCION_A_CATEGORIA_FUNCIONAL"])["_INTENCION_A_CATEGORIA_FUNCIONAL"]
-    # 'anillos-vibradores' es una categoría funcional propia (distinta de
-    # 'anillos-y-fundas', ver CATEGORIAS_FUNCIONALES en catalog.py).
-    assert mapa.get("anillos vibradores") == "anillos-vibradores"
-    assert mapa.get("anillo vibrador") == "anillos-vibradores"
+    assert mapa.get("anillos vibradores") == "anillos-y-fundas"
+    assert mapa.get("anillo vibrador") == "anillos-y-fundas"
+    assert "anillos-vibradores" not in set(mapa.values()), (
+        "volvió a aparecer la categoría duplicada")
 
 
 # ── BUG 3 / TYPOS: reconocimiento de errores de tipeo del cliente ───────────
@@ -851,17 +862,22 @@ def test_bug12_kits_amarre_ya_en_mapeo_deterministico():
 
 
 def test_bug12_llm_clasificador_existe_y_es_restrictivo():
-    """Verifica que existe clasificar_intencion_llm en openai_client.py y que la
-    lista de categorías es exactamente las 11 (no inventa categorías)."""
+    """El LLM elige dentro del vocabulario canónico, ni más ni menos.
+
+    La lista esperada no se repite aquí a mano: se lee de
+    `facetas.CATEGORIAS_FUNCIONALES`, que es la única fuente. Repetirla era
+    justamente lo que dejó que los dos vocabularios se separaran sin que nadie
+    se enterara.
+    """
     _OAI = _ROOT / "app" / "openai_client.py"
+    _FAC = _ROOT / "app" / "facetas.py"
     extras = _extraer_constantes(_OAI, ["_CATEGORIAS_LLM"])
     assert "_CATEGORIAS_LLM" in extras, "Falta _CATEGORIAS_LLM en openai_client.py"
-    cats = extras["_CATEGORIAS_LLM"]
-    esperadas = {"vibradores", "succionadores", "dildos", "anal", "masturbadores",
-                 "anillos-y-fundas", "pareja-y-bondage", "lubricantes-y-cuidado",
-                 "lenceria", "juegos-y-accesorios"}
-    assert set(cats.keys()) == esperadas, (
-        f"El LLM solo debe poder elegir entre las 11 categorías. Got: {set(cats.keys()) - esperadas} extra")
+    canon = set(_extraer_constantes(_FAC, ["CATEGORIAS_FUNCIONALES"])["CATEGORIAS_FUNCIONALES"])
+    cats = set(extras["_CATEGORIAS_LLM"].keys())
+    assert cats == canon, (
+        f"el LLM ofrece categorías fuera del canon: {sorted(cats - canon)}; "
+        f"le faltan del canon: {sorted(canon - cats)}")
 
 
 def test_bug12_llm_clasificador_valida_categoria():

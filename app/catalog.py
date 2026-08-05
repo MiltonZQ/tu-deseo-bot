@@ -341,7 +341,7 @@ async def get_productos_en_texto(text: str, limit: int = 3) -> list[dict]:
 # re-sincronizaciones de WooCommerce sin degradarse.
 
 CATEGORIAS_FUNCIONALES = [
-    "anillos-vibradores",
+    "anillos-y-fundas",
     "fundas-pene",
     "bombas-pene",
     "vibradores",
@@ -371,7 +371,7 @@ CATEGORIAS_PUNTUALES = {
     "bombas-pene",
     "fundas-pene",
     "masturbadores",
-    "anillos-vibradores",
+    "anillos-y-fundas",
     "anillos-y-fundas",
 }
 
@@ -392,11 +392,11 @@ _REGLAS_CATEGORIA = [
     (("bomba para", "bomba pene", "bomba automatic", "bomba automática", "bomba de vacio", "bomba vacio", "hefesto"), "bombas-pene"),
     # Anillos vibradores y eróticos para él/pareja
     (("anillo vibrador", "anillos vibradores", "anillo vibrante", "anillos vibrantes",
-      "flexring", "satisfyer bull", "diamo", "candil", "frodo", "optimus", "anillo peneano", "anillos peneanos"), "anillos-vibradores"),
+      "flexring", "satisfyer bull", "diamo", "candil", "frodo", "optimus", "anillo peneano", "anillos peneanos"), "anillos-y-fundas"),
     # Fundas para el pene (sin vibración o extensores)
     (("funda para el pene", "funda pene", "extensor pene", "engrosador"), "fundas-pene"),
     # Anillos genéricos
-    (("anillo", "anillos"), "anillos-vibradores"),
+    (("anillo", "anillos"), "anillos-y-fundas"),
     # Bondage / BDSM / pareja
     (("bondage", "bdsm", "esposas", "antifaz", "amarre", "fusta", "latigo", "látigo",
       "kit", "vendas", "mordaza", "sadomaso", "sado", "cepo", "spreade"), "pareja-y-bondage"),
@@ -618,9 +618,9 @@ def _genero_normalizado(nombre: str, descripcion: str | None = "",
 # Las categorías alternativas SE FILTRAN SIEMPRE por el género del cliente, así
 # que no mezclan productos de mujer cuando el cliente pidió hombre.
 _CATEGORIAS_ALTERNATIVAS_POR_GENERO = {
-    "hombre": ["anillos-vibradores", "anillos-y-fundas", "fundas-pene", "bombas-pene", "masturbadores", "anal"],
+    "hombre": ["anillos-y-fundas", "fundas-pene", "bombas-pene", "masturbadores", "anal"],
     "anal": ["anal", "anillos-y-fundas"],
-    "pareja": ["pareja-y-bondage", "vibradores", "anillos-vibradores", "anillos-y-fundas"],
+    "pareja": ["pareja-y-bondage", "vibradores", "anillos-y-fundas"],
     "mujer": ["vibradores", "succionadores", "dildos", "lenceria"],
 }
 
@@ -759,14 +759,14 @@ async def export_knowledge_md(path: str | Path | None = None) -> Path:
 # Mapa de intención del cliente (lo que busca) -> categoría funcional interna.
 # Incluye sinónimos y jerga colombiana ("chimbo" = pene -> hombre / anillos).
 _INTENCION_A_CATEGORIA_FUNCIONAL = {
-    "anillos vibradores": "anillos-vibradores",
-    "anillo vibrador": "anillos-vibradores",
-    "anillos de pene": "anillos-vibradores",
-    "anillo de pene": "anillos-vibradores",
-    "anillos peneanos": "anillos-vibradores",
-    "anillo peneano": "anillos-vibradores",
-    "anillos eroticos": "anillos-vibradores",
-    "anillo erotico": "anillos-vibradores",
+    "anillos vibradores": "anillos-y-fundas",
+    "anillo vibrador": "anillos-y-fundas",
+    "anillos de pene": "anillos-y-fundas",
+    "anillo de pene": "anillos-y-fundas",
+    "anillos peneanos": "anillos-y-fundas",
+    "anillo peneano": "anillos-y-fundas",
+    "anillos eroticos": "anillos-y-fundas",
+    "anillo erotico": "anillos-y-fundas",
     "vibradores": "vibradores",
     "vibrador": "vibradores",
     "succionador": "succionadores",
@@ -779,8 +779,8 @@ _INTENCION_A_CATEGORIA_FUNCIONAL = {
     "anal": "anal",
     "masturbador": "masturbadores",
     "masturbadores": "masturbadores",
-    "anillo": "anillos-vibradores",
-    "anillos": "anillos-vibradores",
+    "anillo": "anillos-y-fundas",
+    "anillos": "anillos-y-fundas",
     "funda": "fundas-pene",
     "fundas": "fundas-pene",
     "funda para el pene": "fundas-pene",
@@ -1503,38 +1503,64 @@ async def clasificar_intencion_cliente(user_text: str,
             break
     tiene_subtipo = subtipo_detectado is not None
 
-    # RESPALDO LLM: si el clasificador determinístico (listas de palabras) no
-    # reconoció ninguna categoría, pero el mensaje parece buscar un producto
-    # (no es saludo/pago/queja), hacer una llamada BARATA al LLM que clasifica
-    # en una de las 11 categorías cerradas. Así cubrimos jerga/variantes no
-    # listadas ("para demorar", "algo para la erección", kits de sadomasoquismo,
-    # cinturón de castidad, etc.) sin mantener listas infinitas. El LLM solo
-    # puede elegir una de las 11 o "ninguna", y ahora también devuelve subtipo
-    # y atributo (vocabulario cerrado) — los propagamos para que el SQL filtre
-    # por la característica funcional que el cliente describió: "para demorar"
-    # → atributo desensibilizante → retardantes, no lubricantes cualesquiera.
+    # ── QUIÉN CLASIFICA LA INTENCIÓN: EL LLM ──
+    # Las listas de palabras de arriba ya corrieron, pero como PROPUESTA: quien
+    # decide la categoría es el LLM, que elige dentro del vocabulario canónico
+    # cerrado y mide 100 % de acierto sobre 60 pruebas contra el catálogo real.
+    #
+    # Antes era al revés —el LLM solo se llamaba si las listas no encontraban
+    # nada— y eso tenía dos fallos sin arreglo posible: una lista que acertaba
+    # MAL nunca se corregía ("algo para la ducha" → subtipo `ducha` → enemas,
+    # cuando el cliente quería algo sumergible), y una categoría que las listas
+    # no cubrían no llegaba nunca ("tienen plugs anales" no lo reconocían).
+    #
+    # Las listas siguen siendo mejores en lo suyo —variantes nombradas
+    # literalmente ("colegiala", "hitachi")— así que no se descartan: rellenan
+    # lo que el LLM no aportó. Y si el LLM cae o da timeout, mandan ellas: por
+    # eso se calculan antes y no después.
+    #
+    # Una respuesta "ninguna" NO borra lo que dijeron las listas. El LLM decide
+    # qué categoría es, no si el mensaje merece búsqueda; esa segunda decisión
+    # tiene sus propias palancas más abajo (fase de venta, selección numérica).
     atributo_llm = None
-    if not categoria_funcional and not subtipo_detectado and user_text and len(user_text.strip()) >= 4:
+    origen_clasificacion = "listas" if categoria_funcional else None
+    # El cliente quiere comprar pero no dijo qué: hay que PREGUNTARLE, no
+    # adivinar. Sin esta señal, "quiero un juguete para mi novia" caía en el
+    # mismo saco que "hola" y la búsqueda degeneraba a coincidencia por nombre,
+    # que devolvía Limpiador De Juguetes.
+    busca_sin_categoria = False
+    if user_text and len(user_text.strip()) >= 4:
         try:
             from app import openai_client
             res_llm = await openai_client.clasificar_intencion_llm(user_text)
-            if res_llm and res_llm.get("categoria") and res_llm["categoria"] != "ninguna":
+            if res_llm and res_llm.get("categoria") == "indefinida":
+                busca_sin_categoria = not categoria_funcional
+                origen_clasificacion = origen_clasificacion or "llm"
+            if res_llm and res_llm.get("categoria") and res_llm["categoria"] not in ("ninguna", "indefinida"):
+                if categoria_funcional and categoria_funcional != res_llm["categoria"]:
+                    log.info("El LLM corrige la categoría de las listas: %s → %s (%r)",
+                             categoria_funcional, res_llm["categoria"], user_text[:60])
+                    # La intención venía de la categoría vieja y ya no la
+                    # describe; rotular con ella daría "opciones de duchas
+                    # anales" sobre fotos de vibradores sumergibles.
+                    intencion = None
                 categoria_funcional = res_llm["categoria"]
+                origen_clasificacion = "llm"
                 cat_desde_mensaje = True
                 if not intencion:
                     intencion = res_llm["categoria"]
                 if not genero and res_llm.get("genero"):
                     genero = res_llm["genero"]
-                # El subtipo y el atributo del LLM son la información fina que
-                # las listas no supieron extraer. El subtipo alimenta el filtro
-                # por nombre; el atributo alimenta el filtro SQL.
+                # El subtipo y el atributo son la información fina. El subtipo de
+                # las listas gana si lo hay: reconoce la palabra literal del
+                # catálogo. El atributo solo lo aporta el LLM.
                 if not subtipo_detectado and res_llm.get("subtipo"):
                     subtipo_detectado = res_llm["subtipo"]
                     tiene_subtipo = True
                 if res_llm.get("atributo"):
                     atributo_llm = res_llm["atributo"]
         except Exception:
-            log.warning("Respaldo LLM de clasificación falló — se ignora")
+            log.warning("Clasificación LLM falló — mandan las listas")
 
     # DERIVACIÓN subtipo → categoría: si el cliente respondió SOLO un subtipo (ej:
     # "sabores", "doble") sin sustantivo de categoría, derivar la categoría del
@@ -1544,6 +1570,7 @@ async def clasificar_intencion_cliente(user_text: str,
         cat_derivada = _SUBTIPO_A_CATEGORIA.get(subtipo_detectado)
         if cat_derivada:
             categoria_funcional = cat_derivada
+            origen_clasificacion = origen_clasificacion or "subtipo"
             cat_desde_mensaje = True
             if not intencion:
                 intencion = subtipo_detectado
@@ -1631,6 +1658,7 @@ async def clasificar_intencion_cliente(user_text: str,
     if cat_activa_memoria and not cambio_de_tema:
         categoria_funcional = cat_activa_memoria
         intencion = cat_activa_memoria
+        origen_clasificacion = "estado"
         if "anal" in norm_user or "desensibiliz" in norm_user:
             subtipo_detectado = "desensibiliz"
         elif "agua" in norm_user:
@@ -1750,6 +1778,14 @@ async def clasificar_intencion_cliente(user_text: str,
         "subtipo_detectado": subtipo_detectado,
         "es_especifico": es_especifico,
         "restricciones": restricciones,
+        # Quién decidió la categoría: "llm", "listas", "subtipo" (derivada del
+        # subtipo) o "estado" (heredada de la memoria). Sin este rastro no se
+        # puede auditar una conversación ni medir la mezcla — averiguar que
+        # mandaban las listas y no el LLM costó instrumentar el código a mano.
+        "origen_clasificacion": origen_clasificacion,
+        # El cliente busca producto pero no acotó la categoría: el turno correcto
+        # es preguntarle, no mostrarle lo que sea.
+        "busca_sin_categoria": busca_sin_categoria and not categoria_funcional,
     }
 
 
@@ -1886,7 +1922,7 @@ async def get_productos_para_recomendar(
         norm_text = _normalizar_texto(f"{p.get('nombre', '')} {p.get('descripcion', '')}")
         usr_text = _normalizar_texto(user_text)
         # Si busca anillos vibradores
-        if categoria_funcional in ("anillos-vibradores", "anillos-y-fundas") or "anillo" in usr_text:
+        if categoria_funcional == "anillos-y-fundas" or "anillo" in usr_text:
             if "bomba" in norm_text and "anillo" not in norm_text:
                 return False
             if any(w in norm_text for w in ("succionador", "air pulse", "pro 2", "satisfyer pro")):
@@ -1967,7 +2003,7 @@ async def get_productos_para_recomendar(
                     # permitir si no hay categoria exacta pero es cercana? por ahora exigir
                     if cat_q != categoria_funcional:
                         # para puntuales como succionadores, exigir exacto
-                        if categoria_funcional in ("succionadores","bombas-pene","fundas-pene","masturbadores","anillos-vibradores"):
+                        if categoria_funcional in ("succionadores", "bombas-pene", "fundas-pene", "masturbadores", "anillos-y-fundas"):
                             continue
             if genero:
                 gen_q = p.get("genero") or _genero_normalizado(p.get("nombre",""), p.get("descripcion"), "")
