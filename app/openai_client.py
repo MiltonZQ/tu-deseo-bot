@@ -167,7 +167,8 @@ async def complete(user_message: str, history: list[dict],
                    summary: str | None = None,
                    candidatos: list[dict] | None = None,
                    estado: dict | None = None,
-                   debe_mostrar_fotos: bool = False) -> str:
+                   debe_mostrar_fotos: bool = False,
+                   producto_activo: dict | None = None) -> str:
     now = datetime.now(config.bot_zoneinfo())
     context_lines = [
         f"- Fecha y hora actual: {now.strftime('%A %d/%m/%Y %H:%M')} ({config.BOT_TIMEZONE})",
@@ -244,11 +245,43 @@ async def complete(user_message: str, history: list[dict],
             )
         candidatos_block = "\n\n" + "\n".join(c_lines) + "\n"
 
+    # Ficha del producto activo: cuando el cliente pregunta sobre lo que acaba
+    # de ver ("¿tiene sabor?", "¿frío y calor?", "¿contraindicaciones?"), el LLM
+    # necesita la ficha REAL del producto para no responder con sentido común.
+    # Sin esto, contestaba "sí, tiene sabor" a un lubricante que no lo tiene.
+    # El producto activo es el ÚLTIMO mostrado; lo resuelve main.py por ID.
+    ficha_block = ""
+    if producto_activo:
+        f_lines = [
+            "## Producto que el cliente está viendo AHORA",
+            "El cliente pregunta sobre ESTE producto que ya le mostraste. "
+            "Responde sus dudas (sabor, material, modo de uso, contraindicaciones, "
+            "para quién es, etc.) usando SU ficha real, no conocimiento genérico:",
+            f"- **{producto_activo.get('nombre', '')}** — ${int(producto_activo.get('precio', 0)):,}".replace(",", "."),
+        ]
+        desc = (producto_activo.get("descripcion") or "").strip()
+        if desc:
+            f_lines.append(f"- Descripción: {desc}")
+        attrs = producto_activo.get("atributos") or []
+        if attrs:
+            f_lines.append(f"- Atributos: {', '.join(attrs)}")
+        tipo = producto_activo.get("tipo")
+        if tipo:
+            f_lines.append(f"- Tipo: {tipo}")
+        zona = producto_activo.get("zona")
+        if zona:
+            f_lines.append(f"- Zona: {zona}")
+        if producto_activo.get("vibra"):
+            f_lines.append("- Vibra: sí")
+        f_lines.append(f"- ID: {producto_activo.get('id')}")
+        ficha_block = "\n\n" + "\n".join(f_lines) + "\n"
+
     system_prompt = (
         f"{config.SYSTEM_PROMPT}\n\n"
         f"{summary_block}"
         f"{estado_block}"
         f"{candidatos_block}"
+        f"{ficha_block}"
         "## Contexto operativo\n"
         + "\n".join(context_lines)
     )

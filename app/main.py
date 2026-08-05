@@ -1877,6 +1877,22 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
                                             mas_disenos=bool(es_ver_mas_pedido),
                                             offset=offset_numeracion)
     else:
+        # Turno de asesoría: el cliente pregunta sobre el producto que ya vio
+        # ("¿tiene sabor?", "¿frío y calor?", "¿contraindicaciones?"). El LLM
+        # necesita la ficha REAL de ese producto para no responder con sentido
+        # común. Sin esto contestaba "sí, tiene sabor" a un lubricante que no.
+        # Es turno de asesoría si NO va a mostrar productos nuevos, HAY un
+        # producto activo (último mostrado), NO es checkout ni selección numérica.
+        producto_activo = None
+        es_seleccion = _es_seleccion_de_lista_mostrada(
+            user_text, history[-6:] if history else [])
+        if (not info["debe_mostrar"] and ids_mostrados
+                and not info.get("en_fase_venta") and not es_seleccion):
+            try:
+                producto_activo = await catalog.get_producto_by_id(ids_mostrados[-1])
+            except Exception:
+                log.warning("No se pudo cargar el producto activo id=%s para asesoría",
+                            ids_mostrados[-1] if ids_mostrados else None)
         raw_reply = await openai_client.complete(
         user_text, history,
         lead=lead, summary=summary_text,
@@ -1894,6 +1910,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             "productos_con_precios": productos_detalle_estado,
         },
         debe_mostrar_fotos=info["debe_mostrar"],
+        producto_activo=producto_activo,
     )
     reply = await leads.process_reply(
         wa_id,
