@@ -1014,8 +1014,16 @@ def test_bug14_resolver_parsea_marcadores_foto_id():
     assert ids3 == []
 
 
-def test_bug14_resolver_marcadores_es_prioridad():
-    """Verifica que el código real prioriza los marcadores [FOTO:ID] en el resolver."""
+def test_bug14_el_resolver_prioriza_la_fuente_mas_fiable():
+    """La fuente más fiable de qué compró el cliente va ANTES del fallback por
+    nombres sobre el historial.
+
+    Esa fuente era la lista de IDs que el bot había enviado como fotos (los
+    marcadores [FOTO:ID] se limpian del historial, así que no se podían releer de
+    ahí). Ahora es el carrito, que es mejor por dos motivos: registra lo que el
+    cliente ELIGIÓ y no solo lo que se le mostró, y guarda el precio que se le
+    dijo en ese momento.
+    """
     import ast
     _PED = _ROOT / "app" / "pedidos.py"
     tree = ast.parse(_PED.read_text())
@@ -1023,11 +1031,11 @@ def test_bug14_resolver_marcadores_es_prioridad():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name == "_resolver_productos_y_total":
                 src = ast.get_source_segment(_PED.read_text(), node)
-                assert "FOTO" in src, "El resolver debe parsear marcadores [FOTO:ID]"
-                # Debe estar ANTES del fallback por nombres (prioridad).
-                foto_pos = src.index("FOTO")
+                assert "carrito" in src, "El resolver debe leer el carrito"
+                carrito_pos = src.index("for item in (carrito")
                 nombre_pos = src.index("get_productos_en_texto")
-                assert foto_pos < nombre_pos, "Marcadores [FOTO:ID] deben ir antes del fallback por nombres"
+                assert carrito_pos < nombre_pos, (
+                    "el carrito debe ir antes del fallback por nombres")
                 return
     raise AssertionError("No se encontró _resolver_productos_y_total")
 
