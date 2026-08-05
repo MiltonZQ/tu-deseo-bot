@@ -559,14 +559,25 @@ _OFRECE_PRODUCTOS_RE = re.compile(
 # ninguna de las frases de _OFRECE_PRODUCTOS_RE. Si aparece sin fotos reales
 # detrás, son productos inventados.
 #
-# La marca era el keycap (`1️⃣ Nombre — $80.000`). Al quitar la numeración de la
-# presentación se queda sin señal, así que pasa a ser "nombre en negrita +
-# precio", que es el formato que sí sigue existiendo.
+# La marca era el keycap (`1️⃣ Nombre — $80.000`). Al quitar la numeración se
+# quedó sin señal y pasó a ser "nombre en negrita + precio"... que exigía que el
+# LLM pusiera las negritas. En producción escribió `•  Dildo Pequeño Con Ventosa
+# 12 cm — $45.000` y la lista inventada fue invisible para la guardia; la salvó
+# `_OFRECE_PRODUCTOS_RE` ("Te muestro"), que pudo no estar.
 #
-# OJO: este patrón casa MÁS que el anterior, y en particular casa un resumen de
-# pedido en el checkout. Ya pasó una vez con los keycaps (ver la guardia de fase
-# de venta más abajo, que es obligatoria por esto).
-_LISTA_PRODUCTOS_RE = re.compile(r"\*[^*\n]{3,80}\*\s*—\s*\$\s*[\d.,]+")
+# Tres formas, todas ancladas a principio de línea: una cifra dentro de una frase
+# ("el envío cuesta $12.000") no es un catálogo, y anclar es lo que las separa.
+#
+# Puede permitirse ser laxo porque el resumen de pedido ya no depende de esta
+# regex para salvarse: lo protege el carrito en `_parece_invencion`.
+_LISTA_PRODUCTOS_RE = re.compile(
+    r"^\s*(?:"
+    r"\*[^*\n]{3,80}\*"                    # *Nombre* en negrita
+    r"|[•\-\*·]\s*[^\n]{3,80}?"            # viñeta + nombre
+    r"|[1-9]️⃣[^\n]{3,80}?"                 # keycap heredado
+    r")\s*[—–-]\s*\$\s*[\d.,]+",
+    re.MULTILINE,
+)
 
 # Mensaje honesto cuando el cliente pide algo que no se pudo resolver contra el
 # catálogo. Coherente con la regla "nunca digas 'no tenemos' sin verificar" del
@@ -693,6 +704,34 @@ _SUBTIPOS_EN_TEXTO = {
     "mucama": "disfraces de mucama", "playboy": "disfraces Playboy",
     "policia": "disfraces de policía", "sailor moon": "disfraces Sailor Moon",
 }
+
+
+def _parece_invencion(reply: str, info: dict, final_productos: list) -> bool:
+    """¿El LLM está ofreciendo productos que NO se van a enviar?
+
+    El filtro de IDs ya impide mandar la foto de un producto inventado, pero el
+    TEXTO salía igual. En producción el bot listó tres dildos con nombres y
+    precios que no existen mientras el log registraba, en el mismo turno, "ID
+    50123 del LLM rechazado — alucinación evitada" tres veces.
+
+    Durante el cierre esto se apagaba entero, porque ahí una lista de productos
+    con precios suele ser el resumen legítimo del pedido y convertirlo en la
+    pregunta de categoría era un bug real. Pero eso era una exclusión a ciegas, y
+    ahora hay con qué distinguir sin adivinar: **si hay carrito, hay algo que
+    resumir; si está vacío y no hay candidatos, no hay nada que el bot pueda
+    estar recapitulando.**
+
+    El carrito solo justifica un resumen DURANTE el cierre. Fuera de él, ofrecer
+    productos sin candidatos sigue siendo una invención por mucho que el cliente
+    tenga cosas elegidas.
+    """
+    if info.get("debe_mostrar") or final_productos:
+        return False
+    if not (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply)):
+        return False
+    if info.get("en_fase_venta") and (info.get("carrito") or []):
+        return False
+    return True
 
 
 def _filtrar_incoherentes(productos: list[dict], categoria: str | None) -> list[dict]:
@@ -1058,6 +1097,23 @@ _FASE_VENTA_RE = re.compile(
     re.IGNORECASE,
 )
 
+# El subconjunto INEQUÍVOCO del patrón de arriba: medios de pago, comprobantes y
+# datos de envío. Si alguna de estas aparece, el cliente está cerrando aunque
+# nombre un producto de paso ("ya pagué el lubricante").
+#
+# El resto de `_FASE_VENTA_RE` es ambiguo: "lo quiero", "cuánto", "pedido" o
+# "valor" salen igual de boca de quien cierra que de quien todavía busca. Ver
+# `_es_fase_venta`.
+_PAGO_INEQUIVOCO_RE = re.compile(
+    r"\b(nequi|daviplata|bancolombia|bold|yappi|yapy|"
+    r"transferencia|comprobante|comprobant|"
+    r"ya pague|ya pagu|ya transferi|ya transferí|adjunto|adjunt|"
+    r"efectivo|contra ?entrega|"
+    r"direcci[oó]n|telefono|tel[eé]fono|celular|nombre completo|ciudad|barrio|"
+    r"envio|envío|despacho|despachar)\b",
+    re.IGNORECASE,
+)
+
 _RECHAZO_CROSS_SELLING_RE = re.compile(
     r"\b(solo\s+(las|los|el|la|eso|el\s+primero|la\s+1|el\s+1|lo\s+que\s+pedi|las\s+esposas|el\s+vibrador)|"
     r"no\s+gracias|asi\s+esta\s+bien|así\s+está\s+bien|sin\s+aceite|sin\s+perfume|sin\s+lubricante|"
@@ -1269,10 +1325,32 @@ def _es_fase_venta(user_text: str, history: list[dict]) -> bool:
 
     True si el mensaje actual habla de pago/datos/envío, O si el bot ofreció
     venta cruzada o abrió checkout en sus mensajes recientes.
+
+    REFINAR NO ES CERRAR. Las claves ambiguas del patrón ("lo quiero", "cuánto",
+    "pedido") las dice igual quien cierra que quien todavía busca, y confundirlas
+    apaga la búsqueda ENTERA del turno. Sin candidatos, el LLM redacta libre — y
+    en producción se inventó tres dildos con nombres y precios:
+
+        "Con ventosa lo quiero pequeno es para primera vez o que me recomiendas"
+
+    Ese mensaje trae facetas propias (`{atributos: [principiante, ventosa]}`), y
+    nombrar facetas nuevas es lo que hace un cliente que busca, no uno que paga.
+    Es la misma distinción que separa refinar de elegir en `_resolver_seleccion`.
+
+    Las señales inequívocas de pago mandan igualmente: "ya pagué el lubricante"
+    nombra un tipo y aun así es checkout.
     """
     texto = user_text or ""
-    if _FASE_VENTA_RE.search(texto) or _RECHAZO_CROSS_SELLING_RE.search(texto):
+    if _PAGO_INEQUIVOCO_RE.search(texto) or _RECHAZO_CROSS_SELLING_RE.search(texto):
         return True
+    if _FASE_VENTA_RE.search(texto):
+        propias = {k: v for k, v in facetas.interpretar_mensaje(texto).items()
+                   if not k.startswith("_")}
+        if propias:
+            log.info("'%s' nombra %s: está refinando, no cerrando",
+                     texto[:40], list(propias))
+        else:
+            return True
 
     # Revisar mensajes recientes del asistente para asegurar que no se reenvíen fotos durante el checkout
     ultimo_bot = next((m for m in reversed(history or []) if m.get("role") == "assistant"), None)
@@ -2134,6 +2212,10 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     #  - la dependencia de un catálogo gigante en el prompt.
     estado_previo = await db.get_conversation_state(wa_id)
     candidatos, info = await _recuperar_candidatos(user_text, history, estado_previo)
+    # Lo que el cliente ya eligió. Viaja en `info` porque es lo que le permite a
+    # la guardia anti-alucinación distinguir un resumen de pedido legítimo de una
+    # lista de productos inventada (ver `_parece_invencion`).
+    info["carrito"] = (estado_previo or {}).get("carrito") or []
 
     # ESCALAMIENTO POR PRODUCTO/SUBTIPO NO DISPONIBLE:
     # Si el cliente especificó un subtipo (ej: "duchas anales") y no hay candidatos
@@ -2317,16 +2399,9 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # Se detecta por las frases de plantilla ("Mira estas opciones…") y por una
     # lista de productos con precios. Dos salidas según haya categoría o no.
     #
-    # La fase de venta queda FUERA de toda la guardia, no solo de su segunda
-    # rama. Ahí una lista de productos con precios es el resumen legítimo del
-    # pedido, no una invención: el cliente ya eligió y el bot le está repitiendo
-    # lo que se lleva. Ya pasó una vez —un resumen con "1️⃣ Esposas — $29.900" se
-    # convertía en la pregunta de categoría— y el patrón nuevo (nombre en negrita
-    # + precio, sin keycap) casa un resumen todavía más fácil.
-    if (not info["debe_mostrar"]
-            and not final_productos
-            and not info.get("en_fase_venta")
-            and (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply))):
+    # La decisión vive en `_parece_invencion`, que es donde está explicado por
+    # qué el carrito distingue un resumen de pedido de una lista fabricada.
+    if _parece_invencion(reply, info, final_productos):
         # Sale de la misma función que la rama determinista de arriba: si ella
         # sabe que no toca calificar —el cliente ya vio productos, está en fase
         # de venta, o se le acaba de pedir el nombre—, aquí tampoco.
