@@ -33,6 +33,12 @@ _CATALOGO = {
     5: {"id": 5, "nombre": "Juego De Dados Eroticos", "precio": 25000},
     6: {"id": 6, "nombre": "Juego Kamasutra Cartas", "precio": 30000},
     7: {"id": 7, "nombre": "Dildo Uno Realista", "precio": 65000},
+    # Nombres reales del caso de producción de más abajo.
+    31: {"id": 31, "nombre": "Disfraz Policía Lerot", "precio": 109800},
+    32: {"id": 32, "nombre": "Raw Dildo Realista Elara 20.5 cm", "precio": 74900},
+    33: {"id": 33, "nombre": "Raw Dildo Realista Denzel 19 cm", "precio": 74900},
+    34: {"id": 34, "nombre": "Dildo Ultra Realista Kona 19 cm", "precio": 129900},
+    35: {"id": 35, "nombre": "Dildo realista Ajax Camtoyz 19cm", "precio": 59900},
 }
 
 _ESTADO_TRES_RONDAS = {
@@ -143,6 +149,50 @@ def test_sin_el_tipo_el_mismo_atributo_si_elige():
     """"el realista" nombra una cosa sola: señala, no describe."""
     estado = {"rondas": [{"categoria": "dildos", "ids": [7]}]}
     assert _resolver("quiero el realista", estado=estado).ids == [7]
+
+
+# ── Caso de producción 2026-08-05: nombró dos productos y no se le tomó ──
+#
+# El cliente vio un disfraz, luego pidió dildos, refinó a "realista" y recibió
+# cinco. Entonces escribió "quiero el dizfras de policia y el dildo realista
+# ajax" y el bot le respondió con OTRA lista de dildos, sin tomarle nada. Repitió
+# con los dos nombres COMPLETOS y volvió a pasar lo mismo.
+#
+# Causa: la guarda de "refinar no es elegir" miraba solo las facetas del mensaje,
+# y esa frase da {tipo: dildo, atributos: [realista]} — las mismas que "quiero un
+# dildo realista". Con eso bastaba para descartar la selección, aunque el cliente
+# hubiera nombrado dos productos con su nombre exacto.
+#
+# La señal que las separa: nombrar una marca o modelo ("ajax", "lerot") identifica
+# un EJEMPLAR; usar solo vocabulario de categoría ("dildo", "realista") describe
+# una CLASE. `catalog._tokens_no_reconocidos` ya distingue exactamente eso.
+
+_ESTADO_CASO_REAL = {"rondas": [
+    {"categoria": "lenceria", "ids": [31]},
+    {"categoria": "dildos", "ids": [32, 33, 34, 35]},
+]}
+
+
+def test_dos_productos_de_categorias_distintas_con_typo_y_nombre_parcial():
+    """El mensaje exacto del cliente, typo incluido."""
+    r = _resolver("quiero el dizfras de policia y el dildo realista ajax",
+                  estado=_ESTADO_CASO_REAL)
+    assert sorted(r.ids) == [31, 35], r
+
+
+def test_dos_productos_con_sus_nombres_completos():
+    """Su segundo intento: copió los dos nombres tal cual. Si esto no resuelve,
+    no queda nada que el cliente pueda hacer."""
+    r = _resolver("Disfraz Policía Lerot y Dildo realista Ajax Camtoyz 19cm",
+                  estado=_ESTADO_CASO_REAL)
+    assert sorted(r.ids) == [31, 35], r
+
+
+def test_refinar_con_vocabulario_de_categoria_sigue_sin_elegir():
+    """La contraparte que la guarda protegía: aquí no hay marca ni modelo, solo
+    el tipo y un calificador del tipo. Sigue siendo una búsqueda."""
+    r = _resolver("quiero un dildo realista", estado=_ESTADO_CASO_REAL)
+    assert r.ids == [], r
 
 
 def test_señalar_uno_concreto_si_es_elegir():

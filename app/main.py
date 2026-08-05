@@ -1117,20 +1117,30 @@ async def _resolver_seleccion(user_text: str, estado: dict | None,
         res.parece_seleccion = True
 
     # REFINAR NO ES ELEGIR. "quiero un dildo realista" nombra una CLASE de
-    # producto: el tipo y un calificador del tipo. "quiero el realista" o "quiero
-    # el disfraz de policía" señalan uno concreto — nombran una cosa sola.
+    # producto: el tipo y un calificador del tipo. Sin esta guarda, "realista"
+    # casa con un "Dildo Uno Realista" en pantalla y una búsqueda legítima se
+    # convierte en selección — el bot deja de mostrar productos justo cuando el
+    # cliente estaba afinando lo que quiere ver.
     #
-    # Sin esta guarda, "realista" casa con "Dildo Uno Realista" en pantalla y una
-    # búsqueda legítima se convierte en una selección: el bot deja de mostrar
-    # productos justo cuando el cliente estaba afinando lo que quiere ver. Es la
-    # misma distinción que ya hacía `_pide_comprar_sin_numero` comparando las
-    # facetas del mensaje.
+    # Pero mirar SOLO las facetas del mensaje no basta, y costó una venta en
+    # producción (2026-08-05): "quiero el dizfras de policia y el dildo realista
+    # ajax" da las mismas facetas {tipo: dildo, atributos: [realista]} que "quiero
+    # un dildo realista", así que se descartaba la selección aunque el cliente
+    # hubiera nombrado dos productos. Repitió con los dos nombres completos y
+    # volvió a fallar; desde su lado no quedaba nada que pudiera escribir.
+    #
+    # La señal que las separa es el vocabulario: nombrar una marca o un modelo
+    # ("ajax", "lerot") identifica un EJEMPLAR; usar solo palabras de categoría
+    # ("dildo", "realista") describe una CLASE. `_tokens_no_reconocidos` es
+    # exactamente ese filtro — devuelve los tokens que no son vocabulario
+    # conocido, que es como el resto del pipeline detecta marcas y modelos.
     propias = {k: v for k, v in facetas.interpretar_mensaje(user_text).items()
                if not k.startswith("_")}
-    if propias.get("tipo") and propias.get("atributos"):
+    if (propias.get("tipo") and propias.get("atributos")
+            and not catalog._tokens_no_reconocidos(user_text or "")):
         if res.ids or res.ambiguos:
-            log.info("'%s' nombra tipo+atributo: es una búsqueda, no una selección",
-                     (user_text or "")[:40])
+            log.info("'%s' solo usa vocabulario de categoría: es una búsqueda, "
+                     "no una selección", (user_text or "")[:40])
         res.ids = []
         res.ambiguos = []
         return res
