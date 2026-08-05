@@ -3538,11 +3538,13 @@
   "activo": true,
   "id": 79115,
   "tipo": "cosmetica",
-  "zona": "ninguna",
+  "zona": "anal",
   "control": "ninguno",
   "genero_uso": "unisex",
   "vibra": false,
-  "atributos": []
+  "atributos": [
+   "desensibilizante"
+  ]
  },
  {
   "woo_id": 27228,
@@ -3557,12 +3559,13 @@
   "activo": true,
   "id": 79116,
   "tipo": "cosmetica",
-  "zona": "ninguna",
+  "zona": "anal",
   "control": "ninguno",
   "genero_uso": "pareja",
   "vibra": false,
   "atributos": [
    "calor",
+   "desensibilizante",
    "sabor"
   ]
  },
@@ -3579,11 +3582,13 @@
   "activo": true,
   "id": 79117,
   "tipo": "cosmetica",
-  "zona": "ninguna",
+  "zona": "anal",
   "control": "ninguno",
   "genero_uso": "unisex",
   "vibra": false,
-  "atributos": []
+  "atributos": [
+   "desensibilizante"
+  ]
  },
  {
   "woo_id": 28268,
