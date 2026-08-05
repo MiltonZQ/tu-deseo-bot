@@ -265,6 +265,41 @@ def test_el_rotulo_de_una_intencion_fresca_conserva_la_palabra_del_cliente():
     assert "consoladores" in txt.lower(), txt
 
 
+def test_el_rotulo_no_le_dice_anal_al_cliente():
+    """Caso de producción: "Quiero un arnés con dildo" clasifica en la categoría
+    interna `anal` —correctamente, su descripción incluye "arneses/strap-on"— y
+    los productos mostrados eran los arneses correctos. Pero el rótulo decía
+    "opciones de anal", que no es español para un cliente.
+
+    La intención de las listas ("arneses") se descarta al diferir de la del LLM,
+    y su clave cruda ocupaba su lugar.
+    """
+    txt = main._texto_desde_candidatos(PRODS, {
+        "intencion": "anal", "intencion_heredada": False,
+        "categoria_funcional": "anal", "subtipo_detectado": "arnes",
+        "restricciones": {"tipo": "arnes"}, "hay_mas": False})
+    assert "de anal" not in txt.lower(), txt
+    assert "arneses" in txt.lower(), txt
+
+
+def test_ninguna_clave_funcional_llega_cruda_al_cliente():
+    """Barrido sobre el vocabulario interno: son claves de base de datos, no
+    palabras que nadie diría en una conversación.
+
+    Se compara con límites de palabra, no por subcadena: "juguetes anales" SÍ
+    contiene "anal" y es exactamente lo que se busca.
+    """
+    import re
+    for clave in ("anal", "pareja-y-bondage", "lubricantes-y-cuidado",
+                  "juegos-y-accesorios", "anillos-y-fundas", "fundas-pene",
+                  "bombas-pene", "lenceria"):
+        txt = main._texto_desde_candidatos(PRODS, {
+            "intencion": clave, "intencion_heredada": False,
+            "categoria_funcional": clave, "restricciones": {}, "hay_mas": False})
+        assert not re.search(rf"\b{re.escape(clave)}\b", txt), (
+            f"{clave!r} se imprimió crudo: {txt}")
+
+
 def test_el_rotulo_cae_al_tipo_buscado_cuando_no_hay_intencion():
     txt = main._texto_desde_candidatos(PRODS, {
         "intencion": None, "restricciones": {"tipo": "vibrador"}, "hay_mas": False})

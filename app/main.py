@@ -666,6 +666,25 @@ def _describir_pedido(restricciones: dict) -> str:
 
 # Cómo se nombran los disfraces. `_TIPOS_EN_TEXTO["lenceria"]` dice "prendas",
 # que no es lo que pidió quien escribió "disfraz de colegiala".
+# Cómo se le nombra al cliente cada categoría funcional. Las claves son de la
+# base de datos —`anal`, `pareja-y-bondage`, `fundas-pene`— y ninguna es algo que
+# alguien diría hablando: "te muestro estas opciones de anal" no es español.
+# Solo afecta a cómo se IMPRIMEN; la clasificación no se toca.
+_CATEGORIAS_EN_TEXTO = {
+    "anal": "juguetes anales",
+    "pareja-y-bondage": "artículos de pareja y bondage",
+    "lubricantes-y-cuidado": "lubricantes y cuidado íntimo",
+    "juegos-y-accesorios": "juegos y accesorios",
+    "anillos-y-fundas": "anillos y fundas",
+    "fundas-pene": "fundas para el pene",
+    "bombas-pene": "bombas para el pene",
+    "lenceria": "lencería",
+    "vibradores": "vibradores",
+    "succionadores": "succionadores",
+    "dildos": "dildos",
+    "masturbadores": "masturbadores",
+}
+
 _SUBTIPOS_EN_TEXTO = {
     "disfraz": "disfraces",
     "colegiala": "disfraces de colegiala",
@@ -728,17 +747,30 @@ def _nombre_categoria(info: dict) -> str:
     Regla: si el cliente nombró un subtipo con nombre propio, ese manda; si la
     intención es heredada (puede venir de otra categoría), se usa el tipo por el
     que REALMENTE se buscó; solo si es fresca se conserva su palabra.
+
+    Y una intención que sea una CLAVE INTERNA no cuenta como palabra del cliente.
+    Pasó en producción: "Quiero un arnés con dildo" mostró los arneses correctos
+    rotulados como "opciones de anal". Las listas habían propuesto "arneses", el
+    LLM devolvió la categoría `anal` —también correcta, su descripción incluye
+    "arneses/strap-on"—, y al diferir se descartaba la intención de las listas y
+    su hueco lo ocupaba la clave del LLM, que acabó impresa tal cual. `anal`,
+    `pareja-y-bondage` o `fundas-pene` son claves de base de datos, no cosas que
+    nadie diga en una conversación.
     """
     sub = info.get("subtipo_detectado")
     if sub and sub in _SUBTIPOS_EN_TEXTO:
         return _SUBTIPOS_EN_TEXTO[sub]
     intencion = info.get("intencion")
-    if intencion and not info.get("intencion_heredada"):
+    if (intencion and not info.get("intencion_heredada")
+            and intencion not in _CATEGORIAS_EN_TEXTO):
         return intencion.replace("-", " ")
+    # El tipo va antes que la clave de categoría: es lo que el cliente pidió
+    # ("arnes" → "arneses"), mientras que la clave es cómo lo archiva el catálogo.
     tipo = (info.get("restricciones") or {}).get("tipo")
     if tipo and tipo in _TIPOS_EN_TEXTO:
         return _TIPOS_EN_TEXTO[tipo]
-    return (intencion or info.get("categoria_funcional") or "productos").replace("-", " ")
+    crudo = intencion or info.get("categoria_funcional") or "productos"
+    return _CATEGORIAS_EN_TEXTO.get(crudo, crudo.replace("-", " "))
 
 
 def _texto_agotado(info: dict) -> str:
