@@ -205,7 +205,11 @@ _ATRIBUTOS = {
     "agua": ("base de agua", "base agua", "h2o", "hidrosoluble", "acuoso"),
     "silicona": ("silicona",),
     "hibrido": ("hibrido", "hibrida"),
-    "desensibilizante": ("desensibiliz", "anestesico", "relajante anal"),
+    # "retardant" cubre los "Retardante en Spray/Creama" del catálogo: el
+    # cliente pide "para demorar" y esos productos son justamente los retardantes
+    # clásicos. Sin esta clave el SQL los perdía (atributo vacío) y la Fase 2
+    # escalaba a asesor por una venta que sí teníamos.
+    "desensibilizante": ("desensibiliz", "anestesico", "relajante anal", "retardant"),
     "calor": ("caliente", "sensacion caliente", "calor"),
     "frio": ("frio", "menta", "efecto frio"),
     # "pequeño" NO es clave: describe el tamaño, no al público. Por ahí entraban
