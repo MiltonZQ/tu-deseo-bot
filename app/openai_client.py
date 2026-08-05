@@ -606,3 +606,77 @@ async def reordenar_candidatos_por_relevancia(
     except Exception:
         log.warning("Reordenar candidatos por LLM falló — se mantiene orden determinístico")
         return None
+
+
+_SELECCION_PROMPT = (
+    "Eres un asistente de un sex shop. El cliente acaba de ver una lista de "
+    "productos y ahora escribe algo. Tu única tarea es decidir a CUÁL de esos "
+    "productos se refiere.\n\n"
+    "Devuelve SOLO un JSON con los ids de los productos que el cliente está "
+    "eligiendo. Usa EXCLUSIVAMENTE ids de la lista dada — nunca inventes ids.\n\n"
+    "Si el cliente NO está eligiendo un producto concreto (pregunta algo "
+    "general, saluda, pide ver más opciones, o menciona algo que no coincide "
+    'con ninguno), devuelve {"ids": []}. Es preferible no elegir a elegir mal: '
+    "el cliente no se entera de que decidiste por él.\n\n"
+    "El cliente puede referirse a un producto por su nombre, por una parte del "
+    "nombre, por su color o material, o por para qué sirve.\n\n"
+    'Formato: {"ids": [id1, id2, ...]}'
+)
+
+
+async def seleccionar_producto_llm(
+    user_text: str, productos: list[dict]
+) -> list[int] | None:
+    """A cuál de los productos mostrados se refiere el cliente.
+
+    Último recurso de la cascada de `app/seleccion.py`, para lo que las reglas no
+    alcanzan: la referencia por atributos que no están en el nombre ("las esposas
+    negras peludas"). Seguir ampliando listas de palabras a mano no escala.
+
+    Igual que `reordenar_candidatos_por_relevancia`, es una elección de MUNDO
+    CERRADO: se le dan los productos con su id y cualquier id fuera de ese
+    conjunto se descarta al volver. La imposibilidad de inventar un producto es
+    estructural — está en el filtro, no en la confianza en el prompt.
+
+    Devuelve None si no resuelve nada (respuesta vacía, ids inválidos, fallo o
+    timeout); el llamador debe preguntarle al cliente en vez de adivinar.
+    """
+    if not user_text or not productos:
+        return None
+    ids_validos = {p["id"] for p in productos}
+    lista = "\n".join(
+        f'{p["id"]}: {p["nombre"]} — ${int(p.get("precio") or 0):,}'.replace(",", ".")
+        for p in productos[:10]
+    )
+    messages = [
+        {"role": "system", "content": _SELECCION_PROMPT},
+        {"role": "user",
+         "content": f"Productos mostrados:\n{lista}\n\nEl cliente escribió: {user_text}"},
+    ]
+    try:
+        resp = await _get_client().chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=messages,
+            max_tokens=60,
+            temperature=0.0,
+            timeout=4.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        import json as _json
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            return None
+        ids = [int(i) for i in _json.loads(m.group(0)).get("ids", [])]
+        elegidos = [i for i in ids if i in ids_validos]
+        if len(elegidos) != len(ids):
+            log.warning("El LLM devolvió ids fuera de los mostrados (%s) — descartados",
+                        [i for i in ids if i not in ids_validos])
+        if not elegidos:
+            return None
+        log.info("LLM resolvió la selección %r -> %s", user_text[:40], elegidos)
+        return elegidos
+    except Exception as exc:
+        log.warning("Selección por LLM falló (%s) — se pedirá el nombre al cliente",
+                    type(exc).__name__)
+        return None
