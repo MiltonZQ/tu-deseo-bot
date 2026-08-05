@@ -367,9 +367,47 @@ _CLASIFICADOR_PROMPT = (
     + "\n\nGéneros posibles: hombre, mujer, pareja, anal, o null si no se aclara.\n"
     "Si el mensaje NO busca un producto del catálogo (saludo, pregunta de envío, "
     "pago, queja, producto que no vendemos), devuelve categoria \"ninguna\".\n\n"
+    "Subtipo (opcional): si el cliente nombra una variante concreta, ponla en "
+    "\"subtipo\". Claves válidas (usa EXACTAMENTE una, minúsculas, o null):\n"
+    "colegiala, coneja, conejita, diabla, enfermera, mucama, playboy, policia, "
+    "sailor moon, disfraz, realista, ventosa, vidrio, cristal, doble, textura, "
+    "piel, rabbit, punto g, hitachi, bala, huevo vibr, prostat, cola, ducha, "
+    "enema, base de agua, silicona, sabores, sabor, desensibiliz, calor, frio, "
+    "funda, arnes, liguero, pechera, encaje, body, suspensorio, conjunto, "
+    "esposas, antifaz, fusta, latigo, amarre, mordaza, vendas, con app, "
+    "control remoto, recargable, inalambrico, sencilla, primera vez.\n\n"
+    "Atributo (opcional): si el cliente describe una característica funcional "
+    "(no un nombre), ponla en \"atributo\". Claves válidas (una, minúsculas, o null):\n"
+    "realista, ventosa, vidrio, sabor, agua, silicona, hibrido, desensibilizante, "
+    "calor, frio, principiante, recargable, impermeable.\n"
+    "Ejemplos: \"para demorar\" → atributo desensibilizante; \"con ventosa\" → "
+    "atributo ventosa; \"disfraz de policia\" → subtipo policia.\n\n"
     "Responde SOLO el JSON, sin texto extra. Formato:\n"
-    '{"categoria": "<clave o ninguna>", "genero": "<o null>"}'
+    '{"categoria": "<clave o ninguna>", "genero": "<o null>", '
+    '"subtipo": "<o null>", "atributo": "<o null>"}'
 )
+
+# Vocabulario cerrado para validar la salida del LLM. Si devuelve algo que no
+# está aquí, se descarta (null) — así nunca pide un atributo/subtipo que el
+# catálogo no sabe filtrar, lo que daría 0 resultados falsos y un escalado
+# sin motivo. Las claves son las que `_SUBTIPO_KEYWORDS` y `_ATRIBUTOS` ya
+# reconocen en catalog.py / facetas.py.
+_SUBTIPOS_LLM_VALIDOS = frozenset({
+    "colegiala", "coneja", "conejita", "diabla", "enfermera", "mucama",
+    "playboy", "policia", "sailor moon", "disfraz", "realista", "ventosa",
+    "vidrio", "cristal", "doble", "textura", "piel", "rabbit", "punto g",
+    "hitachi", "bala", "huevo vibr", "prostat", "cola", "ducha", "enema",
+    "base de agua", "silicona", "sabores", "sabor", "desensibiliz", "calor",
+    "frio", "funda", "arnes", "liguero", "pechera", "encaje", "body",
+    "suspensorio", "conjunto", "esposas", "antifaz", "fusta", "latigo",
+    "amarre", "mordaza", "vendas", "con app", "control remoto", "recargable",
+    "inalambrico", "sencillo", "primera vez",
+})
+_ATRIBUTOS_LLM_VALIDOS = frozenset({
+    "realista", "ventosa", "vidrio", "sabor", "agua", "silicona", "hibrido",
+    "desensibilizante", "calor", "frio", "principiante", "recargable",
+    "impermeable",
+})
 
 _cache_clasif: dict[str, dict] = {}
 _CACHE_MAX = 200
@@ -409,7 +447,29 @@ async def clasificar_intencion_llm(user_message: str) -> dict | None:
         if cat != "ninguna" and cat not in _CATEGORIAS_LLM:
             log.warning("LLM clasificó categoría inválida %r — descartada", cat)
             return None
-        result = {"categoria": cat, "genero": gen}
+        # subtipo y atributo: vocabulario cerrado. Si el LLM devuelve algo que no
+        # está en el conjunto, se descarta (null) en vez de propagarlo: un
+        # atributo que el catálogo no sabe filtrar daría 0 resultados falsos y un
+        # escalado a asesor sin motivo. La intersección (ventosa es subtipo y
+        # atributo a la vez) es esperada: el subtipo guía el filtro por nombre, el
+        # atributo guía el filtro SQL.
+        sub = data.get("subtipo")
+        if sub:
+            sub = str(sub).strip().lower()
+            if sub not in _SUBTIPOS_LLM_VALIDOS:
+                log.info("LLM devolvió subtipo no reconocido %r — descartado", sub)
+                sub = None
+        else:
+            sub = None
+        atrib = data.get("atributo")
+        if atrib:
+            atrib = str(atrib).strip().lower()
+            if atrib not in _ATRIBUTOS_LLM_VALIDOS:
+                log.info("LLM devolvió atributo no reconocido %r — descartado", atrib)
+                atrib = None
+        else:
+            atrib = None
+        result = {"categoria": cat, "genero": gen, "subtipo": sub, "atributo": atrib}
         if len(_cache_clasif) >= _CACHE_MAX:
             _cache_clasif.pop(next(iter(_cache_clasif)))
         _cache_clasif[key] = result
