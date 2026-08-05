@@ -45,17 +45,27 @@ def test_el_cta_pide_el_numero_tambien_cuando_se_cedio_en_algo():
     assert "indícame el número o los números" in txt, txt
 
 
-LISTA = [{"role": "assistant",
-          "content": "1️⃣ *Dildo Uno* — $50.000\n2️⃣ *Dildo Dos* — $60.000"}]
-SIN_LISTA = [{"role": "assistant", "content": "¿Buscas algo realista o con ventosa?"}]
+# ── Elegir de la lista mostrada ──
+#
+# La decisión de si el cliente está eligiendo ya no se infiere del TEXTO del
+# historial (antes se buscaban keycaps con `_bot_mostro_lista`) sino de las
+# rondas persistidas en el estado, y la resuelve `app.seleccion`. Aquí se
+# comprueba el contrato desde el punto de vista de main.py: qué apaga las fotos
+# y qué provoca pedirle el nombre al cliente.
 
+from app import seleccion  # noqa: E402
 
-# ── Tarea 3: el ordinal también es elegir ──
+RONDA = [{"categoria": "dildos", "productos": [
+    {"id": 1, "nombre": "Dildo Uno Realista", "precio": 50000},
+    {"id": 2, "nombre": "Dildo Dos Ventosa", "precio": 60000},
+]}]
+SIN_RONDAS: list[dict] = []
+
 
 def test_el_ordinal_es_una_seleccion():
-    for texto in ("el primero", "la segunda", "quiero el tercero",
-                  "me llevo la primera", "dame el quinto"):
-        assert main._es_seleccion_de_lista_mostrada(texto, LISTA), texto
+    for texto in ("el primero", "la segunda", "quiero el segundo",
+                  "me llevo la primera", "dame el primero"):
+        assert seleccion.resolver(texto, RONDA).ids, texto
 
 
 def test_primero_como_adverbio_no_es_una_seleccion():
@@ -64,94 +74,72 @@ def test_primero_como_adverbio_no_es_una_seleccion():
     for texto in ("primero quiero saber si es impermeable",
                   "primero dime el precio",
                   "necesito saber primero el envio"):
-        assert not main._es_seleccion_de_lista_mostrada(texto, LISTA), texto
+        assert not seleccion.resolver(texto, RONDA).ids, texto
 
 
 def test_sin_lista_previa_el_ordinal_no_selecciona_nada():
-    assert not main._es_seleccion_de_lista_mostrada("el primero", SIN_LISTA)
+    assert not seleccion.resolver("el primero", SIN_RONDAS).ids
 
 
-def test_la_seleccion_numerica_sigue_funcionando_igual():
-    """Lo que ya funcionaba no se toca: el ordinal se AÑADE."""
-    for texto in ("el 2", "el 1 y el 3", "dame el 2", "2 y 4"):
-        assert main._es_seleccion_de_lista_mostrada(texto, LISTA), texto
-    assert not main._es_seleccion_de_lista_mostrada("tengo 25 años", SIN_LISTA)
+def test_la_seleccion_numerica_multiple_sigue_funcionando():
+    """El caso del bug 17: 'El 2 y 3' es una elección de dos productos, no una
+    petición de ver el catálogo otra vez."""
+    for texto in ("el 2", "el 1 y el 2", "dame el 2", "1 y 2", "1,2"):
+        assert seleccion.resolver(texto, RONDA).ids, texto
+    assert sorted(seleccion.resolver("el 1 y el 2", RONDA).ids) == [1, 2]
 
 
-# ── Tarea 2: el pedido sin número ──
+def test_un_numero_suelto_no_es_una_seleccion():
+    """Una edad, un teléfono o una dirección no eligen nada. Por eso el patrón
+    consume el mensaje entero y limita a dos dígitos."""
+    for texto in ("tengo 25 años", "mi telefono es 3216549870", "vivo en bogota"):
+        assert not seleccion.resolver(texto, RONDA).ids, texto
 
-def test_quiere_pedir_sin_numero_recibe_la_peticion_del_numero():
-    """El caso del documento: 'quiero pedir' no lleva a otra página de catálogo."""
+
+# ── El pedido sin producto identificado ──
+
+def test_quiere_pedir_sin_decir_cual_se_detecta_como_intencion_de_compra():
+    """El caso del documento: 'quiero pedir' no lleva a otra página de catálogo,
+    sino a pedirle al cliente que diga cuál."""
     for texto in ("quiero pedir", "quiero ordenar", "como puedo comprar",
                   "me gustaria comprar", "deseo ordenar", "quiero llevar",
                   "como hago para pedir", "dame ese", "quiero ese"):
-        assert main._pide_comprar_sin_numero(texto, LISTA, {}, "dildo"), texto
-
-
-def test_sin_lista_previa_no_se_pide_ningun_numero():
-    """Sin lista no hay número que pedir: toca preguntarle qué busca."""
-    assert not main._pide_comprar_sin_numero("quiero comprar", SIN_LISTA, {}, None)
-
-
-def test_nombrar_otra_categoria_es_una_busqueda_nueva():
-    """Se mira la faceta del MENSAJE, no la fusionada con el estado."""
-    assert not main._pide_comprar_sin_numero(
-        "quiero comprar lubricantes", LISTA, {"tipo": "lubricante"}, "dildo")
-
-
-def test_repetir_el_tipo_en_pantalla_si_es_una_seleccion():
-    """'quiero el dildo' con dildos en pantalla no es una búsqueda nueva."""
-    assert main._pide_comprar_sin_numero(
-        "quiero el dildo", LISTA, {"tipo": "dildo"}, "dildo")
-
-
-def test_un_atributo_nuevo_es_una_busqueda_aunque_repita_el_tipo():
-    """'quiero un dildo doble' está refinando, no eligiendo."""
-    assert not main._pide_comprar_sin_numero(
-        "quiero un dildo doble", LISTA,
-        {"tipo": "dildo", "atributos": ["doble"]}, "dildo")
-
-
-def test_los_implicitos_de_facetas_no_cuentan_como_faceta_nombrada():
-    """`interpretar_mensaje` devuelve claves internas con guion bajo."""
-    assert main._pide_comprar_sin_numero(
-        "quiero pedir", LISTA, {"_implicitos": [("doble", (), None)]}, "dildo")
+        r = seleccion.resolver(texto, RONDA)
+        assert r.hay_intencion_compra and not r.ids, texto
 
 
 def test_una_duda_no_se_confunde_con_un_pedido():
     for texto in ("cuanto vale el envio", "son impermeables", "hacen envios a cali"):
-        assert not main._pide_comprar_sin_numero(texto, LISTA, {}, "dildo"), texto
-
-
-def test_si_ya_dio_el_numero_no_se_le_vuelve_a_pedir():
-    """'quiero el 2' trae el número: lo atiende la selección numérica, intacta."""
-    assert not main._pide_comprar_sin_numero("quiero el 2", LISTA, {}, "dildo")
-
-
-def test_el_ordinal_no_se_confunde_con_un_pedido_sin_numero():
-    """'quiero el primero' casa el patrón de compra vaga por el 'el': gana la
-    selección, que es más específica."""
-    assert not main._pide_comprar_sin_numero("quiero el primero", LISTA, {}, "dildo")
+        assert not seleccion.resolver(texto, RONDA).hay_intencion_compra, texto
 
 
 def test_pedir_un_listado_en_plural_no_es_elegir():
-    """'quiero los vibradores' pide ver, no comprar: el plural queda fuera."""
-    assert not main._pide_comprar_sin_numero(
-        "quiero los vibradores", LISTA, {"tipo": "vibrador"}, "vibrador")
+    """'quiero los vibradores' pide ver, no comprar: el plural queda fuera del
+    patrón de compra a propósito."""
+    assert not seleccion.resolver("quiero los vibradores", RONDA).hay_intencion_compra
+
+
+def test_si_ya_dijo_cual_no_hay_nada_que_pedirle():
+    """'quiero el 2' y 'quiero el primero' casan el patrón de compra vaga por el
+    'el', pero resuelven un producto: gana la selección, que es más específica.
+    main.py solo pide el nombre cuando NO se resolvió nada."""
+    for texto in ("quiero el 2", "quiero el primero", "quiero el realista"):
+        r = seleccion.resolver(texto, RONDA)
+        assert r.ids, texto
 
 
 def test_la_copia_no_vuelve_a_listar_productos():
-    assert "️⃣" not in main.PEDIR_NUMERO_DE_LISTA
     assert "[FOTO:" not in main.PEDIR_NUMERO_DE_LISTA
-    assert "indícame el número o los números" in main.PEDIR_NUMERO_DE_LISTA
 
 
-def test_el_bot_mostro_lista_reconoce_el_keycap():
-    assert main._bot_mostro_lista(LISTA)
-    assert not main._bot_mostro_lista(SIN_LISTA)
-    assert not main._bot_mostro_lista([])
-    assert not main._bot_mostro_lista([{"role": "user", "content": "1️⃣ me gusta"}]), \
-        "la lista la tiene que haber enviado el BOT, no el cliente"
+def test_la_desambiguacion_nombra_las_opciones_concretas():
+    """Repetir "¿cuál?" en abstracto deja al cliente donde estaba: ya dijo "el
+    dildo". Se le dan los nombres entre los que elegir."""
+    r = seleccion.resolver("quiero el dildo", RONDA)
+    assert not r.ids and len(r.ambiguos) == 2, r
+    pregunta = main._pregunta_desambiguacion(r.ambiguos)
+    assert "Dildo Uno Realista" in pregunta, pregunta
+    assert "Dildo Dos Ventosa" in pregunta, pregunta
 
 
 # ── El bloque de precios que recibe el LLM ──
@@ -318,9 +306,13 @@ def test_el_reply_persistido_tiene_keycap_y_precio_para_el_historial():
     assert "40.000" in reply, reply
 
 
-def test_bot_mostro_lista_detecta_el_reply_persistido_del_turno_de_productos():
-    """Tras un turno de productos del sistema, el historial contiene el reply
-    completo (con keycap). `_bot_mostro_lista` debe seguir detectando la lista:
-    es lo que autoriza al cliente a responder '1' como selección."""
+def test_el_reply_persistido_conserva_nombres_y_precios():
+    """El reply completo se guarda en el historial aunque al cliente le llegue
+    troceado: es lo que lee el LLM para confirmar con el precio exacto.
+
+    Detectar que hay una lista viva ya NO se hace leyendo este texto —antes se
+    buscaban keycaps con `_bot_mostro_lista`—, sino consultando las rondas del
+    estado. Un dato, no una inferencia sobre una cadena."""
     reply = main._texto_desde_candidatos(PRODS_CON_FOTO, INFO_PROD)
-    assert main._bot_mostro_lista([{"role": "assistant", "content": reply}])
+    assert "Multiorgasmos Euforia" in reply, reply
+    assert "40.000" in reply, reply

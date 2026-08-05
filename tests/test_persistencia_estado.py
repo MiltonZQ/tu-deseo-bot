@@ -181,19 +181,28 @@ def test_el_carrito_se_escribe_en_las_dos_ramas():
     assert any("Disfraz Policia" in str(p) and "40000" in str(p) for p in params), params
 
 
-def test_el_reset_vacia_las_rondas_pero_NO_el_carrito():
+def test_el_reset_no_toca_ni_las_rondas_ni_el_carrito():
     """El caso multi-categoría entero depende de esto.
 
-    Cambiar de tema (disfraces → juegos) dispara reset y limpia lo que se ha
-    MOSTRADO, que es correcto: son otras opciones. Pero lo que el cliente ya
-    ELIGIÓ no se toca — cambiar de tema no es cambiar de opinión. Antes de las
-    rondas esto ni se planteaba porque no había dónde guardar la elección.
+    El reset por cambio de tema limpia `productos_mostrados` porque es la lista
+    de EXCLUSIÓN: arrastrarla haría que productos válidos del tema nuevo se
+    filtraran como "ya vistos".
+
+    `rondas` no es eso: es la memoria de qué ha visto el cliente, y es contra lo
+    que se resuelve "el disfraz de policía" tres categorías después. Vaciarla al
+    cambiar de tema eliminaría exactamente la capacidad de elegir un producto de
+    cada categoría, que es el caso que motivó todo esto. Su tamaño ya lo acota la
+    poda a MAX_RONDAS.
+
+    Y el carrito menos: preguntar por otra categoría no es retractarse.
     """
     sql, _ = _upsert(reset=True)
-    assert "rondas = '[]'" in sql, f"el reset debe vaciar las rondas.\nSQL: {sql}"
+    assert "productos_mostrados = '{}'" in sql, f"SQL: {sql}"
+    assert "rondas" not in sql, (
+        f"el reset NO puede vaciar las rondas: el cliente perdería la capacidad "
+        f"de elegir algo que vio antes de cambiar de tema.\nSQL: {sql}")
     assert "carrito" not in sql, (
-        f"el reset NO puede tocar el carrito: el cliente perdería lo ya elegido "
-        f"al preguntar por otra categoría.\nSQL: {sql}")
+        f"el reset NO puede tocar el carrito.\nSQL: {sql}")
 
 
 def test_los_placeholders_coinciden_con_rondas_y_carrito():

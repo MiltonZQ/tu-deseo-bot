@@ -781,11 +781,20 @@ async def upsert_conversation_state(
     """
     async with _pool.acquire() as conn:
         if reset:
-            # OJO: `carrito` está deliberadamente ausente de este SET. Cambiar de
-            # tema (disfraces → juegos) reinicia lo que se está MOSTRANDO, que es
-            # lo correcto: son otras opciones. Pero lo que el cliente ya ELIGIÓ
-            # sigue siendo suyo; preguntar por otra categoría no es retractarse.
-            # Ese es justo el caso de elegir un producto de cada categoría.
+            # OJO: `rondas` y `carrito` están deliberadamente ausentes de este SET.
+            #
+            # El reset existe para que la BÚSQUEDA del tema nuevo salga limpia:
+            # `productos_mostrados` es la lista de exclusión, y arrastrarla haría
+            # que productos válidos del tema nuevo se filtraran como "ya vistos".
+            #
+            # Pero `rondas` no es una lista de exclusión: es la memoria de qué ha
+            # visto el cliente, y es contra lo que se resuelve "el disfraz de
+            # policía" tres categorías después. Borrarla al cambiar de tema
+            # eliminaría justo la capacidad de elegir un producto de cada
+            # categoría. Su tamaño ya está acotado por la poda a MAX_RONDAS.
+            #
+            # Y el carrito, menos: preguntar por otra categoría no es retractarse
+            # de lo que ya se eligió.
             await conn.execute(
                 """
                 INSERT INTO conversation_state (wa_id, calificado, productos_mostrados, updated_at)
@@ -796,7 +805,6 @@ async def upsert_conversation_state(
                     genero = NULL,
                     calificado = FALSE,
                     productos_mostrados = '{}',
-                    rondas = '[]',
                     restricciones = NULL,
                     preguntas_hechas = '{}',
                     texto_busqueda = NULL,

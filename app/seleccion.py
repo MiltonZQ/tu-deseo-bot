@@ -67,17 +67,21 @@ _COMPRA_SIN_OBJETO_RE = re.compile(
 _COMPRA_OBJETO_VAGO_RE = re.compile(
     r"\b(quiero|dame|deseo|me\s+llevo|ll[eé]vame|sep[aá]r[ae]me|ap[aá]rt[ae]me|"
     r"me\s+quedo\s+con|elijo|prefiero)\s+"
-    r"(ese|esa|eso|este|esta|el|la|un|una|los|las)\b",
+    r"(ese|esa|eso|este|esta|el|la|un|una)\b",
     re.IGNORECASE,
 )
 
-# Selección posicional. Anclada y con el mensaje entero consumido a propósito:
-# sin eso, "tengo 2 hijos" o una dirección ("calle 2 con 45") se leían como una
-# elección. El ámbito lo pone el llamante — la ÚLTIMA ronda —, no esta regex.
+# Selección posicional, una o varias ("el 2", "El 2 y 3", "1,3", "los 2 y 4").
+#
+# El mensaje entero tiene que ser la selección —anclado a ambos extremos— porque
+# si no, "tengo 2 hijos", "vivo en la calle 2 con 45" o un teléfono se leían como
+# una elección. El límite de dos dígitos ayuda: un teléfono no cabe.
+#
+# El ámbito lo pone `_por_posicion` (la ÚLTIMA ronda), no esta regex.
 _POSICION_NUMERICA_RE = re.compile(
     r"^\s*(?:me\s+llevo|quiero|dame|deseo|elijo|prefiero|ll[eé]vame)?\s*"
-    r"(?:el|la|los|las)?\s*(?:n[uú]mero|opci[oó]n)?\s*"
-    r"(\d{1,2})\s*[\.,!]?\s*$",
+    r"(?:el|la|los|las)?\s*(?:n[uú]meros?|opci[oó]n)?\s*"
+    r"\d{1,2}\s*(?:(?:y|,|&|\+)\s*(?:el\s+|la\s+)?\d{1,2}\s*)*[\.,!]?\s*$",
     re.IGNORECASE,
 )
 _ORDINALES = {
@@ -163,6 +167,31 @@ def resolver(user_text: str, rondas: list[dict]) -> Resolucion:
     return Resolucion(ambiguos=ambiguos, hay_intencion_compra=intencion)
 
 
+def agregar_al_carrito(carrito: list[dict], productos: list[dict]) -> list[dict]:
+    """Añade productos a lo ya elegido, sin duplicar.
+
+    El nombre y el precio se congelan al elegir, igual que hace
+    `db.add_pedido_item` al cerrar el pedido: si el catálogo se resincroniza con
+    WooCommerce a mitad de conversación, al cliente se le cobra lo que se le dijo.
+
+    Repetir un producto no incrementa cantidad a propósito: "sí, el euforia" dicho
+    dos veces es confirmación, no un segundo artículo. Pedir dos unidades es una
+    petición explícita y todavía no está soportada.
+    """
+    resultado = list(carrito or [])
+    ya = {i.get("producto_id") for i in resultado}
+    for p in productos:
+        if not p or p.get("id") in ya:
+            continue
+        ya.add(p["id"])
+        resultado.append({
+            "producto_id": p["id"],
+            "nombre": p["nombre"],
+            "precio": int(p.get("precio") or 0),
+        })
+    return resultado
+
+
 def _por_nombre_literal(texto: str, productos: list[dict]) -> list[int]:
     """El nombre completo aparece tal cual. Es la señal más fuerte que hay."""
     ids: list[int] = []
@@ -226,12 +255,12 @@ def _por_precio(texto: str, productos: list[dict]) -> list[int]:
 
 
 def _por_posicion(texto: str, rondas: list[dict]) -> list[int]:
-    """"el 2", "el primero" — SIEMPRE contra la última ronda.
+    """"el 2", "El 2 y 3", "el primero" — SIEMPRE contra la última ronda.
 
     Aquí es donde muere el bug original. El cliente cuenta sobre lo que tiene
     delante, que es la última lista que recibió; nunca sobre la suma de todo lo
     que ha visto en la conversación. Numerar de forma continua entre rondas fue
-    el intento de hacer coincidir ambas cosas, y lo que hizo era imposible de
+    el intento de hacer coincidir ambas cosas, y lo que producía era imposible de
     ver para el cliente: no hay forma de saber que el disfraz que le mostraron
     hace tres mensajes era el número 7.
     """
@@ -239,13 +268,16 @@ def _por_posicion(texto: str, rondas: list[dict]) -> list[int]:
     if not ultima:
         return []
 
-    m = _POSICION_NUMERICA_RE.match(texto)
-    if m:
-        n = int(m.group(1))
+    if _POSICION_NUMERICA_RE.match(texto):
+        posiciones = [int(n) for n in re.findall(r"\d{1,2}", texto)]
     else:
         m = _POSICION_ORDINAL_RE.match(texto)
         if not m:
             return []
-        n = _ORDINALES[m.group(1).lower()]
+        posiciones = [_ORDINALES[m.group(1).lower()]]
 
-    return [ultima[n - 1]["id"]] if 1 <= n <= len(ultima) else []
+    ids: list[int] = []
+    for n in posiciones:
+        if 1 <= n <= len(ultima) and ultima[n - 1]["id"] not in ids:
+            ids.append(ultima[n - 1]["id"])
+    return ids

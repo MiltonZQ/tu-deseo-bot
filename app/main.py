@@ -14,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app import config, db, openai_client, whatsapp_client, signature, catalog
 from app import escalations, admin, leads, follow_ups, sedes, pedidos, redis_client, vector_store, payments
-from app import preguntas, facetas
+from app import preguntas, facetas, seleccion
 
 logging.basicConfig(
     level=logging.INFO,
@@ -991,55 +991,9 @@ _RECHAZO_CROSS_SELLING_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Selección de producto(s) por número de una lista YA enviada (ej: "el 2 y 3",
-# "dame el 1", "los numeros 2 y 4"). El cliente está eligiendo, no pidiendo ver
-# fotos de nuevo — reenviar el catálogo en este turno es ruido que confunde al
-# cliente justo cuando ya decidió qué comprar.
-_SELECCION_NUMERICA_RE = re.compile(
-    r"\b(?:el|los|las|la|numero|número)?\s*\d{1,2}\s*(?:(?:y|,|&|\+)\s*(?:el\s*)?\d{1,2}\s*)+\b|"
-    r"^\s*(?:el|la|dame\s+el|quiero\s+el)?\s*(?:numero|número)?\s*\d{1,2}\s*[\.,!]?\s*$",
-    re.IGNORECASE,
-)
-
-
-# Selección por ordinal ("el primero", "la segunda"). Aparte del patrón numérico
-# porque no lleva dígitos, y solo hasta el quinto: nunca se muestran más de cinco
-# productos por turno.
-#
-# Anclado al principio y con artículo definido obligatorio a propósito: sin eso,
-# "primero quiero saber si es impermeable" —una duda perfectamente normal— se leía
-# como una elección y el bot daba por cerrada la venta.
-_SELECCION_ORDINAL_RE = re.compile(
-    r"^\s*(?:(?:me\s+llevo|quiero|dame|deseo|prefiero|elijo)\s+)?"
-    r"(?:el|la)\s+(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])\b",
-    re.IGNORECASE,
-)
-
-# El cliente dice que quiere comprar pero no dice CUÁL. Dos formas:
-#
-#  A. Fórmula de pedido sin objeto: "quiero pedir", "cómo puedo comprar".
-#  B. Verbo de compra + determinante SINGULAR: "quiero ese", "quiero el dildo".
-#
-# El singular separa B de una búsqueda: "quiero los vibradores" pide un listado,
-# "quiero el vibrador" elige uno. `_FASE_VENTA_RE` no cubre ninguna de las dos
-# —conoce "lo compro" y "lo llevo", no "quiero comprar"—, así que estos turnos
-# caían en la regla anti-bucle y el sistema listaba otra página.
-_COMPRA_SIN_OBJETO_RE = re.compile(
-    r"\b(quiero|deseo|necesito|me\s+gustar[ií]a)\s+"
-    r"(pedir|ordenar|comprar|llevar|hacer\s+(un\s+|el\s+)?pedido)\b|"
-    r"\bc[oó]mo\s+(puedo\s+|hago\s+para\s+)?(pedir|ordenar|comprar|"
-    r"hacer\s+(el|un)\s+pedido)\b",
-    re.IGNORECASE,
-)
-_COMPRA_OBJETO_VAGO_RE = re.compile(
-    r"\b(quiero|dame|deseo|me\s+llevo|ll[eé]vame|sep[aá]r[ae]me|ap[aá]rt[ae]me)\s+"
-    r"(ese|esa|eso|este|esta|el|la|un|una)\b",
-    re.IGNORECASE,
-)
-
-# Respuesta a ese caso. NO lleva lista ni marcadores de foto a propósito: el
-# cliente ya vio los productos y está cerrando; reenviárselos es el ruido que
-# rompe la venta.
+# Respuesta cuando el cliente quiere comprar pero no se pudo identificar qué.
+# NO lleva lista ni marcadores de foto a propósito: el cliente ya vio los
+# productos y está cerrando; reenviárselos es el ruido que rompe la venta.
 PEDIR_NUMERO_DE_LISTA = (
     "¡Perfecto! Para tomar tu pedido, por favor indícame el número o los números "
     "de los productos que deseas adquirir, según las opciones que te envié "
@@ -1047,64 +1001,87 @@ PEDIR_NUMERO_DE_LISTA = (
 )
 
 
-def _bot_mostro_lista(history: list[dict]) -> bool:
-    """¿El bot envió una lista numerada en los últimos turnos?
+def _pregunta_desambiguacion(ambiguos: list[dict]) -> str:
+    """El cliente nombró algo que encaja con varios productos.
 
-    El keycap (1️⃣) es la marca; lo pone `_numero_lista`. Es lo que distingue
-    "el 2" (una selección) de "tengo 2 hijos" (un número suelto), y ahora también
-    lo que autoriza a pedirle un número al cliente: sin lista previa, pedirlo no
-    tiene sentido.
+    Se pregunta con los NOMBRES concretos en vez del genérico "dime cuál": el
+    cliente ya dijo "el juego", repetirle la pregunta sin decirle entre qué elegir
+    lo deja igual que estaba. Y elegir uno al azar es peor todavía — se equivoca
+    en silencio, sin que el cliente se entere de que se decidió por él.
     """
-    for m in reversed((history or [])[-4:]):
-        if m.get("role") == "assistant" and "️⃣" in (m.get("content") or ""):
-            return True
-    return False
+    nombres = [p["nombre"] for p in ambiguos[:4]]
+    if len(nombres) == 2:
+        opciones = f"*{nombres[0]}* o *{nombres[1]}*"
+    else:
+        opciones = ", ".join(f"*{n}*" for n in nombres[:-1]) + f" o *{nombres[-1]}*"
+    return f"Para no equivocarme 😊 ¿te refieres a {opciones}?"
 
 
-def _es_seleccion_de_lista_mostrada(user_text: str, history: list[dict]) -> bool:
-    """El cliente elige por número ("el 2 y 3") o por ordinal ("el primero") de
-    una lista que el bot ya envió con emojis de numeración (1️⃣, 2️⃣...) en el
-    turno anterior. Requiere ver esa numeración reciente para no confundir
-    cualquier número suelto (ej: "tengo 25 años", una dirección) con una
-    selección de producto."""
-    if not (_SELECCION_NUMERICA_RE.search(user_text or "")
-            or _SELECCION_ORDINAL_RE.search(user_text or "")):
-        return False
-    return _bot_mostro_lista(history)
+async def _resolver_seleccion(user_text: str, estado: dict | None):
+    """A qué producto de los mostrados se refiere el cliente.
 
+    Reúne las tres piezas: las rondas del estado (resueltas a productos reales),
+    la cascada determinística de `app.seleccion`, y el LLM restringido como
+    último recurso.
 
-def _pide_comprar_sin_numero(user_text: str, history: list[dict],
-                             restricciones_msg: dict,
-                             tipo_activo: str | None) -> bool:
-    """El cliente dice que quiere comprar, pero no dice cuál de la lista.
-
-    Tres condiciones, todas necesarias:
-
-    - No trae número ni ordinal. De eso se encarga la selección de lista, que NO
-      se toca; "quiero el 2" casa el patrón B por el "el", y se descarta aquí
-      primero para que el orden de las palancas no importe.
-    - El bot mostró una lista numerada hace poco. Sin lista no hay número que
-      pedir y la respuesta correcta es preguntarle qué busca.
-    - El mensaje no nombra nada nuevo. Se comparan las facetas del MENSAJE, no
-      las fusionadas con el estado: "quiero comprar lubricantes" trae tipo propio
-      y es una búsqueda; "quiero el dildo" repite el tipo que ya está en pantalla
-      y es una selección mal expresada. Un atributo ("un dildo doble") también
-      cuenta como búsqueda: está refinando, no eligiendo.
+    Sustituye a cuatro heurísticas que antes vivían aquí sueltas y no se hablaban
+    entre sí (`_SELECCION_NUMERICA_RE`, `_SELECCION_ORDINAL_RE`,
+    `_es_seleccion_de_lista_mostrada`, `_pide_comprar_sin_numero`), más la
+    resolución por índice de `pedidos.py`. Aquellas inferían si había una lista
+    viva buscando keycaps en el texto del historial; ahora las rondas son un dato
+    del estado, no una lectura del texto.
     """
-    texto = user_text or ""
-    if _SELECCION_NUMERICA_RE.search(texto) or _SELECCION_ORDINAL_RE.search(texto):
-        return False
-    if not (_COMPRA_SIN_OBJETO_RE.search(texto) or _COMPRA_OBJETO_VAGO_RE.search(texto)):
-        return False
-    if not _bot_mostro_lista(history):
-        return False
-    # Las claves con guion bajo son internas de `interpretar_mensaje` (los
-    # implícitos), no facetas que el cliente haya nombrado.
-    propias = {k: v for k, v in (restricciones_msg or {}).items()
+    rondas: list[dict] = []
+    for r in ((estado or {}).get("rondas") or []):
+        productos = []
+        for pid in (r.get("ids") or []):
+            try:
+                p = await catalog.get_producto_by_id(pid)
+            except Exception:
+                log.warning("No se pudo resolver el producto %s de una ronda", pid)
+                continue
+            if p:
+                productos.append(p)
+        if productos:
+            rondas.append({"categoria": r.get("categoria"), "productos": productos})
+
+    res = seleccion.resolver(user_text, rondas)
+
+    # REFINAR NO ES ELEGIR. "quiero un dildo realista" nombra una CLASE de
+    # producto: el tipo y un calificador del tipo. "quiero el realista" o "quiero
+    # el disfraz de policía" señalan uno concreto — nombran una cosa sola.
+    #
+    # Sin esta guarda, "realista" casa con "Dildo Uno Realista" en pantalla y una
+    # búsqueda legítima se convierte en una selección: el bot deja de mostrar
+    # productos justo cuando el cliente estaba afinando lo que quiere ver. Es la
+    # misma distinción que ya hacía `_pide_comprar_sin_numero` comparando las
+    # facetas del mensaje.
+    propias = {k: v for k, v in facetas.interpretar_mensaje(user_text).items()
                if not k.startswith("_")}
-    if not propias:
-        return True
-    return list(propias) == ["tipo"] and propias["tipo"] == tipo_activo
+    if propias.get("tipo") and propias.get("atributos"):
+        if res.ids or res.ambiguos:
+            log.info("'%s' nombra tipo+atributo: es una búsqueda, no una selección",
+                     (user_text or "")[:40])
+        res.ids = []
+        res.ambiguos = []
+        return res
+
+    # El LLM solo entra si las reglas NO resolvieron y el cliente está cerrando.
+    # Dos razones para ese orden: las reglas son gratis e inmediatas, y en lo que
+    # ellas aciertan son más fiables que el modelo. Lo que cubre el LLM es la
+    # referencia por atributos que no están en el nombre ("las esposas negras
+    # peludas"), donde seguir ampliando listas de palabras a mano no escala.
+    if not res.ids and res.hay_intencion_compra:
+        mostrados = [p for r in rondas for p in r["productos"]]
+        try:
+            ids = await openai_client.seleccionar_producto_llm(user_text, mostrados)
+        except Exception:
+            log.warning("Selección por LLM falló — se pedirá el nombre al cliente")
+            ids = None
+        if ids:
+            res.ids = ids
+            res.ambiguos = []
+    return res
 
 
 # Frases que indican que el bot REALMENTE abrió el checkout (pidió datos de envío
@@ -1188,10 +1165,22 @@ async def _recuperar_candidatos(
     categoría NUEVA y distinta dispara mostrar fotos de esa categoría. Así
     "si", "ok", "dame", "los rojos" muestran productos en vez de re-preguntar.
     """
+    # Se guarda antes de cualquier cosa porque el cambio de tema de más abajo
+    # pone `estado = None` para que la búsqueda salga limpia. Las rondas no son
+    # parte de esa limpieza: son la memoria de qué ha visto el cliente, y es
+    # contra ellas contra lo que se resuelve "el disfraz de policía" dos
+    # categorías después.
+    estado_al_entrar = estado
+
     clasif = await catalog.clasificar_intencion_cliente(
         user_text, history, (estado or {}).get("categoria_funcional"),
         (estado or {}).get("restricciones"))
     restricciones = clasif.get("restricciones") or {}
+
+    # A qué producto de los ya mostrados se refiere el cliente. Se resuelve una
+    # sola vez por turno y alimenta las dos palancas de más abajo y la escritura
+    # del carrito.
+    res_seleccion = await _resolver_seleccion(user_text, estado_al_entrar)
 
     # Fusionar con estado previo (el estado recalifica categoría/género si el
     # nuevo mensaje los aclara; si no, conserva lo persistido).
@@ -1315,32 +1304,55 @@ async def _recuperar_candidatos(
         clasif["calificado"] = False
         log.info("Fase de venta detectada — fotos desactivadas este turno")
 
-    # REGLA ANTI-REENVÍO EN SELECCIÓN: si el cliente elige productos por número
-    # de una lista que el bot ya mostró (ej: "el 2 y 3"), NO reenviar fotos.
-    # Antes, calificado=True persistido hacía que CUALQUIER mensaje sin categoría
-    # nueva disparara mostrar_por_estado=True, y el sistema forzaba el reenvío de
-    # los mismos candidatos cuando el LLM (correctamente) no emitía marcadores
-    # [FOTO] en su respuesta de confirmación de venta.
-    if debe_mostrar and _es_seleccion_de_lista_mostrada(user_text, history):
-        debe_mostrar = False
-        clasif["calificado"] = False
-        log.info("Selección numérica de lista ya mostrada — fotos desactivadas este turno")
-
-    # REGLA DE PEDIDO SIN NÚMERO: el cliente dice que quiere comprar pero no dice
-    # cuál ("quiero pedir", "dame ese"). Cuarta palanca sobre debe_mostrar, con la
-    # forma de la fase de venta y la selección numérica: apaga búsqueda, lista y
-    # fotos sin tocar nada más.
+    # REGLA ANTI-REENVÍO EN SELECCIÓN: si el cliente está eligiendo de una lista
+    # que el bot ya mostró, NO reenviar fotos. Antes, calificado=True persistido
+    # hacía que CUALQUIER mensaje sin categoría nueva disparara
+    # mostrar_por_estado=True, y el sistema forzaba el reenvío de los mismos
+    # candidatos cuando el LLM (correctamente) no emitía marcadores [FOTO] en su
+    # respuesta de confirmación de venta.
     #
-    # A diferencia de esas dos, NO pone `calificado=False`. Ellas lo hacen para que
-    # el turno siguiente no fuerce un reenvío; aquí el cliente sigue calificado —ya
-    # sabe qué quiere, solo falta el número— y borrarlo haría que el bot le volviera
-    # a preguntar la categoría.
-    pide_numero_de_lista = _pide_comprar_sin_numero(
-        user_text, history, facetas.interpretar_mensaje(user_text),
-        ((estado or {}).get("restricciones") or {}).get("tipo"))
+    # Se resuelve contra `estado_al_entrar` y no contra `estado`: el cambio de
+    # tema de más arriba pone `estado = None` para que la BÚSQUEDA salga limpia,
+    # pero las rondas son la memoria de qué ha visto el cliente y siguen siendo
+    # válidas. Sin esto, pedir otra categoría borraría la posibilidad de elegir
+    # algo visto antes — justo el caso multi-categoría.
+    if res_seleccion.ids or res_seleccion.ambiguos:
+        if debe_mostrar:
+            debe_mostrar = False
+            clasif["calificado"] = False
+            log.info("El cliente está eligiendo de lo ya mostrado (%s) — "
+                     "fotos desactivadas este turno",
+                     res_seleccion.ids or [p["id"] for p in res_seleccion.ambiguos])
+
+    # REGLA DE PEDIDO SIN PRODUCTO IDENTIFICADO: el cliente dice que quiere
+    # comprar pero no se pudo saber cuál ("quiero pedir", "dame ese"). Palanca
+    # sobre debe_mostrar con la misma forma que la fase de venta: apaga búsqueda,
+    # lista y fotos sin tocar nada más.
+    #
+    # A diferencia de la anterior, NO pone `calificado=False`. Aquella lo hace
+    # para que el turno siguiente no fuerce un reenvío; aquí el cliente sigue
+    # calificado —ya sabe qué quiere, solo falta identificarlo— y borrarlo haría
+    # que el bot le volviera a preguntar la categoría.
+    #
+    # La guarda de facetas es la que separa una compra de una BÚSQUEDA nueva. Se
+    # miran las facetas del MENSAJE, no las fusionadas con el estado: "quiero
+    # comprar lubricantes" trae tipo propio y es una búsqueda; "quiero el dildo"
+    # repite el tipo que ya está en pantalla y es una selección mal expresada. Un
+    # atributo ("un dildo doble") también cuenta como búsqueda: está refinando.
+    propias_msg = {k: v for k, v in facetas.interpretar_mensaje(user_text).items()
+                   if not k.startswith("_")}  # las de guion bajo son implícitos
+    tipo_activo = ((estado_al_entrar or {}).get("restricciones") or {}).get("tipo")
+    nombra_algo_nuevo = bool(propias_msg) and not (
+        list(propias_msg) == ["tipo"] and propias_msg["tipo"] == tipo_activo)
+
+    pide_numero_de_lista = bool(
+        res_seleccion.hay_intencion_compra
+        and not res_seleccion.ids and not res_seleccion.ambiguos
+        and not nombra_algo_nuevo
+        and (estado_al_entrar or {}).get("rondas"))
     if pide_numero_de_lista:
         debe_mostrar = False
-        log.info("Intención de compra sin número — se le pide el número de la lista")
+        log.info("Intención de compra sin producto identificado — se le pide el nombre")
 
     candidatos: list[dict] = []
     exclude = estado.get("productos_mostrados", []) if estado else []
@@ -1668,8 +1680,13 @@ async def _recuperar_candidatos(
         # no hay lista ni fotos que redactar.
         "pregunta_faceta": pregunta_faceta,
         # El cliente pidió comprar sin decir cuál. Si viene, ES el turno: no hay
-        # lista ni fotos, solo la petición del número.
+        # lista ni fotos, solo la petición del nombre.
         "pide_numero_de_lista": pide_numero_de_lista,
+        # A qué producto de los mostrados se refiere. Viaja hasta el llamador
+        # porque es quien escribe el carrito: la selección se REGISTRA en el
+        # turno en que se entiende, en vez de reconstruirse al cerrar la venta
+        # releyendo el historial.
+        "seleccion": res_seleccion,
         # ¿Este cliente ya vio productos de lo que está mirando? Sale de
         # `exclude` y no del estado crudo a propósito: si cambió de tema,
         # `exclude` se limpia y volver a calificar es lo correcto.
@@ -2004,10 +2021,16 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # el sistema; si lo escribe el LLM numera desde 1 por su cuenta y un offset en
     # las fotos las desalinearía del texto.
     offset_numeracion = 0
-    if info.get("pide_numero_de_lista"):
-        # Va PRIMERO: el cliente ya dijo que quiere comprar. Cualquier otra rama
-        # —pregunta de faceta, categoría agotada, el LLM— lo devuelve a explorar
-        # justo cuando estaba cerrando.
+    ambiguos = list(getattr(info.get("seleccion"), "ambiguos", []) or [])
+    if ambiguos:
+        # Va PRIMERO, incluso antes de la petición de nombre: el cliente ya
+        # nombró algo, solo que encaja con varios. Preguntarle "¿cuál?" en
+        # abstracto lo deja donde estaba; se le dan los nombres concretos.
+        raw_reply = _pregunta_desambiguacion(ambiguos)
+    elif info.get("pide_numero_de_lista"):
+        # Va antes que el resto: el cliente ya dijo que quiere comprar. Cualquier
+        # otra rama —pregunta de faceta, categoría agotada, el LLM— lo devuelve a
+        # explorar justo cuando estaba cerrando.
         raw_reply = PEDIR_NUMERO_DE_LISTA
     elif info.get("pregunta_faceta"):
         # Va ANTES que `es_agotado`: una petición amplia llega con la lista de
@@ -2034,17 +2057,23 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # necesita la ficha REAL de ese producto para no responder con sentido
         # común. Sin esto contestaba "sí, tiene sabor" a un lubricante que no.
         # Es turno de asesoría si NO va a mostrar productos nuevos, HAY un
-        # producto activo (último mostrado), NO es checkout ni selección numérica.
+        # producto activo, NO es checkout y NO está eligiendo.
+        #
+        # Cuando SÍ está eligiendo, el producto activo es el que acaba de elegir
+        # —no el último que se le mostró—: si preguntó por el primero de la lista,
+        # responder con la ficha del último es contestar sobre otro producto.
         producto_activo = None
-        es_seleccion = _es_seleccion_de_lista_mostrada(
-            user_text, history[-6:] if history else [])
-        if (not info["debe_mostrar"] and ids_mostrados
-                and not info.get("en_fase_venta") and not es_seleccion):
+        sel = info.get("seleccion")
+        elegidos = list(getattr(sel, "ids", []) or [])
+        pid_activo = elegidos[-1] if elegidos else (ids_mostrados[-1] if ids_mostrados else None)
+        if (not info["debe_mostrar"] and pid_activo
+                and not info.get("en_fase_venta")
+                and not getattr(sel, "ambiguos", None)):
             try:
-                producto_activo = await catalog.get_producto_by_id(ids_mostrados[-1])
+                producto_activo = await catalog.get_producto_by_id(pid_activo)
             except Exception:
                 log.warning("No se pudo cargar el producto activo id=%s para asesoría",
-                            ids_mostrados[-1] if ids_mostrados else None)
+                            pid_activo)
         raw_reply = await openai_client.complete(
         user_text, history,
         lead=lead, summary=summary_text,
@@ -2261,13 +2290,38 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             wa_id, info["categoria_funcional"], info["genero"], len(final_productos),
         )
 
+    # El cliente eligió: se registra AHORA, en el turno en que se entendió.
+    #
+    # Antes esto no se guardaba en ningún sitio y se reconstruía al cerrar la
+    # venta releyendo el texto del historial. Con una sola lista y una sola
+    # elección funcionaba; con tres categorías por medio, el historial trae tres
+    # listas y las elecciones dispersas entre turnos, y adivinar cuál era cuál
+    # dejó de ser posible.
+    elegidos = list(getattr(info.get("seleccion"), "ids", []) or [])
+    carrito_nuevo = None
+    if elegidos:
+        productos_elegidos = []
+        for pid in elegidos:
+            try:
+                p = await catalog.get_producto_by_id(pid)
+            except Exception:
+                log.warning("No se pudo cargar el producto elegido %s para el carrito", pid)
+                continue
+            if p:
+                productos_elegidos.append(p)
+        if productos_elegidos:
+            carrito_nuevo = seleccion.agregar_al_carrito(
+                (estado_previo or {}).get("carrito") or [], productos_elegidos)
+            log.info("Carrito de %s: %s", wa_id,
+                     [i["nombre"] for i in carrito_nuevo])
+
     # Persistir estado de conversación: registrar categoría/género/calificación
     # y los productos efectivamente mostrados.
     # IMPORTANTE: si el bot acaba de calificar (tiene categoría pero no mostró
     # fotos), marcamos calificado=True para que el SIGUIENTE turno sepa que ya
     # preguntó y debe mostrar fotos ante cualquier respuesta del cliente. Esto
     # rompe el bucle de re-preguntas infinitas ("si" → vuelve a preguntar).
-    if info["categoria_funcional"] or enviados_ids:
+    if info["categoria_funcional"] or enviados_ids or carrito_nuevo:
         recien_califico = bool(info["categoria_funcional"] and not enviados_ids)
         await db.upsert_conversation_state(
             wa_id,
@@ -2282,6 +2336,12 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
             add_pregunta_hecha=((info.get("restricciones") or {}).get("tipo")
                                 if info.get("pregunta_faceta") else None),
             texto_busqueda=info.get("texto_busqueda"),
+            # La ronda va aparte de `add_productos_mostrados`: aquella es el
+            # conjunto de exclusión (sin orden), esta es la lista ordenada y con
+            # categoría contra la que se resuelve "el 2" o "el de policía".
+            add_ronda=({"categoria": info.get("categoria_funcional"),
+                        "ids": enviados_ids} if enviados_ids else None),
+            carrito=carrito_nuevo,
         )
 
     # Memoria comprimida: si la conversación crece, consolidarla en un resumen
