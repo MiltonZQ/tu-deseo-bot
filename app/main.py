@@ -554,11 +554,19 @@ _OFRECE_PRODUCTOS_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Lista numerada de productos con precio ("1️⃣ Nombre — $80.000"). Es la forma
-# más directa de detectar que el LLM está ofreciendo productos concretos, incluso
-# si no usó ninguna de las frases de _OFRECE_PRODUCTOS_RE. Si aparece sin fotos
-# reales detrás, son productos inventados.
-_LISTA_PRODUCTOS_RE = re.compile(r"[1-9]️⃣[^\n]*\$\s*[\d.,]+")
+# Lista de productos con precio ("*Nombre* — $80.000"). Es la forma más directa
+# de detectar que el LLM está ofreciendo productos concretos, incluso si no usó
+# ninguna de las frases de _OFRECE_PRODUCTOS_RE. Si aparece sin fotos reales
+# detrás, son productos inventados.
+#
+# La marca era el keycap (`1️⃣ Nombre — $80.000`). Al quitar la numeración de la
+# presentación se queda sin señal, así que pasa a ser "nombre en negrita +
+# precio", que es el formato que sí sigue existiendo.
+#
+# OJO: este patrón casa MÁS que el anterior, y en particular casa un resumen de
+# pedido en el checkout. Ya pasó una vez con los keycaps (ver la guardia de fase
+# de venta más abajo, que es obligatoria por esto).
+_LISTA_PRODUCTOS_RE = re.compile(r"\*[^*\n]{3,80}\*\s*—\s*\$\s*[\d.,]+")
 
 # Mensaje honesto cuando el cliente pide algo que no se pudo resolver contra el
 # catálogo. Coherente con la regla "nunca digas 'no tenemos' sin verificar" del
@@ -570,32 +578,19 @@ _SIN_RESULTADO_MSG = (
 )
 
 
-# CTA de la lista numerada. Se pide el NÚMERO, no "cuál te gusta": con la
-# pregunta abierta el cliente contestaba "ese", "el dildo" o "quiero pedir", y
-# ninguna de las tres identifica un producto. El número sí, y la numeración es
-# continua entre rondas justamente para que no sea ambiguo (ver `_numero_lista`).
-_CTA_CON_MAS = ("Por favor, indícame el número o los números de los productos "
-                "que deseas adquirir, o si deseas ver más diseños 😊")
-_CTA_SIN_MAS = ("Por favor, indícame el número o los números de los productos "
-                "que deseas adquirir 😊")
-
-
-_KEYCAPS = ("0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣")
-
-
-def _numero_lista(n: int) -> str:
-    """Numeración visual para las listas de producto.
-
-    1..10 usan el keycap correspondiente; a partir de 11 se concatenan los dígitos
-    (12 → 1️⃣2️⃣). Se mantiene siempre el carácter de keycap porque
-    `_es_seleccion_de_lista_mostrada` lo usa para reconocer que el bot mostró una
-    lista numerada en el turno anterior.
-    """
-    if n == 10:
-        return "🔟"
-    if 1 <= n < 10:
-        return _KEYCAPS[n]
-    return "".join(_KEYCAPS[int(d)] for d in str(n))
+# CTA de la lista. Se pide el NOMBRE, no "cuál te gusta": con la pregunta
+# abierta el cliente contestaba "ese", "el dildo" o "quiero pedir", y ninguna de
+# las tres identifica un producto.
+#
+# Antes se pedía el número, y el número es posicional: se reinicia entre rondas.
+# El intento de arreglarlo —numeración continua entre listas— producía algo que
+# el cliente no podía ver: no hay forma de saber que el disfraz de hace tres
+# mensajes era el 7. El nombre es único y permanente, y está a la vista en el
+# caption de cada foto. Un número lo sigue entendiendo `app.seleccion`, con
+# ámbito en la última ronda; simplemente ya no se anuncia.
+_CTA_CON_MAS = ("Por favor, indícame el nombre del producto que deseas adquirir, "
+                "o si deseas ver más diseños 😊")
+_CTA_SIN_MAS = ("Por favor, indícame el nombre del producto que deseas adquirir 😊")
 
 
 def _format_precio(precio) -> str:
@@ -612,20 +607,22 @@ def _format_precio(precio) -> str:
 
 
 def _detalle_productos_mostrados(productos: list[dict | None], offset: int = 0) -> str:
-    """El bloque de nombres y precios exactos que recibe el LLM, numerado igual
-    que la lista que vio el cliente.
+    """El bloque de nombres y precios exactos que recibe el LLM.
 
-    Iba con viñetas, y como el CTA le pide al cliente el NÚMERO, el LLM tenía
-    que contar para resolver un "1". La numeración coincide sin trucos: los IDs
-    se acumulan en orden de envío y el offset de cada ronda es cuántos llevaba.
+    Sin numerar. Al LLM se le pedía que resolviera un número contando posiciones,
+    que es de las cosas que peor hacen los modelos; ahora quien resuelve la
+    referencia es `app.seleccion` y lo que el LLM necesita de aquí es el nombre y
+    el precio EXACTOS para confirmar sin inventarse cifras.
 
-    Acepta `None` en la lista y se salta esa línea CONSERVANDO su número: un
-    producto que ya no se resuelve por ID no puede correr un puesto a todos los
-    demás, porque entonces el "2" del cliente y el "2" del LLM serían distintos.
+    Acepta `None` en la lista (un producto que ya no se resuelve por ID) y se
+    salta esa línea.
+
+    `offset` se conserva en la firma por compatibilidad con el llamador, pero ya
+    no afecta al texto.
     """
     return "\n".join(
-        f"  {_numero_lista(i)} {p['nombre']} — {_format_precio(p['precio'])}"
-        for i, p in enumerate(productos, 1 + offset) if p
+        f"  • {p['nombre']} — {_format_precio(p['precio'])}"
+        for p in productos if p
     )
 
 
@@ -784,7 +781,7 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     corresponden a los que se van a enviar.
 
     La salida es la composición de `_encabezado_lista` (intro/aviso) y
-    `_cuerpo_lista` (lista numerada + marcadores + CTA). Se mantiene como una
+    `_cuerpo_lista` (lista con precios + marcadores + CTA). Se mantiene como una
     función aparte porque es lo que se persiste íntegro en el historial (y lo que
     leen los tests), aunque al cliente se le envíe troceado: intro → fotos → CTA.
     """
@@ -830,20 +827,24 @@ def _encabezado_lista(info: dict, mas_disenos: bool = False) -> str:
 
 
 def _cuerpo_lista(candidatos: list[dict], info: dict, offset: int = 0) -> str:
-    """Lista numerada con precios + marcadores [FOTO:ID] + CTA.
+    """Lista de productos con precios + marcadores [FOTO:ID] + CTA.
 
     Sin el encabezado. Sirve para reconstruir el texto completo que se persiste
     en el historial y como fallback si todas las fotos fallan y hay que
     enseñarle la lista en texto para que no se quede con solo la intro corta.
 
-    offset: cuántos productos ya vio el cliente en esta misma búsqueda. La
-    numeración CONTINÚA (6️⃣, 7️⃣…) en vez de reiniciar en 1️⃣, porque al final se
-    le pide "indícame los números de los que quieres" y dos productos distintos
-    con el mismo número hacen ambiguo el pedido.
+    Sin numeración: el nombre es lo que se le pide al cliente. El número era
+    posicional y se reiniciaba entre rondas, y el intento de arreglarlo
+    —numeración continua entre rondas— producía algo que el cliente no podía
+    ver: no hay forma de saber que el disfraz de hace tres mensajes era el 7.
+    Un número lo sigue entendiendo el resolvedor, con ámbito en la última ronda.
+
+    `offset` se conserva en la firma porque el llamador lo sigue calculando para
+    otras decisiones, pero ya no afecta al texto.
     """
     lineas, marcadores = [], []
-    for idx, p in enumerate(candidatos[:5], 1 + offset):
-        lineas.append(f"{_numero_lista(idx)} *{p['nombre'][:60]}* — {_format_precio(p.get('precio'))}")
+    for p in candidatos[:5]:
+        lineas.append(f"• *{p['nombre'][:60]}* — {_format_precio(p.get('precio'))}")
         marcadores.append(f"[FOTO:{p['id']}]")
     cta = _CTA_CON_MAS if info.get("hay_mas") else _CTA_SIN_MAS
     return "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
@@ -868,11 +869,12 @@ async def _enviar_fotos_productos(
             continue
         seen_ids.add(pid)
         nombre = (p.get("nombre") or "")[:60]
-        # El caption lleva el número (para que el cliente responda "quiero el 3") Y
-        # el precio: como el texto visible ya no repite la lista numerada (se envía
-        # troceado: intro → fotos → CTA), la foto es el único sitio donde el cliente
-        # ve cada precio junto al producto. Mismo formato que `_cuerpo_lista`.
-        caption = f"{_numero_lista(idx)} *{nombre}* — {_format_precio(p.get('precio'))}"
+        # El caption lleva el NOMBRE y el precio. El texto visible ya no repite la
+        # lista (se envía troceado: intro → fotos → CTA), así que la foto es el
+        # único sitio donde el cliente ve cada precio junto a su producto — y
+        # donde ve el nombre exacto que el CTA le va a pedir que escriba. Mismo
+        # formato que `_cuerpo_lista`.
+        caption = f"*{nombre}* — {_format_precio(p.get('precio'))}"
         # El try/except va DENTRO del bucle: antes envolvía el bucle entero, así que
         # la primera imagen que fallara (URL rota, formato que WhatsApp rechaza,
         # rate limit) cancelaba en silencio TODAS las fotos restantes. El cliente
@@ -994,10 +996,9 @@ _RECHAZO_CROSS_SELLING_RE = re.compile(
 # Respuesta cuando el cliente quiere comprar pero no se pudo identificar qué.
 # NO lleva lista ni marcadores de foto a propósito: el cliente ya vio los
 # productos y está cerrando; reenviárselos es el ruido que rompe la venta.
-PEDIR_NUMERO_DE_LISTA = (
-    "¡Perfecto! Para tomar tu pedido, por favor indícame el número o los números "
-    "de los productos que deseas adquirir, según las opciones que te envié "
-    "anteriormente 😊"
+PEDIR_NOMBRE_DE_LISTA = (
+    "¡Perfecto! Para tomar tu pedido, por favor indícame el nombre del producto "
+    "que deseas adquirir, según las opciones que te envié anteriormente 😊"
 )
 
 
@@ -1996,9 +1997,8 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     productos_detalle_estado = ""
     ids_mostrados = (estado_previo or {}).get("productos_mostrados", [])
     if ids_mostrados:
-        # Solo los últimos 10, pero numerados desde su posición real en la lista
-        # que vio el cliente: en la tercera ronda de un "ver más", el primero
-        # de este bloque es 6️⃣, no 1️⃣.
+        # Solo los últimos 10: es lo que el LLM necesita tener a mano para
+        # confirmar con el nombre y el precio exactos.
         recientes = ids_mostrados[-10:]
         offset = len(ids_mostrados) - len(recientes)
         detalle = [await catalog.get_producto_by_id(pid) for pid in recientes]
@@ -2031,7 +2031,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # Va antes que el resto: el cliente ya dijo que quiere comprar. Cualquier
         # otra rama —pregunta de faceta, categoría agotada, el LLM— lo devuelve a
         # explorar justo cuando estaba cerrando.
-        raw_reply = PEDIR_NUMERO_DE_LISTA
+        raw_reply = PEDIR_NOMBRE_DE_LISTA
     elif info.get("pregunta_faceta"):
         # Va ANTES que `es_agotado`: una petición amplia llega con la lista de
         # productos mostrados vacía, así que nunca es una categoría agotada.
@@ -2132,15 +2132,21 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # sobre foto_ids brutos, para cubrir también el [FOTO:999] alucinado. El filtro
     # de IDs impide mandar la foto, pero sin esta guardia el TEXTO igual salía.
     # Se detecta por las frases de plantilla ("Mira estas opciones…") y por una
-    # lista numerada con precios. Dos salidas según haya categoría o no.
+    # lista de productos con precios. Dos salidas según haya categoría o no.
+    #
+    # La fase de venta queda FUERA de toda la guardia, no solo de su segunda
+    # rama. Ahí una lista de productos con precios es el resumen legítimo del
+    # pedido, no una invención: el cliente ya eligió y el bot le está repitiendo
+    # lo que se lleva. Ya pasó una vez —un resumen con "1️⃣ Esposas — $29.900" se
+    # convertía en la pregunta de categoría— y el patrón nuevo (nombre en negrita
+    # + precio, sin keycap) casa un resumen todavía más fácil.
     if (not info["debe_mostrar"]
             and not final_productos
+            and not info.get("en_fase_venta")
             and (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply))):
         # Sale de la misma función que la rama determinista de arriba: si ella
         # sabe que no toca calificar —el cliente ya vio productos, está en fase
-        # de venta, o se le acaba de pedir el número—, aquí tampoco. Leyendo el
-        # diccionario en línea, un resumen de pedido con "1️⃣ Esposas — $29.900"
-        # casaba `_LISTA_PRODUCTOS_RE` y se convertía en la pregunta de categoría.
+        # de venta, o se le acaba de pedir el nombre—, aquí tampoco.
         pregunta = _pregunta_de_calificacion(info)
         if pregunta:
             log.info(
@@ -2149,12 +2155,10 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
                 info["categoria_funcional"],
             )
             reply = pregunta
-        elif not info.get("en_fase_venta"):
+        else:
             # Sin categoría no hay pregunta de calificación que inyectar. Antes se
             # dejaba pasar el texto tal cual, y el LLM podía listar productos que no
             # existen (caso "multiorgarmo": 5 productos fabricados con precios).
-            # Se excluye la fase de venta: ahí una lista numerada con precios es el
-            # resumen legítimo del pedido, no una invención.
             log.warning(
                 "LLM ofreció productos sin candidatos ni categoría — texto reemplazado "
                 "por mensaje honesto (posible invención)",
@@ -2239,8 +2243,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
     # Turno de productos que arma el sistema: el texto se envía TROCEADO
     # (intro → fotos → CTA) en vez de un solo bloque. El `reply` completo
     # (intro+lista+CTA) es el que se acaba de guardar en el historial: ahí deben
-    # seguir los keycaps y los precios para que `_bot_mostro_lista` detecte la
-    # lista, el LLM los vea y `pedidos.py` resuelva por posición. Al cliente le
+    # seguir los nombres y los precios para que el LLM los vea. Al cliente le
     # llega troceado para que cada precio lo vea junto a su foto (en el caption),
     # no repetido en un listado previo, y el CTA cierre tras la última imagen.
     es_turno_productos_sistema = texto_lo_arma_el_sistema and bool(final_productos)
@@ -2271,7 +2274,7 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         # Cierre del envío troceado: si las fotos llegaron, el CTA va al final,
         # tras la última imagen (no antes, donde quedaba enterrado). Si NINGUNA
         # foto llegó (todas rotas), el cliente solo vio la intro corta y no sabe
-        # qué pedir: se le envía la lista numerada con precios en texto como
+        # qué pedir: se le envía la lista con nombres y precios en texto como
         # fallback para que tenga algo concreto que elegir.
         if enviados_ids:
             await whatsapp_client.send_text(

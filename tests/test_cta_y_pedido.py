@@ -1,8 +1,14 @@
 """Después de la lista, el cliente tiene que saber qué contestar.
 
 El CTA decía "¿Cuál te gusta?" y el cliente contestaba "ese", "el dildo" o
-"quiero pedir". Ahora pide el número, y un mensaje de compra sin número recibe
-la petición del número en vez de otra página de catálogo.
+"quiero pedir". Luego pidió el NÚMERO, y el número resultó ser posicional: se
+reinicia entre listas, y el intento de arreglarlo —numeración continua entre
+rondas— producía algo que el cliente no podía ver (no hay forma de saber que el
+disfraz de hace tres mensajes era el 7).
+
+Ahora pide el NOMBRE, que es único y permanente y está en el caption de cada
+foto. Un número lo sigue entendiendo `app.seleccion` con ámbito en la última
+ronda; simplemente ya no se anuncia.
 """
 from __future__ import annotations
 
@@ -25,24 +31,32 @@ PRODS = [{"id": i, "nombre": f"Producto {i}", "precio": 50000} for i in (1, 2, 3
 
 # ── Tarea 1: el CTA ──
 
-def test_con_mas_opciones_el_cta_pide_numero_y_ofrece_ver_mas():
+def test_con_mas_opciones_el_cta_pide_nombre_y_ofrece_ver_mas():
     txt = main._texto_desde_candidatos(PRODS, {"intencion": "vibradores", "hay_mas": True})
-    assert "indícame el número o los números" in txt, txt
+    assert "indícame el nombre del producto" in txt, txt
     assert "ver más diseños" in txt, txt
 
 
-def test_sin_mas_opciones_el_cta_pide_numero_y_no_ofrece_ver_mas():
+def test_sin_mas_opciones_el_cta_pide_nombre_y_no_ofrece_ver_mas():
     txt = main._texto_desde_candidatos(PRODS, {"intencion": "vibradores", "hay_mas": False})
-    assert "indícame el número o los números" in txt, txt
+    assert "indícame el nombre del producto" in txt, txt
     assert "ver más" not in txt.lower(), txt
 
 
-def test_el_cta_pide_el_numero_tambien_cuando_se_cedio_en_algo():
+def test_el_cta_pide_el_nombre_tambien_cuando_se_cedio_en_algo():
     """Con `relajado` el aviso sustituye la entrada, pero el CTA no cambia."""
     txt = main._texto_desde_candidatos(PRODS, {
         "intencion": "anal", "relajado": "zona", "hay_mas": False,
         "restricciones": {"tipo": "vibrador", "zona": "anal"}})
-    assert "indícame el número o los números" in txt, txt
+    assert "indícame el nombre del producto" in txt, txt
+
+
+def test_el_cta_no_pide_numeros():
+    """La regresión que importa: si el CTA volviera a pedir un número, el
+    cliente escribiría uno cuyo ámbito no puede ver."""
+    txt = main._texto_desde_candidatos(PRODS, {"intencion": "vibradores", "hay_mas": True})
+    assert "número" not in txt.lower(), txt
+    assert "️⃣" not in txt, txt
 
 
 # ── Elegir de la lista mostrada ──
@@ -129,7 +143,7 @@ def test_si_ya_dijo_cual_no_hay_nada_que_pedirle():
 
 
 def test_la_copia_no_vuelve_a_listar_productos():
-    assert "[FOTO:" not in main.PEDIR_NUMERO_DE_LISTA
+    assert "[FOTO:" not in main.PEDIR_NOMBRE_DE_LISTA
 
 
 def test_la_desambiguacion_nombra_las_opciones_concretas():
@@ -144,36 +158,29 @@ def test_la_desambiguacion_nombra_las_opciones_concretas():
 
 # ── El bloque de precios que recibe el LLM ──
 
-def test_el_bloque_de_precios_va_numerado_como_la_lista():
-    """El cliente elige por número; el bloque que ve el LLM iba con viñetas y
-    tenía que contar para saber cuál era '1'. El formato del precio es el mismo
-    que ve el cliente ($29.900, punto como separador de miles)."""
+def test_el_bloque_que_ve_el_llm_lleva_nombre_y_precio_exactos():
+    """Lo que el LLM necesita para confirmar sin inventarse cifras. Ya no va
+    numerado: se le pedía resolver un número contando posiciones, que es de las
+    cosas que peor hacen los modelos. El formato del precio es el mismo que ve
+    el cliente ($29.900, punto como separador de miles)."""
     lineas = main._detalle_productos_mostrados(
         [{"nombre": "Esposas Lois", "precio": 29900},
          {"nombre": "Esposas Kratos", "precio": 45900}]).splitlines()
-    assert lineas[0].strip().startswith("1️⃣"), lineas
     assert "Esposas Lois" in lineas[0]
     assert "29.900" in lineas[0], lineas
     assert "29,900" not in lineas[0], lineas
-    assert lineas[1].strip().startswith("2️⃣"), lineas
+    assert "Esposas Kratos" in lineas[1]
+    assert "️⃣" not in "\n".join(lineas), lineas
 
 
-def test_la_numeracion_del_bloque_no_reinicia_tras_ver_mas():
-    """Con offset, el sexto producto es 6️⃣ para el cliente y para el LLM."""
-    prods = [{"nombre": f"P{i}", "precio": 1000} for i in range(1, 4)]
-    lineas = main._detalle_productos_mostrados(prods, offset=5).splitlines()
-    assert lineas[0].strip().startswith("6️⃣"), lineas
-
-
-def test_un_producto_que_ya_no_existe_no_corre_los_numeros():
-    """Si el 2 no se resuelve por ID, el 3 sigue siendo el 3. Si corriera, el
-    '3' del cliente y el '3' del LLM serían productos distintos."""
+def test_un_producto_que_ya_no_existe_se_salta_sin_reventar():
+    """Un ID que ya no se resuelve contra el catálogo no puede romper el bloque
+    ni arrastrar a los demás."""
     lineas = main._detalle_productos_mostrados(
         [{"nombre": "Uno", "precio": 1000}, None,
          {"nombre": "Tres", "precio": 3000}]).splitlines()
     assert len(lineas) == 2, lineas
-    assert lineas[1].strip().startswith("3️⃣"), lineas
-    assert "Tres" in lineas[1]
+    assert "Uno" in lineas[0] and "Tres" in lineas[1]
 
 
 def test_fase_venta_no_se_pierde_tras_varias_preguntas_intermedias():
@@ -218,14 +225,16 @@ def test_el_caption_de_la_foto_lleva_el_precio():
 
     assert len(enviados) == 1, enviados
     assert "Disfraz Colegiala Inocente Lerot" in enviados[0], enviados[0]
-    assert "1️⃣" in enviados[0], enviados[0]
     assert "119.800" in enviados[0], enviados[0]
+    assert "️⃣" not in enviados[0], (
+        "el caption es donde el cliente lee el nombre que el CTA le pide "
+        f"escribir; un número ahí le invita a responder con el número: {enviados[0]}")
 
 
 def test_la_lista_del_texto_sigue_mostrando_el_precio():
     """La lista completa (con precios) se persiste en el historial aunque al
-    cliente se le envíe troceada: es lo que mantiene `_bot_mostro_lista` y lo
-    que ve el LLM. Si el precio se cayera de ahí, sería una regresión."""
+    cliente se le envíe troceada: es lo que ve el LLM para confirmar con el
+    precio exacto. Si el precio se cayera de ahí, sería una regresión."""
     txt = main._texto_desde_candidatos(
         [{"id": 1, "nombre": "Disfraz Colegiala Inocente Lerot", "precio": 119800}],
         {"intencion": "lenceria", "hay_mas": False})
@@ -263,12 +272,12 @@ def test_el_rotulo_cae_al_tipo_buscado_cuando_no_hay_intencion():
 
 
 # ── Envío troceado: intro → fotos → CTA ──
-# Antes el bot mandaba intro + lista numerada + CTA en un solo texto, y después
+# Antes el bot mandaba intro + lista + CTA en un solo texto, y después
 # las fotos: el cliente veía cada precio dos veces y el CTA quedaba antes que
 # las imágenes. Ahora el turno que arma el sistema se envía troceado: la intro
 # sola, luego las fotos (cada una con su precio en el caption), y el CTA al
 # final. El `reply` completo se sigue persistiendo en el historial: es lo que
-# `_bot_mostro_lista` necesita para detectar la lista y lo que ve el LLM.
+# ve el LLM para confirmar con nombres y precios exactos.
 
 INFO_PROD = {"intencion": "lubricantes-y-cuidado", "hay_mas": False}
 PRODS_CON_FOTO = [
@@ -278,7 +287,7 @@ PRODS_CON_FOTO = [
 
 
 def test_el_encabezado_no_incluye_la_lista_ni_el_cta():
-    """La intro se envía sola antes de las fotos: si trajera la lista numerada
+    """La intro se envía sola antes de las fotos: si trajera la lista
     o el CTA, duplicaría lo que ya va en las fotos y en el cierre."""
     encabezado = main._encabezado_lista(INFO_PROD)
     assert "1️⃣" not in encabezado, encabezado
@@ -288,22 +297,17 @@ def test_el_encabezado_no_incluye_la_lista_ni_el_cta():
 
 
 def test_el_cuerpo_es_lo_que_se_envia_si_las_fotos_fallan():
-    """Fallback: si ninguna foto llega, el cliente recibe la lista numerada con
-    precios en texto. Tiene que tener keycap, precio y CTA para poder pedir."""
+    """Fallback: si ninguna foto llega, el cliente recibe la lista con precios en
+    texto. Tiene que traer nombre, precio y CTA para poder pedir."""
     cuerpo = main._cuerpo_lista(PRODS_CON_FOTO, INFO_PROD, offset=0)
-    assert "1️⃣" in cuerpo, cuerpo
+    assert "Multiorgasmos Euforia" in cuerpo, cuerpo
     assert "40.000" in cuerpo, cuerpo
     assert "indícame" in cuerpo, cuerpo
     assert "[FOTO:10]" in cuerpo, cuerpo
+    assert "️⃣" not in cuerpo, cuerpo
 
 
-def test_el_reply_persistido_tiene_keycap_y_precio_para_el_historial():
-    """Aunque al cliente le llegue troceado, en el historial se guarda el reply
-    completo. `_bot_mostro_lista` busca el keycap ahí; el LLM lee ahí los
-    productos con precio. Si faltaran, se rompería la selección por número."""
-    reply = main._texto_desde_candidatos(PRODS_CON_FOTO, INFO_PROD)
-    assert "1️⃣" in reply, reply
-    assert "40.000" in reply, reply
+
 
 
 def test_el_reply_persistido_conserva_nombres_y_precios():

@@ -200,8 +200,8 @@ async def complete(user_message: str, history: list[dict],
             total = estado.get("total_en_categoria", 0)
             estado_lines.append(
                 f"- ✅ HAY MAS PRODUCTOS: total {total} en categoria, quedan por mostrar. "
-                f"Usa CTA 'Por favor, indícame el número o los números de los productos "
-                f"que deseas adquirir, o si deseas ver más diseños 😊'"
+                f"Usa CTA 'Por favor, indícame el nombre del producto que deseas "
+                f"adquirir, o si deseas ver más diseños 😊'"
             )
         if estado.get("sin_mas_opciones"):
             estado_lines.append(
@@ -217,14 +217,22 @@ async def complete(user_message: str, history: list[dict],
                 f"- Productos ya mostrados (IDs): {', '.join(str(i) for i in estado['productos_mostrados'][-10:])}"
             )
         if estado.get("productos_con_precios"):
+            # Antes aquí vivía una "REGLA ABSOLUTA DE SELECCIÓN NUMÉRICA" que le
+            # pedía al modelo resolver un número contando posiciones en la lista.
+            # Contar posiciones es de las cosas que peor hacen los LLM, y además
+            # ya no hace falta: quien resuelve a qué producto se refiere el
+            # cliente es `app.seleccion`, con las rondas del estado. Lo que el
+            # LLM necesita de aquí es el nombre y el precio EXACTOS para
+            # confirmar sin inventarse cifras.
             estado_lines.append(
-                "- Productos mostrados, NUMERADOS como los vio el cliente:\n"
+                "- Productos mostrados al cliente, con nombre y precio EXACTOS:\n"
                 + estado["productos_con_precios"] + "\n"
-                "- ⚠️ REGLA ABSOLUTA DE SELECCIÓN NUMÉRICA: Si el cliente escribe un número (ej: '1', '2', 'el 1'), "
-                "corresponde ÚNICA Y EXCLUSIVAMENTE a la línea que tiene ESE MISMO número (1️⃣, 2️⃣...). "
-                "Está ESTRICTAMENTE PROHIBIDO reinterpretar el número o cambiarlo por comentarios o colores "
-                "mencionados en mensajes anteriores (ej: si dijo 'negras' antes pero ahora escribe '1', DEBES seleccionar "
-                "e indicar el producto 1️⃣, NO el 4️⃣). Usa los nombres y precios EXACTOS de esa línea."
+                "- Si el cliente nombra uno de estos productos, confírmaselo usando "
+                "ESE nombre y ESE precio, tal cual aparecen arriba. Nunca los cambies "
+                "ni los redondees.\n"
+                "- Si dice que quiere comprar pero no queda claro cuál, pídele el "
+                "NOMBRE del producto. NO le envíes más productos ni le repitas el "
+                "catálogo: ya los vio y está cerrando la compra."
             )
         if estado_lines:
             estado_block = "\n\n## Estado de la conversación\n" + "\n".join(estado_lines) + "\n"
