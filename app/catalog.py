@@ -1657,6 +1657,14 @@ async def clasificar_intencion_cliente(user_text: str,
     # empezaba en "bombas para el pene" seguía respondiendo bombas cuando el
     # cliente ya preguntaba por látigos, por lubricantes y por sabores.
     #
+    # La faceta que aporta ESTE mensaje. Se calcula aquí arriba porque la
+    # necesitan las DOS decisiones de abajo: el veto de lubricantes y el
+    # cambio de tema por faceta propia. Antes vivía 20 líneas más abajo y el
+    # veto no la veía, así que apagaba el cambio de tema entero.
+    from app import facetas as _facetas
+    _tipo_del_mensaje = _facetas.interpretar_mensaje(user_text).get("tipo")
+    _cat_del_tipo = _facetas._TIPO_A_CATEGORIA_LEGACY.get(_tipo_del_mensaje or "")
+
     # Criterio correcto y sin listas paralelas: si la categoría salió del MENSAJE
     # ACTUAL (sustantivo propio, respaldo LLM o subtipo derivado) y es distinta de
     # la de memoria, el cliente cambió de tema y manda su mensaje.
@@ -1664,10 +1672,19 @@ async def clasificar_intencion_cliente(user_text: str,
     # EXCEPCIÓN: dentro de lubricantes, palabras como "anal" son un FILTRO de la
     # categoría activa ("lubricante anal"), no una categoría nueva. Es el motivo
     # original de este bloque y se conserva.
+    #
+    # Pero solo cuando el mensaje NO nombra su propio tipo. "anal" a secas es la
+    # respuesta a "¿de agua, de sabores o anal?"; "plugs anales" nombra una clase
+    # de producto y el filtro no pinta nada. Sin esta guarda el veto se comía el
+    # cambio de tema entero y al pedir plugs llegaban cinco lubricantes anales
+    # (incidente 2026-08-05 20:55). Se compara contra `cat_activa_memoria`, no
+    # contra un literal: "lubricante anal" trae tipo propio pero de la MISMA
+    # categoría, así que el veto se mantiene sin caso especial.
     es_filtro_de_lubricantes = (
         cat_activa_memoria == "lubricantes-y-cuidado"
         and any(q in norm_user for q in ("anal", "agua", "silicona", "sabor", "desensibiliz",
                                          "otro", "otros", "tipo", "tipos", "cual", "cuál", "opcion", "opción"))
+        and not (_cat_del_tipo and _cat_del_tipo != cat_activa_memoria)
     )
     cambio_de_tema = bool(
         cat_desde_mensaje
@@ -1678,14 +1695,11 @@ async def clasificar_intencion_cliente(user_text: str,
         log.info("Cambio de tema en el mensaje: memoria=%s → mensaje=%s",
                  cat_activa_memoria, categoria_funcional)
 
-    # La faceta que aporta ESTE mensaje. Se mira aquí y no al final porque
-    # decide si el cliente cambió de tema: "multiorgasmo" no está en el
-    # vocabulario de intenciones legacy, así que sin esto `cambio_de_tema`
-    # quedaba en False y se heredaba la categoría del turno anterior — el
-    # cliente pedía multiorgasmo y el bot respondía "opciones de dildos".
-    from app import facetas as _facetas
-    _tipo_del_mensaje = _facetas.interpretar_mensaje(user_text).get("tipo")
-    _cat_del_tipo = _facetas._TIPO_A_CATEGORIA_LEGACY.get(_tipo_del_mensaje or "")
+    # La faceta propia es la segunda vía de cambio de tema: "multiorgasmo" no
+    # está en el vocabulario de intenciones legacy, así que sin esto
+    # `cambio_de_tema` quedaba en False y se heredaba la categoría del turno
+    # anterior — el cliente pedía multiorgasmo y el bot respondía "opciones de
+    # dildos". `_tipo_del_mensaje`/`_cat_del_tipo` ya están calculados arriba.
     if (cat_activa_memoria and _cat_del_tipo and _cat_del_tipo != cat_activa_memoria
             and not es_filtro_de_lubricantes):
         log.info("Cambio de tema por faceta propia: memoria=%s → tipo=%s (%s)",
