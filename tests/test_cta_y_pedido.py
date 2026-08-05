@@ -158,13 +158,15 @@ def test_el_bot_mostro_lista_reconoce_el_keycap():
 
 def test_el_bloque_de_precios_va_numerado_como_la_lista():
     """El cliente elige por número; el bloque que ve el LLM iba con viñetas y
-    tenía que contar para saber cuál era '1'."""
+    tenía que contar para saber cuál era '1'. El formato del precio es el mismo
+    que ve el cliente ($29.900, punto como separador de miles)."""
     lineas = main._detalle_productos_mostrados(
         [{"nombre": "Esposas Lois", "precio": 29900},
          {"nombre": "Esposas Kratos", "precio": 45900}]).splitlines()
     assert lineas[0].strip().startswith("1️⃣"), lineas
     assert "Esposas Lois" in lineas[0]
-    assert "29.900" in lineas[0] or "29,900" in lineas[0], lineas
+    assert "29.900" in lineas[0], lineas
+    assert "29,900" not in lineas[0], lineas
     assert lineas[1].strip().startswith("2️⃣"), lineas
 
 
@@ -204,12 +206,12 @@ def test_fase_venta_no_se_pierde_tras_varias_preguntas_intermedias():
     assert main._es_fase_venta("listo, ya está: Ana, Calle 1#32a-47", history)
 
 
-# ── El caption de cada foto no repite el precio ──
-# El precio ya va en la lista numerada del texto. Repetirlo en cada foto hacía
-# que el cliente viera cada precio dos veces. El número SÍ se conserva: es lo
-# que sostiene la selección por índice.
+# ── El caption de cada foto LLEVA el precio ──
+# La lista visible se envía troceada (intro → fotos → CTA), así que la foto es el
+# único sitio donde el cliente ve cada precio junto a su producto. El número
+# también va en el caption: es lo que sostiene la selección por índice.
 
-def test_el_caption_de_la_foto_no_repite_el_precio():
+def test_el_caption_de_la_foto_lleva_el_precio():
     enviados = []
 
     class _WA:
@@ -229,14 +231,13 @@ def test_el_caption_de_la_foto_no_repite_el_precio():
     assert len(enviados) == 1, enviados
     assert "Disfraz Colegiala Inocente Lerot" in enviados[0], enviados[0]
     assert "1️⃣" in enviados[0], enviados[0]
-    assert "119.800" not in enviados[0], enviados[0]
-    assert "💰" not in enviados[0], enviados[0]
+    assert "119.800" in enviados[0], enviados[0]
 
 
 def test_la_lista_del_texto_sigue_mostrando_el_precio():
-    """Al quitar el precio del caption, el texto es el ÚNICO sitio donde el
-    cliente ve el precio: si también se cayera de ahí, el fix sería una
-    regresión."""
+    """La lista completa (con precios) se persiste en el historial aunque al
+    cliente se le envíe troceada: es lo que mantiene `_bot_mostro_lista` y lo
+    que ve el LLM. Si el precio se cayera de ahí, sería una regresión."""
     txt = main._texto_desde_candidatos(
         [{"id": 1, "nombre": "Disfraz Colegiala Inocente Lerot", "precio": 119800}],
         {"intencion": "lenceria", "hay_mas": False})
@@ -271,3 +272,55 @@ def test_el_rotulo_cae_al_tipo_buscado_cuando_no_hay_intencion():
     txt = main._texto_desde_candidatos(PRODS, {
         "intencion": None, "restricciones": {"tipo": "vibrador"}, "hay_mas": False})
     assert "vibradores" in txt.lower(), txt
+
+
+# ── Envío troceado: intro → fotos → CTA ──
+# Antes el bot mandaba intro + lista numerada + CTA en un solo texto, y después
+# las fotos: el cliente veía cada precio dos veces y el CTA quedaba antes que
+# las imágenes. Ahora el turno que arma el sistema se envía troceado: la intro
+# sola, luego las fotos (cada una con su precio en el caption), y el CTA al
+# final. El `reply` completo se sigue persistiendo en el historial: es lo que
+# `_bot_mostro_lista` necesita para detectar la lista y lo que ve el LLM.
+
+INFO_PROD = {"intencion": "lubricantes-y-cuidado", "hay_mas": False}
+PRODS_CON_FOTO = [
+    {"id": 10, "nombre": "Multiorgasmos Euforia X 30 Ml", "precio": 40000,
+     "imagen_url": "http://x/10.jpg"},
+]
+
+
+def test_el_encabezado_no_incluye_la_lista_ni_el_cta():
+    """La intro se envía sola antes de las fotos: si trajera la lista numerada
+    o el CTA, duplicaría lo que ya va en las fotos y en el cierre."""
+    encabezado = main._encabezado_lista(INFO_PROD)
+    assert "1️⃣" not in encabezado, encabezado
+    assert "40.000" not in encabezado, encabezado
+    assert "indícame" not in encabezado, encabezado
+    assert "👇" in encabezado, encabezado
+
+
+def test_el_cuerpo_es_lo_que_se_envia_si_las_fotos_fallan():
+    """Fallback: si ninguna foto llega, el cliente recibe la lista numerada con
+    precios en texto. Tiene que tener keycap, precio y CTA para poder pedir."""
+    cuerpo = main._cuerpo_lista(PRODS_CON_FOTO, INFO_PROD, offset=0)
+    assert "1️⃣" in cuerpo, cuerpo
+    assert "40.000" in cuerpo, cuerpo
+    assert "indícame" in cuerpo, cuerpo
+    assert "[FOTO:10]" in cuerpo, cuerpo
+
+
+def test_el_reply_persistido_tiene_keycap_y_precio_para_el_historial():
+    """Aunque al cliente le llegue troceado, en el historial se guarda el reply
+    completo. `_bot_mostro_lista` busca el keycap ahí; el LLM lee ahí los
+    productos con precio. Si faltaran, se rompería la selección por número."""
+    reply = main._texto_desde_candidatos(PRODS_CON_FOTO, INFO_PROD)
+    assert "1️⃣" in reply, reply
+    assert "40.000" in reply, reply
+
+
+def test_bot_mostro_lista_detecta_el_reply_persistido_del_turno_de_productos():
+    """Tras un turno de productos del sistema, el historial contiene el reply
+    completo (con keycap). `_bot_mostro_lista` debe seguir detectando la lista:
+    es lo que autoriza al cliente a responder '1' como selección."""
+    reply = main._texto_desde_candidatos(PRODS_CON_FOTO, INFO_PROD)
+    assert main._bot_mostro_lista([{"role": "assistant", "content": reply}])

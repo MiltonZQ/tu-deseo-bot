@@ -346,7 +346,7 @@ async def _process_message_safe(payload: dict) -> None:
                 user_txt = msg.get("text", "")
                 candidatos = await catalog.buscar_producto_especifico(user_txt, limit=3)
                 if candidatos:
-                    c_names = "\n".join(f"📸 {c['nombre']} — ${c['precio']:,}" for c in candidatos)
+                    c_names = "\n".join(f"📸 {c['nombre']} — {_format_precio(c['precio'])}" for c in candidatos)
                     fallback_text = f"Para ti tengo estas opciones disponibles 👇\n\n{c_names}\n\n¿Cuál de estos te llama más la atención? 😊"
                 else:
                     fallback_text = "¡Hola! Con gusto te asesoro 😊 ¿Qué tipo de producto estás buscando hoy? Tenemos vibradores, fundas, lubricantes y más."
@@ -598,6 +598,19 @@ def _numero_lista(n: int) -> str:
     return "".join(_KEYCAPS[int(d)] for d in str(n))
 
 
+def _format_precio(precio) -> str:
+    """Precio visible para el cliente: $40.000 (pesos colombianos, punto como
+    separador de miles). Único formato para lista de texto, caption de foto y
+    bloque que recibe el LLM — antes había dos (coma en algunos sitios, punto
+    en la lista) y el cliente veía "$40,000" en un lado y "$40.000" en otro.
+    """
+    try:
+        n = int(precio or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return f"${n:,}".replace(",", ".")
+
+
 def _detalle_productos_mostrados(productos: list[dict | None], offset: int = 0) -> str:
     """El bloque de nombres y precios exactos que recibe el LLM, numerado igual
     que la lista que vio el cliente.
@@ -611,7 +624,7 @@ def _detalle_productos_mostrados(productos: list[dict | None], offset: int = 0) 
     demás, porque entonces el "2" del cliente y el "2" del LLM serían distintos.
     """
     return "\n".join(
-        f"  {_numero_lista(i)} {p['nombre']} — ${p['precio']:,}"
+        f"  {_numero_lista(i)} {p['nombre']} — {_format_precio(p['precio'])}"
         for i, p in enumerate(productos, 1 + offset) if p
     )
 
@@ -769,19 +782,28 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
     las fotos, así que texto y fotos no pueden desalinearse. Se usa cuando el
     cliente pide "ver más" y como reemplazo si el LLM redacta productos que no
     corresponden a los que se van a enviar.
+
+    La salida es la composición de `_encabezado_lista` (intro/aviso) y
+    `_cuerpo_lista` (lista numerada + marcadores + CTA). Se mantiene como una
+    función aparte porque es lo que se persiste íntegro en el historial (y lo que
+    leen los tests), aunque al cliente se le envíe troceado: intro → fotos → CTA.
+    """
+    return (_encabezado_lista(info, mas_disenos) + "\n"
+            + _cuerpo_lista(candidatos, info, offset))
+
+
+def _encabezado_lista(info: dict, mas_disenos: bool = False) -> str:
+    """La primera línea que ve el cliente al recibir una lista de productos.
+
+    Es el aviso de "no tengo exactamente eso, pero mira estas parecidas" si se
+    relajó alguna restricción, o la intro normal ("¡Perfecto! Estas son las
+    opciones de {categoría} 👇"). Con aviso, el aviso ES la entrada: encadenar
+    los dos dejaba dos saludos seguidos.
+
+    Se envía sola al cliente (antes de las fotos) en los turnos que arma el
+    sistema. No incluye ni la lista ni el CTA: esos van en `_cuerpo_lista`.
     """
     cat_nombre = _nombre_categoria(info)
-    lineas, marcadores = [], []
-    # offset: cuántos productos ya vio el cliente en esta misma búsqueda. La
-    # numeración CONTINÚA (6️⃣, 7️⃣…) en vez de reiniciar en 1️⃣, porque al final se
-    # le pide "indícame los números de los que quieres" y dos productos distintos
-    # con el mismo número hacen ambiguo el pedido.
-    for idx, p in enumerate(candidatos[:5], 1 + offset):
-        precio_fmt = f"{int(p.get('precio', 0)):,}".replace(",", ".")
-        lineas.append(f"{_numero_lista(idx)} *{p['nombre'][:60]}* — ${precio_fmt}")
-        marcadores.append(f"[FOTO:{p['id']}]")
-    # Si se cedió en alguna restricción, decirlo. Callarlo es lo que hacía que un
-    # cliente pidiera "vibrador anal" y recibiera otra cosa sin explicación.
     aviso = ""
     relajado = info.get("relajado")
     if relajado and relajado not in ("todo", "sin_resultado"):
@@ -794,23 +816,37 @@ def _texto_desde_candidatos(candidatos: list[dict], info: dict,
         elif relajado == "control":
             que_pidio += " con ese tipo de control"
         aviso = (f"No tengo exactamente {que_pidio.strip()} en este momento, "
-                 f"pero mira estas opciones muy parecidas 👇\n")
-
-    # El CTA depende de si QUEDAN opciones sin mostrar. Ofrecer "ver más diseños"
-    # cuando ya se mostró todo lleva al cliente a un callejón sin salida (y antes
-    # provocaba que el sistema rellenara con productos que no cumplían).
+                 f"pero mira estas opciones muy parecidas 👇")
+    # El "ver más diseños" solo se ofrece si quedan opciones sin mostrar;
+    # ofrecerlo cuando ya se mostró todo llevaba al cliente a un callejón sin
+    # salida (y antes provocaba rellenar con productos que no cumplían).
     if info.get("hay_mas"):
         intro = (f"¡Buena elección! Aquí tienes más diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Buena elección! Te muestro estas opciones de {cat_nombre} 👇")
-        cta = _CTA_CON_MAS
     else:
         intro = (f"¡Perfecto! Te muestro los últimos diseños de {cat_nombre} 👇"
                  if mas_disenos else f"¡Perfecto! Estas son las opciones de {cat_nombre} que tenemos 👇")
-        cta = _CTA_SIN_MAS
-    # Con aviso, el aviso ES la entrada: encadenar los dos dejaba dos saludos
-    # seguidos ("No tengo exactamente… 👇" + "¡Buena elección!… 👇").
-    encabezado = aviso.rstrip("\n") if aviso else intro
-    return f"{encabezado}\n" + "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
+    return aviso if aviso else intro
+
+
+def _cuerpo_lista(candidatos: list[dict], info: dict, offset: int = 0) -> str:
+    """Lista numerada con precios + marcadores [FOTO:ID] + CTA.
+
+    Sin el encabezado. Sirve para reconstruir el texto completo que se persiste
+    en el historial y como fallback si todas las fotos fallan y hay que
+    enseñarle la lista en texto para que no se quede con solo la intro corta.
+
+    offset: cuántos productos ya vio el cliente en esta misma búsqueda. La
+    numeración CONTINÚA (6️⃣, 7️⃣…) en vez de reiniciar en 1️⃣, porque al final se
+    le pide "indícame los números de los que quieres" y dos productos distintos
+    con el mismo número hacen ambiguo el pedido.
+    """
+    lineas, marcadores = [], []
+    for idx, p in enumerate(candidatos[:5], 1 + offset):
+        lineas.append(f"{_numero_lista(idx)} *{p['nombre'][:60]}* — {_format_precio(p.get('precio'))}")
+        marcadores.append(f"[FOTO:{p['id']}]")
+    cta = _CTA_CON_MAS if info.get("hay_mas") else _CTA_SIN_MAS
+    return "\n".join(lineas) + f"\n\n{' '.join(marcadores)}\n\n{cta}"
 
 
 async def _enviar_fotos_productos(
@@ -832,11 +868,11 @@ async def _enviar_fotos_productos(
             continue
         seen_ids.add(pid)
         nombre = (p.get("nombre") or "")[:60]
-        # Sin el precio: ya va en la lista numerada del texto, que se envía
-        # siempre (aunque alguna foto falle). Repetirlo aquí hacía que el
-        # cliente viera cada precio dos veces. El número SÍ se conserva: es
-        # lo que le permite responder "quiero el 3".
-        caption = f"{_numero_lista(idx)} *{nombre}*"
+        # El caption lleva el número (para que el cliente responda "quiero el 3") Y
+        # el precio: como el texto visible ya no repite la lista numerada (se envía
+        # troceado: intro → fotos → CTA), la foto es el único sitio donde el cliente
+        # ve cada precio junto al producto. Mismo formato que `_cuerpo_lista`.
+        caption = f"{_numero_lista(idx)} *{nombre}* — {_format_precio(p.get('precio'))}"
         # El try/except va DENTRO del bucle: antes envolvía el bucle entero, así que
         # la primera imagen que fallara (URL rota, formato que WhatsApp rechaza,
         # rate limit) cancelaba en silencio TODAS las fotos restantes. El cliente
@@ -2157,7 +2193,33 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
 
     await db.save_message(wa_id, "user", user_text)
     await db.save_message(wa_id, "assistant", reply)
-    await whatsapp_client.send_text(wa_id, reply)
+
+    # PUERTA DE VALIDACIÓN — última red antes de enviar. Ningún producto que
+    # contradiga lo que el cliente pidió (tipo/zona) sale de aquí, aunque hayan
+    # fallado la clasificación, la búsqueda o el LLM. Va ANTES del envío del texto
+    # para que la decisión de trocear (intro → fotos → CTA) se tome sabiendo si de
+    # verdad habrá fotos; si la validación vaciara la lista tras prometerla, el
+    # cliente se quedaría con una intro sin productos.
+    antes_de_validar = len(final_productos)
+    final_productos = _validar_envio(
+        final_productos, info.get("restricciones") or {}, info.get("relajado"))
+    if antes_de_validar and not final_productos:
+        log.warning("Ningún producto pasó la validación para %s — no se envían fotos", wa_id)
+        reply = _SIN_RESULTADO_MSG
+
+    # Turno de productos que arma el sistema: el texto se envía TROCEADO
+    # (intro → fotos → CTA) en vez de un solo bloque. El `reply` completo
+    # (intro+lista+CTA) es el que se acaba de guardar en el historial: ahí deben
+    # seguir los keycaps y los precios para que `_bot_mostro_lista` detecte la
+    # lista, el LLM los vea y `pedidos.py` resuelva por posición. Al cliente le
+    # llega troceado para que cada precio lo vea junto a su foto (en el caption),
+    # no repetido en un listado previo, y el CTA cierre tras la última imagen.
+    es_turno_productos_sistema = texto_lo_arma_el_sistema and bool(final_productos)
+    if es_turno_productos_sistema:
+        await whatsapp_client.send_text(
+            wa_id, _encabezado_lista(info, mas_disenos=bool(es_ver_mas_pedido)))
+    else:
+        await whatsapp_client.send_text(wa_id, reply)
 
     # Enviar imagen de medios de pago si se creó el pedido o la respuesta contiene datos bancarios
     es_mensaje_pago = any(w in reply for w in ("INFORMACIÓN DE PAGOS", "PIGELI GROUP SAS", "05400003434", "@pigeli06", "PAGO A CUENTA BANCARIA"))
@@ -2172,21 +2234,28 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
         except Exception:
             log.exception("Error enviando imagen de medios de pago a %s", wa_id)
 
-    # PUERTA DE VALIDACIÓN — última red antes de enviar. Ningún producto que
-    # contradiga lo que el cliente pidió (tipo/zona) sale de aquí, aunque hayan
-    # fallado la clasificación, la búsqueda o el LLM.
-    antes_de_validar = len(final_productos)
-    final_productos = _validar_envio(
-        final_productos, info.get("restricciones") or {}, info.get("relajado"))
-    if antes_de_validar and not final_productos:
-        log.warning("Ningún producto pasó la validación para %s — no se envían fotos", wa_id)
-        reply = _SIN_RESULTADO_MSG
-
     # Enviar fotos (candidatos ya validados + filtrados por el filtro final).
     enviados_ids = await _enviar_fotos_productos(wa_id, final_productos,
                                                  offset=offset_numeracion)
 
-    if info["debe_mostrar"] and not enviados_ids and not pedido_creado_id:
+    if es_turno_productos_sistema:
+        # Cierre del envío troceado: si las fotos llegaron, el CTA va al final,
+        # tras la última imagen (no antes, donde quedaba enterrado). Si NINGUNA
+        # foto llegó (todas rotas), el cliente solo vio la intro corta y no sabe
+        # qué pedir: se le envía la lista numerada con precios en texto como
+        # fallback para que tenga algo concreto que elegir.
+        if enviados_ids:
+            await whatsapp_client.send_text(
+                wa_id, _CTA_CON_MAS if info.get("hay_mas") else _CTA_SIN_MAS)
+        else:
+            log.warning(
+                "Bot prometio fotos a %s pero envio 0 (cat=%s gen=%s candidatos=%d) "
+                "— se envia la lista en texto como fallback",
+                wa_id, info["categoria_funcional"], info["genero"], len(final_productos),
+            )
+            await whatsapp_client.send_text(
+                wa_id, _cuerpo_lista(final_productos, info, offset_numeracion))
+    elif info["debe_mostrar"] and not enviados_ids and not pedido_creado_id:
         log.warning(
             "Bot prometio fotos a %s pero envio 0 (cat=%s gen=%s candidatos=%d) — se deja reply original para evitar doble mensaje",
             wa_id, info["categoria_funcional"], info["genero"], len(final_productos),
