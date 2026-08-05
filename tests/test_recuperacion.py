@@ -301,7 +301,7 @@ def test_con_pocas_opciones_no_se_ofrece_ver_mas():
     prods = [{"id": i, "nombre": f"Producto {i}", "precio": 50000} for i in (1, 2, 3)]
     txt = m._texto_desde_candidatos(prods, {"intencion": "vibradores", "hay_mas": False})
     assert "ver más diseños" not in txt.lower(), txt
-    assert "indícame el número" in txt, txt
+    assert "indícame el nombre" in txt, txt
 
 
 def test_con_mas_opciones_si_se_ofrece_ver_mas():

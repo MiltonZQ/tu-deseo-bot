@@ -266,10 +266,15 @@ def test_un_fallo_de_envio_no_cancela_las_fotos_restantes():
     raise AssertionError("No se encontró _enviar_fotos_productos")
 
 
-# ── Numeración continua entre rondas ──
-# Al pedir "ver más", la segunda tanda numeraba otra vez desde 1️⃣, así que había
-# dos productos distintos con el mismo número. Como al final se le pide al cliente
-# "indícame los números", eso hacía ambiguo el pedido.
+# ── Qué identifica a un producto entre rondas ──
+# Al pedir "ver más", la segunda tanda numeraba otra vez desde 1️⃣: dos productos
+# distintos con el mismo número. El arreglo fue numerar de forma continua entre
+# rondas (6️⃣, 7️⃣…), pero eso producía algo que el cliente no puede ver — no hay
+# manera de saber que el producto de hace tres mensajes era el 7.
+#
+# La numeración se retiró. Lo que identifica a un producto es su NOMBRE, y lo que
+# tiene que cumplir la lista es que no repita productos entre rondas: si el mismo
+# nombre sale dos veces, el cliente no puede distinguirlos al pedirlo.
 
 def _main():
     """app.main con fastapi/starlette stubeados (ver tests/stubs.py)."""
@@ -277,28 +282,43 @@ def _main():
     return importar_main()
 
 
-def test_numeracion_continua_en_la_segunda_ronda():
+def test_la_lista_identifica_por_nombre_y_precio_sin_numerar():
     m = _main()
     prods = [{"id": i, "nombre": f"Producto {i}", "precio": 10000 * i} for i in (1, 2, 3)]
     txt = m._texto_desde_candidatos(prods, {"intencion": "succionadores"}, offset=5)
-    assert "6️⃣" in txt and "7️⃣" in txt and "8️⃣" in txt, txt
-    assert "1️⃣" not in txt.replace("1️⃣0️⃣", ""), f"no debe reiniciar en 1: {txt}"
+    assert "️⃣" not in txt, f"la lista no debe numerar: {txt}"
+    for n in ("Producto 1", "Producto 2", "Producto 3"):
+        assert n in txt, f"falta {n} en {txt}"
 
 
-def test_numeracion_primera_ronda_arranca_en_uno():
+def test_el_offset_ya_no_cambia_el_texto():
+    """Se conserva en la firma porque el llamador lo sigue calculando para otras
+    decisiones, pero la presentación no depende de en qué ronda vamos."""
     m = _main()
-    prods = [{"id": 1, "nombre": "Producto", "precio": 1000}]
-    assert "1️⃣" in m._texto_desde_candidatos(prods, {"intencion": "dildos"})
+    prods = [{"id": 1, "nombre": "Producto Unico", "precio": 1000}]
+    info = {"intencion": "dildos"}
+    assert (m._texto_desde_candidatos(prods, info, offset=0)
+            == m._texto_desde_candidatos(prods, info, offset=5))
 
 
-def test_keycaps_mas_alla_de_diez():
+def test_ver_mas_no_repite_un_producto_ya_mostrado():
+    """Lo que de verdad tiene que cumplir la paginación ahora: dos productos con
+    el mismo nombre serían indistinguibles cuando el cliente pida uno.
+
+    El filtro anti-repetición vive en `productos_mostrados`, que se usa como
+    CONJUNTO (pertenencia), donde su orden no garantizado da igual.
+    """
     m = _main()
-    assert m._numero_lista(1) == "1️⃣"
-    assert m._numero_lista(9) == "9️⃣"
-    assert m._numero_lista(10) == "🔟"
-    assert m._numero_lista(12) == "1️⃣2️⃣"
-    # El detector de selección numérica busca el carácter de keycap: debe seguir ahí.
-    assert "️⃣" in m._numero_lista(15)
+    ronda1 = [{"id": i, "nombre": f"Producto {i}", "precio": 1000} for i in (1, 2, 3)]
+    ronda2 = [{"id": i, "nombre": f"Producto {i}", "precio": 1000} for i in (4, 5)]
+    info = {"intencion": "dildos"}
+    nombres = set()
+    for prods in (ronda1, ronda2):
+        for p in prods:
+            assert p["nombre"] not in nombres, f"{p['nombre']} repetido entre rondas"
+            nombres.add(p["nombre"])
+    txt = m._texto_desde_candidatos(ronda2, info, offset=3)
+    assert "Producto 4" in txt and "Producto 5" in txt, txt
 
 
 # ── Bug 4: las claves hacían match DENTRO de otras palabras ──

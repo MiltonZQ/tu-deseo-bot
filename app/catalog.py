@@ -474,6 +474,7 @@ _ALIASES_TYPO = {
     "camtoys": "camtoyz", "cam toy": "camtoyz", "camtoy": "camtoyz", "camtoyz": "camtoyz",
     # disfraz
     "dizfraz": "disfraz", "disfras": "disfraz", "difraz": "disfraz",
+    "dizfras": "disfraz",
 }
 
 _ALIASES_TYPO_RE = re.compile(

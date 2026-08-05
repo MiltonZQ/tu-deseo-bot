@@ -323,11 +323,15 @@ async def handle_inbound_image(
                 ciudad = pedidos._extraer_ciudad(history)
                 direccion = pedidos._extraer_direccion(history)
                 telefono = pedidos._extraer_telefono(history, wa_id)
-                # Usar productos_mostrados del estado (los IDs que el bot envió como fotos).
+                # El carrito primero: es lo que el cliente ELIGIÓ, con el precio
+                # que se le mostró al elegirlo. `productos_mostrados` solo dice
+                # lo que se le enseñó, y va detrás como red.
                 estado_conv = await db.get_conversation_state(wa_id)
                 productos_ids = (estado_conv or {}).get("productos_mostrados", []) if estado_conv else []
                 items, total_catalogo = await pedidos._resolver_productos_y_total(
-                    history, productos_mostrados_ids=productos_ids)
+                    history,
+                    productos_mostrados_ids=productos_ids,
+                    carrito=(estado_conv or {}).get("carrito") or [])
 
                 if items and total_catalogo > 0:
                     # Productos resueltos: crear pedido con total del catálogo (confiable).

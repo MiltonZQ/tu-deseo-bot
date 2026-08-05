@@ -79,16 +79,6 @@ _DIRECCION_RE = re.compile(
 )
 _TELEFONO_RE = re.compile(r"(?:tel[eé]fono:?\s*|cel(?:ular)?:?\s*|whatsapp:?\s*|n[uú]mero:?\s*)?(\+?\d[\d\s\-]{7,15}\d)")
 
-# Selección de uno o varios índices de la lista mostrada ("1", "el 1", "1 y 3",
-# "1, 2 y 3"). El mensaje completo debe ser SOLO números y conectores — así no
-# confunde una dirección o un teléfono con una selección de productos.
-_SELECCION_MULTIPLE_RE = re.compile(
-    r"^\s*(?:el|los|las|la|dame|quiero)?\s*\d{1,2}\s*"
-    r"(?:(?:y|,|&|\+)\s*(?:el\s*)?\d{1,2}\s*)*[\.,!]?\s*$",
-    re.IGNORECASE,
-)
-
-
 def _joined_history(history: list[dict]) -> str:
     """Concatena el contenido del historial reciente (user + assistant)."""
     return "\n".join(m.get("content", "") for m in history[-12:])
@@ -163,16 +153,26 @@ def _limpiar_marker(reply: str) -> str:
 async def _resolver_productos_y_total(
     history: list[dict],
     productos_mostrados_ids: list[int] | None = None,
+    carrito: list[dict] | None = None,
 ) -> tuple[list[dict], int]:
-    """Resuelve productos mencionados contra el catálogo.
+    """De qué se compone el pedido.
 
     Devuelve (items, total). Prioridad de fuentes (de más confiable a menos):
-      0) productos_mostrados_ids: IDs persistidos en conversation_state (los que el
-         bot efectivamente le ENVIÓ al cliente como fotos). Es la fuente más confiable
-         porque los marcadores [FOTO:ID] se LIMPIAN del historial antes de guardarlo,
-         así que el historial ya no los tiene. Estos IDs sí se persisten por separado.
+      0) El carrito: lo que el cliente eligió, registrado en el turno en que lo
+         dijo y con el precio que se le mostró entonces.
       1) Coincidencia de nombres en los últimos mensajes del cliente.
       2) Coincidencia de nombres en el último mensaje del asistente (fallback).
+      3) El primero de los mostrados, para no perder el pedido.
+
+    Las fuentes 1-3 son la RED para conversaciones que estaban en vuelo cuando se
+    desplegó el carrito. Antes eran el mecanismo principal, y el problema era de
+    fondo: reconstruir al cerrar lo que el cliente dijo veinte mensajes atrás.
+
+    La resolución por índice sobre `productos_mostrados_ids` se eliminó. Ese
+    array se acumula con `ARRAY(SELECT DISTINCT unnest(...))`, y DISTINCT no
+    garantiza el orden en Postgres: indexarlo por posición era leer un orden
+    accidental. Además es plano — un "2" no dice de qué lista —, así que tras
+    recorrer varias categorías apuntaba a cualquier cosa.
     """
     items: list[dict] = []
     seen_ids: set[int] = set()
@@ -193,39 +193,44 @@ async def _resolver_productos_y_total(
         })
         total += precio
 
-    # 0) PRIORIDAD MÁXIMA: si el cliente eligió por número de la lista mostrada
-    # ("1", "el 1", "1 y 3", "1, 2 y 3"). Antes solo se reconocía un único
-    # número: una selección múltiple caía al fallback (solo el primero
-    # mostrado), y el total del pedido no sumaba lo que el cliente pidió.
-    indices_elegidos: list[int] = []
-    if productos_mostrados_ids:
-        for msg in reversed(history):
-            if msg.get("role") == "user":
-                txt = msg.get("content", "").strip()
-                if _SELECCION_MULTIPLE_RE.match(txt):
-                    numeros = [int(n) for n in re.findall(r"\d{1,2}", txt)]
-                    indices_elegidos = [
-                        n - 1 for n in numeros if 0 <= n - 1 < len(productos_mostrados_ids)
-                    ]
-                    if indices_elegidos:
-                        break
+    # 0) EL CARRITO. Nombre y precio salen de él, no del catálogo: son los que se
+    # le mostraron al cliente al elegir, y si WooCommerce resincronizó a mitad de
+    # conversación se le cobra lo prometido.
+    for item in (carrito or []):
+        pid = item.get("producto_id")
+        if pid is None or pid in seen_ids:
+            continue
+        seen_ids.add(pid)
+        precio = int(item.get("precio") or 0)
+        items.append({
+            "producto_id": pid,
+            "nombre": item.get("nombre") or "",
+            "cantidad": 1,
+            "precio_unitario": precio,
+        })
+        total += precio
+    if items:
+        return items, total
 
-    for idx in indices_elegidos:
-        pid = productos_mostrados_ids[idx]
-        p = await catalog.get_producto_by_id(pid)
-        if p:
+    # 1) Buscar por nombres de producto en los mensajes del cliente.
+    #
+    # Se corrigen los typos contra el catálogo antes de buscar: sin esto, un
+    # "Lovenese" no encontraba nada y el pedido caía al fallback del primer
+    # producto mostrado, que podía ser otro. La corrección ya se aplicaba en la
+    # búsqueda de candidatos, pero no aquí.
+    user_msgs = [m for m in history if m.get("role") == "user"]
+    for msg in user_msgs[-3:]:
+        contenido = msg.get("content", "")
+        if not contenido:
+            continue
+        try:
+            contenido = await catalog.corregir_typos_contra_catalogo(contenido)
+        except Exception:
+            log.warning("No se pudieron corregir typos al resolver el pedido")
+        for p in await catalog.get_productos_en_texto(contenido, limit=3):
             _agregar(p)
-
-    # 1) Buscar por nombres de producto en los mensajes del cliente
-    if not items:
-        user_msgs = [m for m in history if m.get("role") == "user"]
-        for msg in user_msgs[-3:]:
-            contenido = msg.get("content", "")
-            if contenido:
-                for p in await catalog.get_productos_en_texto(contenido, limit=3):
-                    _agregar(p)
-                    if len(items) >= 5:
-                        break
+            if len(items) >= 5:
+                break
 
     # 2) FALLBACK: buscar productos confirmados en los mensajes del asistente
     asistente_msgs = [m for m in history if m.get("role") == "assistant"]
@@ -262,7 +267,11 @@ async def maybe_create_pedido(
     # Resolver productos y total del catálogo.
     estado_conv = await db.get_conversation_state(wa_id)
     productos_ids = (estado_conv or {}).get("productos_mostrados", []) if estado_conv else []
-    items, total = await _resolver_productos_y_total(history, productos_mostrados_ids=productos_ids)
+    items, total = await _resolver_productos_y_total(
+        history,
+        productos_mostrados_ids=productos_ids,
+        carrito=(estado_conv or {}).get("carrito") or [],
+    )
 
     # No duplicar: si ya hay un pedido pendiente/pagado reciente, actualizar total si cambió.
     existente = await db.get_pedido_pendiente(wa_id)

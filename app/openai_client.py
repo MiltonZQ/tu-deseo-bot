@@ -200,8 +200,8 @@ async def complete(user_message: str, history: list[dict],
             total = estado.get("total_en_categoria", 0)
             estado_lines.append(
                 f"- ✅ HAY MAS PRODUCTOS: total {total} en categoria, quedan por mostrar. "
-                f"Usa CTA 'Por favor, indícame el número o los números de los productos "
-                f"que deseas adquirir, o si deseas ver más diseños 😊'"
+                f"Usa CTA 'Por favor, indícame el nombre del producto que deseas "
+                f"adquirir, o si deseas ver más diseños 😊'"
             )
         if estado.get("sin_mas_opciones"):
             estado_lines.append(
@@ -217,14 +217,22 @@ async def complete(user_message: str, history: list[dict],
                 f"- Productos ya mostrados (IDs): {', '.join(str(i) for i in estado['productos_mostrados'][-10:])}"
             )
         if estado.get("productos_con_precios"):
+            # Antes aquí vivía una "REGLA ABSOLUTA DE SELECCIÓN NUMÉRICA" que le
+            # pedía al modelo resolver un número contando posiciones en la lista.
+            # Contar posiciones es de las cosas que peor hacen los LLM, y además
+            # ya no hace falta: quien resuelve a qué producto se refiere el
+            # cliente es `app.seleccion`, con las rondas del estado. Lo que el
+            # LLM necesita de aquí es el nombre y el precio EXACTOS para
+            # confirmar sin inventarse cifras.
             estado_lines.append(
-                "- Productos mostrados, NUMERADOS como los vio el cliente:\n"
+                "- Productos mostrados al cliente, con nombre y precio EXACTOS:\n"
                 + estado["productos_con_precios"] + "\n"
-                "- ⚠️ REGLA ABSOLUTA DE SELECCIÓN NUMÉRICA: Si el cliente escribe un número (ej: '1', '2', 'el 1'), "
-                "corresponde ÚNICA Y EXCLUSIVAMENTE a la línea que tiene ESE MISMO número (1️⃣, 2️⃣...). "
-                "Está ESTRICTAMENTE PROHIBIDO reinterpretar el número o cambiarlo por comentarios o colores "
-                "mencionados en mensajes anteriores (ej: si dijo 'negras' antes pero ahora escribe '1', DEBES seleccionar "
-                "e indicar el producto 1️⃣, NO el 4️⃣). Usa los nombres y precios EXACTOS de esa línea."
+                "- Si el cliente nombra uno de estos productos, confírmaselo usando "
+                "ESE nombre y ESE precio, tal cual aparecen arriba. Nunca los cambies "
+                "ni los redondees.\n"
+                "- Si dice que quiere comprar pero no queda claro cuál, pídele el "
+                "NOMBRE del producto. NO le envíes más productos ni le repitas el "
+                "catálogo: ya los vio y está cerrando la compra."
             )
         if estado_lines:
             estado_block = "\n\n## Estado de la conversación\n" + "\n".join(estado_lines) + "\n"
@@ -605,4 +613,78 @@ async def reordenar_candidatos_por_relevancia(
         return ids_filtrados + faltantes
     except Exception:
         log.warning("Reordenar candidatos por LLM falló — se mantiene orden determinístico")
+        return None
+
+
+_SELECCION_PROMPT = (
+    "Eres un asistente de un sex shop. El cliente acaba de ver una lista de "
+    "productos y ahora escribe algo. Tu única tarea es decidir a CUÁL de esos "
+    "productos se refiere.\n\n"
+    "Devuelve SOLO un JSON con los ids de los productos que el cliente está "
+    "eligiendo. Usa EXCLUSIVAMENTE ids de la lista dada — nunca inventes ids.\n\n"
+    "Si el cliente NO está eligiendo un producto concreto (pregunta algo "
+    "general, saluda, pide ver más opciones, o menciona algo que no coincide "
+    'con ninguno), devuelve {"ids": []}. Es preferible no elegir a elegir mal: '
+    "el cliente no se entera de que decidiste por él.\n\n"
+    "El cliente puede referirse a un producto por su nombre, por una parte del "
+    "nombre, por su color o material, o por para qué sirve.\n\n"
+    'Formato: {"ids": [id1, id2, ...]}'
+)
+
+
+async def seleccionar_producto_llm(
+    user_text: str, productos: list[dict]
+) -> list[int] | None:
+    """A cuál de los productos mostrados se refiere el cliente.
+
+    Último recurso de la cascada de `app/seleccion.py`, para lo que las reglas no
+    alcanzan: la referencia por atributos que no están en el nombre ("las esposas
+    negras peludas"). Seguir ampliando listas de palabras a mano no escala.
+
+    Igual que `reordenar_candidatos_por_relevancia`, es una elección de MUNDO
+    CERRADO: se le dan los productos con su id y cualquier id fuera de ese
+    conjunto se descarta al volver. La imposibilidad de inventar un producto es
+    estructural — está en el filtro, no en la confianza en el prompt.
+
+    Devuelve None si no resuelve nada (respuesta vacía, ids inválidos, fallo o
+    timeout); el llamador debe preguntarle al cliente en vez de adivinar.
+    """
+    if not user_text or not productos:
+        return None
+    ids_validos = {p["id"] for p in productos}
+    lista = "\n".join(
+        f'{p["id"]}: {p["nombre"]} — ${int(p.get("precio") or 0):,}'.replace(",", ".")
+        for p in productos[:10]
+    )
+    messages = [
+        {"role": "system", "content": _SELECCION_PROMPT},
+        {"role": "user",
+         "content": f"Productos mostrados:\n{lista}\n\nEl cliente escribió: {user_text}"},
+    ]
+    try:
+        resp = await _get_client().chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=messages,
+            max_tokens=60,
+            temperature=0.0,
+            timeout=4.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        import json as _json
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            return None
+        ids = [int(i) for i in _json.loads(m.group(0)).get("ids", [])]
+        elegidos = [i for i in ids if i in ids_validos]
+        if len(elegidos) != len(ids):
+            log.warning("El LLM devolvió ids fuera de los mostrados (%s) — descartados",
+                        [i for i in ids if i not in ids_validos])
+        if not elegidos:
+            return None
+        log.info("LLM resolvió la selección %r -> %s", user_text[:40], elegidos)
+        return elegidos
+    except Exception as exc:
+        log.warning("Selección por LLM falló (%s) — se pedirá el nombre al cliente",
+                    type(exc).__name__)
         return None
