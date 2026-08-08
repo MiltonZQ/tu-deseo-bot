@@ -546,11 +546,19 @@ _PREGUNTAS_CALIFICACION = {
 # Frases que delatan que el LLM escribió una plantilla de "mostrar productos" cuando
 # NO debía (estaba en turno de calificación). Si el reply trae alguna de estas frases
 # pero NO trae marcadores [FOTO:ID] válidos, es una contradicción a corregir.
+#
+# Las alternativas sueltas (`te muestro`, `estas son`, `aquí tienes`, `de
+# anillos`) casaban con castellano corriente: "te muestro cómo se paga", "aquí
+# tienes el link". Un cliente pidió un domicilio y su respuesta se borró por un
+# "Te muestro". Ahora esas tres exigen el objeto de la oferta; las plantillas
+# literales siguen igual.
 _OFRECE_PRODUCTOS_RE = re.compile(
-    r"(mira estas opciones|estas opciones disponibles|te muestro|te las muestro|"
+    r"(mira estas opciones|estas opciones disponibles|"
     r"para ti tengo|para ti 👇|que tenemos disponibles|nuestras mejores opciones|"
-    r"opciones de (anillos|vibradores|dildos|lubricantes|lenceria|lencería)|"
-    r"de anillos y vibradores|de anillos|estás son|estas son|aquí tienes)",
+    r"opciones de (anillos|vibradores|dildos|lubricantes|lenceria|lencería|"
+    r"succionadores|masturbadores|plugs)|de anillos y vibradores|"
+    r"(te (las )?muestro|est[aá]s son|aqu[ií] tienes)[^\n]{0,30}"
+    r"(opciones|productos|dise[ñn]os|modelos|alternativas))",
     re.IGNORECASE,
 )
 
@@ -706,6 +714,28 @@ _SUBTIPOS_EN_TEXTO = {
 }
 
 
+def _evidencia_invencion(reply: str) -> str | None:
+    """Qué tan seguro es que el LLM está ofreciendo productos que no existen.
+
+    Son dos cosas distintas y hasta ahora iban en el mismo `or`, con la
+    consecuencia de que la señal más débil autorizaba la acción más destructiva:
+
+    - "lista": nombre + precio a principio de línea. Eso es inventario
+      fabricado y no tiene lectura inocente.
+    - "plantilla": una frase de oferta y nada más. "Te muestro cómo se paga"
+      también casa, así que por sí sola no prueba nada. Con esta señal se le
+      pregunta al cliente por su categoría; jamás se le borra la respuesta.
+
+    Un cliente escribió "Deseo un domicilio" y recibió una oferta de vibradores
+    porque la respuesta sobre el domicilio contenía "Te muestro".
+    """
+    if _LISTA_PRODUCTOS_RE.search(reply):
+        return "lista"
+    if _OFRECE_PRODUCTOS_RE.search(reply):
+        return "plantilla"
+    return None
+
+
 def _parece_invencion(reply: str, info: dict, final_productos: list) -> bool:
     """¿El LLM está ofreciendo productos que NO se van a enviar?
 
@@ -727,7 +757,13 @@ def _parece_invencion(reply: str, info: dict, final_productos: list) -> bool:
     """
     if info.get("debe_mostrar") or final_productos:
         return False
-    if not (_OFRECE_PRODUCTOS_RE.search(reply) or _LISTA_PRODUCTOS_RE.search(reply)):
+    evidencia = _evidencia_invencion(reply)
+    if not evidencia:
+        return False
+    # El LLM clasificó el turno como entrega/horario: el cliente no pidió
+    # productos, así que una frase suelta no prueba que se los estén ofreciendo.
+    # Es castellano corriente, no un catálogo.
+    if evidencia == "plantilla" and info.get("es_logistica"):
         return False
     if info.get("en_fase_venta") and (info.get("carrito") or []):
         return False
@@ -869,6 +905,12 @@ def _pregunta_de_calificacion(info: dict) -> str | None:
         return None
     if (info.get("ya_vio_productos") or info.get("en_fase_venta")
             or info.get("pide_numero_de_lista")):
+        return None
+    # Preguntó por el domicilio o el horario. La categoría que trae `info` puede
+    # seguir pegada del tema anterior (el motor de memoria la conserva), y
+    # contestarle "¿buscas realista o con ventosa?" a quien pregunta por el envío
+    # es el mismo error que borrarle la respuesta, con otra cara.
+    if info.get("es_logistica"):
         return None
     pregunta = _PREGUNTAS_CALIFICACION.get(info.get("categoria_funcional") or "")
     if pregunta:
@@ -1916,13 +1958,20 @@ async def _recuperar_candidatos(
         # NUNCA hubo —se escala—; `agotado_por_facetas` es que ya los vio todos.
         "sin_inventario": sin_inventario,
         "agotado_por_facetas": agotado_por_facetas,
-        "debe_mostrar": debe_mostrar and bool(candidatos),
+        # Un turno de logística no manda fotos aunque la memoria conserve
+        # candidatos del tema anterior: preguntó por la entrega, no por productos.
+        "debe_mostrar": debe_mostrar and bool(candidatos) and not clasif.get("es_logistica"),
         "subtipo_detectado": clasif.get("subtipo_detectado"),
         # Quién decidió la categoría ("llm" / "listas" / "subtipo" / "estado").
         # Viaja hasta aquí para poder auditar una conversación y medir la mezcla.
         "origen_clasificacion": clasif.get("origen_clasificacion"),
         # Busca producto pero no dijo cuál: toca preguntar, no adivinar.
         "busca_sin_categoria": bool(clasif.get("busca_sin_categoria")),
+        # El LLM clasificó el mensaje como entrega/domicilio/horario. No cambia
+        # la búsqueda ni la categoría: lo consume el guardia anti-invención y la
+        # pregunta de calificación, para no responderle con productos a quien
+        # preguntó por el envío.
+        "es_logistica": bool(clasif.get("es_logistica")),
         "restricciones": restricciones,
         "relajado": relajado,
         # Texto que originó la búsqueda activa. Se persiste para que el "ver
@@ -2413,15 +2462,22 @@ async def _handle_message(msg: dict, wa_id: str) -> None:
                 info["categoria_funcional"],
             )
             reply = pregunta
-        else:
-            # Sin categoría no hay pregunta de calificación que inyectar. Antes se
-            # dejaba pasar el texto tal cual, y el LLM podía listar productos que no
-            # existen (caso "multiorgarmo": 5 productos fabricados con precios).
+        elif _evidencia_invencion(reply) == "lista":
+            # Sin categoría no hay pregunta de calificación que inyectar, y el LLM
+            # listó productos con precios que no existen (caso "multiorgarmo": 5
+            # productos fabricados). Eso sí se reemplaza.
             log.warning(
-                "LLM ofreció productos sin candidatos ni categoría — texto reemplazado "
-                "por mensaje honesto (posible invención)",
+                "LLM listó productos con precios sin candidatos ni categoría — texto "
+                "reemplazado por mensaje honesto (invención)",
             )
             reply = _SIN_RESULTADO_MSG
+        else:
+            # Solo una frase de plantilla: ni lista de precios ni categoría que
+            # preguntar. Borrar aquí es lo que convirtió "Deseo un domicilio" en
+            # una oferta de vibradores — no hay ningún producto inventado que
+            # ocultar, y el mensaje honesto habla de algo que el cliente nunca
+            # pidió. La respuesta del LLM sale tal cual.
+            log.info("Frase de oferta sin lista ni categoría — texto del LLM conservado")
 
     # DEFENSA A PRUEBA DE FALLOS — filtro FINAL de productos ya mostrados.
     # Aunque la exclusión se propaga por todos los caminos de _recuperar_candidatos,
