@@ -246,3 +246,26 @@ def test_la_regla_de_logistica_esta_en_el_prompt():
     p = (_ROOT / "prompts" / "system.md").read_text()
     assert "RESPONDE ESO PRIMERO" in p
     assert "NUNCA des un valor de envío" in p
+
+
+def test_no_se_pide_la_direccion_al_responder_el_envio():
+    """Prueba real del 08-08 12:18: el bot contestó bien lo del domicilio pero
+    remató con "¿A qué barrio o dirección sería?". La dirección se pide al cerrar
+    el pedido (regla 7), no a quien todavía no ha elegido producto."""
+    p = (_ROOT / "prompts" / "system.md").read_text()
+    assert "NO le pidas la dirección todavía" in p
+    # El mensaje de ejemplo es lo que el modelo copia: si vuelve a pedir la
+    # dirección ahí, la regla de arriba no sirve de nada.
+    ejemplo = p.split("Ejemplo del mensaje completo:")[1].split("\n")[0]
+    for prohibido in ("¿A qué barrio", "dirección sería", "tu dirección"):
+        assert prohibido not in ejemplo, ejemplo
+    assert "qué producto te gustaría llevar" in ejemplo, ejemplo
+
+
+def test_el_envio_nacional_menciona_el_tiempo_de_la_transportadora():
+    """La cobertura nacional se responde en el mismo mensaje, sin esperar a que
+    el cliente diga que está fuera de Bogotá."""
+    p = (_ROOT / "prompts" / "system.md").read_text()
+    ejemplo = p.split("Ejemplo del mensaje completo:")[1].split("\n")[0]
+    assert "transportadora" in ejemplo, ejemplo
+    assert "tiempo de entrega" in ejemplo, ejemplo
