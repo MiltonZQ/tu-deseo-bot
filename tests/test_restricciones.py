@@ -137,7 +137,7 @@ def test_el_clasificador_devuelve_restricciones_acumuladas():
     import asyncio
     from app import catalog, openai_client
 
-    async def _sin_llm(_t):
+    async def _sin_llm(_t, _history=None):
         return None
     openai_client.clasificar_intencion_llm = _sin_llm
 

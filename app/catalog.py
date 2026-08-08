@@ -1455,12 +1455,14 @@ async def clasificar_intencion_cliente(user_text: str,
         "calificado": bool,   # ¿ya sabemos subtipo/género suficientes para mostrar fotos?
         "pide_fotos": bool,
         "sustantivo": "anillo" | ... | None,
+        "es_logistica": bool, # pregunta por entrega/horario, no por producto
       }
     """
     if not user_text or not user_text.strip():
         return {
             "intencion": None, "categoria_funcional": None, "genero": None,
             "calificado": False, "pide_fotos": False, "sustantivo": None,
+            "es_logistica": False,
         }
 
     if _parece_direccion_envio(user_text):
@@ -1471,7 +1473,7 @@ async def clasificar_intencion_cliente(user_text: str,
         return {
             "intencion": None, "categoria_funcional": categoria_estado,
             "genero": None, "calificado": bool(categoria_estado),
-            "pide_fotos": False, "sustantivo": None,
+            "pide_fotos": False, "sustantivo": None, "es_logistica": False,
         }
 
     # Corregir typos comunes del cliente (anl→anal, mjer→mujer, dldo→dildo...)
@@ -1568,14 +1570,22 @@ async def clasificar_intencion_cliente(user_text: str,
     # mismo saco que "hola" y la búsqueda degeneraba a coincidencia por nombre,
     # que devolvía Limpiador De Juguetes.
     busca_sin_categoria = False
+    # El cliente pregunta por la entrega o el horario, no por un producto. Lo
+    # decide el LLM (que ve el mensaje y el contexto), nunca una lista de
+    # palabras: "domicilio" en una lista se equivoca en cuanto el cliente lo
+    # escribe de otra forma, y el precio de equivocarse aquí lo paga él.
+    es_logistica = False
     if user_text and len(user_text.strip()) >= 4:
         try:
             from app import openai_client
-            res_llm = await openai_client.clasificar_intencion_llm(user_text)
+            res_llm = await openai_client.clasificar_intencion_llm(user_text, history)
+            if res_llm and res_llm.get("categoria") == "logistica":
+                es_logistica = True
+                origen_clasificacion = origen_clasificacion or "llm"
             if res_llm and res_llm.get("categoria") == "indefinida":
                 busca_sin_categoria = not categoria_funcional
                 origen_clasificacion = origen_clasificacion or "llm"
-            if res_llm and res_llm.get("categoria") and res_llm["categoria"] not in ("ninguna", "indefinida"):
+            if res_llm and res_llm.get("categoria") and res_llm["categoria"] not in ("ninguna", "indefinida", "logistica"):
                 if categoria_funcional and categoria_funcional != res_llm["categoria"]:
                     log.info("El LLM corrige la categoría de las listas: %s → %s (%r)",
                              categoria_funcional, res_llm["categoria"], user_text[:60])
@@ -1839,6 +1849,12 @@ async def clasificar_intencion_cliente(user_text: str,
         # El cliente busca producto pero no acotó la categoría: el turno correcto
         # es preguntarle, no mostrarle lo que sea.
         "busca_sin_categoria": busca_sin_categoria and not categoria_funcional,
+        # El mensaje pregunta por la entrega/el horario. NO cambia qué se busca
+        # ni qué categoría se fija — de hecho aquí ya vale False si el LLM
+        # encontró una categoría de producto. Su único consumidor es el guardia
+        # anti-invención de main.py, que sin esto borra la respuesta sobre el
+        # domicilio y la sustituye por una oferta de productos.
+        "es_logistica": es_logistica and not categoria_funcional,
     }
 
 

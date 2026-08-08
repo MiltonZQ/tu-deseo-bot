@@ -205,7 +205,9 @@ def _clasificar_con_llm(user_text, respuesta_llm, history=None, estado=None,
     openai_client.clasificar_intencion_llm = _LLM_REAL
     openai_client._cache_clasif.clear()
 
-    async def _llm_mock(_texto):
+    # El clasificador recibe también el historial (es lo que le permite resolver
+    # "¿y ese?" sin heredar el tema); el mock lo acepta y lo ignora.
+    async def _llm_mock(_texto, _history=None):
         return respuesta_llm
 
     async def _contar_mock(_restricciones, subtipo=None):

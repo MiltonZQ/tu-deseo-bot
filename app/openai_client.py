@@ -413,9 +413,13 @@ _CLASIFICADOR_PROMPT = (
     "Categorías posibles (usa EXACTAMENTE la clave, minúsculas):\n"
     + "\n".join(f"- {k}: {v}" for k, v in _CATEGORIAS_LLM.items())
     + "\n\nGéneros posibles: hombre, mujer, pareja, anal, o null si no se aclara.\n"
-    "Hay dos claves más, y la diferencia entre ellas importa:\n"
-    "- \"ninguna\": el mensaje NO busca un producto. Saludo, despedida, pregunta "
-    "de envío o de horario, pago o comprobante, queja, o un producto que no "
+    "Hay tres claves más, y la diferencia entre ellas importa:\n"
+    "- \"logistica\": el mensaje pregunta por la ENTREGA o la ATENCIÓN, no por un "
+    "producto. Domicilio, envío, cuánto tarda, a dónde llegan, guía de rastreo, "
+    "horarios, si hay local o sede. Ejemplos: \"deseo un domicilio\", \"hacen "
+    "envíos a Cali\", \"¿a qué hora abren?\", \"¿cuánto se demora en llegar?\".\n"
+    "- \"ninguna\": el mensaje no busca un producto y tampoco es logística. "
+    "Saludo, despedida, pago o comprobante, queja, o un producto que no "
     "vendemos.\n"
     "- \"indefinida\": el cliente SÍ busca un producto pero no dice de cuál "
     "categoría, así que no se puede elegir ninguna con seguridad. Ejemplos: "
@@ -427,7 +431,15 @@ _CLASIFICADOR_PROMPT = (
     "de producto —para pareja, para jugar los dos, de cuero, que vibre, para el "
     "ano— elige la categoría que corresponda. Úsala solo cuando no haya ninguna "
     "pista. Y no uses \"ninguna\" para un cliente que quiere comprar algo aunque "
-    "no sepa qué.\n\n"
+    "no sepa qué.\n"
+    "Si el mensaje pide un PRODUCTO y ADEMÁS pregunta por el envío (\"quiero un "
+    "vibrador, ¿hacen domicilio?\"), elige la categoría del PRODUCTO, no "
+    "\"logistica\": el envío se le responde igual, pero la búsqueda necesita la "
+    "categoría.\n\n"
+    "Puede que recibas mensajes anteriores de la conversación. Son SOLO contexto "
+    "para resolver referencias (\"¿y ese?\", \"el otro\", \"sí\", \"el segundo\"). "
+    "Clasifica ÚNICAMENTE el último mensaje del cliente: que estuviera viendo "
+    "dildos no convierte \"¿hacen domicilio?\" en una consulta de dildos.\n\n"
     "Subtipo (opcional): si el cliente nombra una variante concreta, ponla en "
     "\"subtipo\". Claves válidas (usa EXACTAMENTE una, minúsculas, o null):\n"
     "colegiala, coneja, conejita, diabla, enfermera, mucama, playboy, policia, "
@@ -479,14 +491,50 @@ _cache_clasif: dict[str, dict] = {}
 _CACHE_MAX = 200
 
 
-async def clasificar_intencion_llm(user_message: str) -> dict | None:
+# Cuántos turnos previos ve el clasificador. Suficiente para resolver "¿y ese?"
+# sin convertir la conversación entera en contexto: el prompt le dice que
+# clasifique SOLO el último mensaje, y cuanto más historial, más se arriesga a
+# arrastrar la categoría anterior.
+_CLASIF_TURNOS_CONTEXTO = 4
+_CLASIF_CHARS_POR_TURNO = 200
+
+
+def _contexto_para_clasificar(history: list[dict] | None) -> list[dict]:
+    """Los últimos turnos, recortados, en formato de mensajes de chat."""
+    if not history:
+        return []
+    turnos = []
+    for h in history[-_CLASIF_TURNOS_CONTEXTO:]:
+        contenido = (h.get("content") or "").strip()
+        rol = h.get("role")
+        if not contenido or rol not in ("user", "assistant"):
+            continue
+        turnos.append({"role": rol, "content": contenido[:_CLASIF_CHARS_POR_TURNO]})
+    return turnos
+
+
+async def clasificar_intencion_llm(user_message: str,
+                                   history: list[dict] | None = None) -> dict | None:
+    """Clasifica el ÚLTIMO mensaje del cliente, viendo los turnos anteriores.
+
+    El historial es contexto, no tema: sin él, "¿y ese?" o "el otro" no se pueden
+    clasificar; con él, el riesgo es que arrastre la categoría anterior, y de eso
+    se ocupa el prompt.
+    """
     if not user_message or not user_message.strip():
         return None
-    key = user_message.strip().lower()
+    contexto = _contexto_para_clasificar(history)
+    # La caché tiene que incluir el contexto: el mismo "¿y ese?" significa cosas
+    # distintas en dos conversaciones, y cachear solo por texto le devolvería a
+    # un cliente la clasificación de otro.
+    key = "\n".join(
+        [f"{m['role']}:{m['content']}" for m in contexto] + [user_message.strip()]
+    ).lower()
     if key in _cache_clasif:
         return _cache_clasif[key]
     messages = [
         {"role": "system", "content": _CLASIFICADOR_PROMPT},
+        *contexto,
         {"role": "user", "content": user_message},
     ]
     try:
@@ -515,7 +563,13 @@ async def clasificar_intencion_llm(user_message: str) -> dict | None:
         # que permite preguntarle en vez de adivinar; antes ambas caían en
         # "ninguna" y el bot acababa buscando por nombre suelto ("quiero un
         # juguete para mi novia" → Limpiador De Juguetes).
-        if cat not in _CATEGORIAS_LLM and cat not in ("ninguna", "indefinida"):
+        #
+        # "logistica" se separó de "ninguna" por el mismo motivo: el cliente que
+        # escribe "deseo un domicilio" no busca producto, pero saberlo permite
+        # que el guardia anti-invención de main.py no trate su respuesta como si
+        # fuera un catálogo inventado. Antes iba dentro de "ninguna" y esa
+        # respuesta se borraba.
+        if cat not in _CATEGORIAS_LLM and cat not in ("ninguna", "indefinida", "logistica"):
             log.warning("LLM clasificó categoría inválida %r — descartada", cat)
             return None
         # subtipo y atributo: vocabulario cerrado. Si el LLM devuelve algo que no
