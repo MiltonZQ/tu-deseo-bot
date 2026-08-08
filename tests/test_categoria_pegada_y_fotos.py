@@ -44,7 +44,7 @@ for _m in ("asyncpg", "httpx", "openai", "qdrant_client", "redis", "redis.asynci
 from app import catalog, db, openai_client  # noqa: E402
 
 
-async def _sin_llm(_texto):
+async def _sin_llm(_texto, _history=None):
     """El respaldo LLM no debe influir en estos tests (y no hay red)."""
     return None
 

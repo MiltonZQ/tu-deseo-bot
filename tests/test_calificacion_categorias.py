@@ -52,10 +52,12 @@ _ALIASES_TYPO = _extraer_constantes(_CAT, ["_ALIASES_TYPO"])["_ALIASES_TYPO"]
 # Regex tal cual está definida en main.py (se mantiene duplicada para no importar el módulo).
 _FOTO_MARKER_RE = re.compile(r"\[FOTO:\s*([^\]]+)\]", re.IGNORECASE)
 _OFRECE_PRODUCTOS_RE = re.compile(
-    r"(mira estas opciones|estas opciones disponibles|te muestro|te las muestro|"
+    r"(mira estas opciones|estas opciones disponibles|"
     r"para ti tengo|para ti 👇|que tenemos disponibles|nuestras mejores opciones|"
-    r"opciones de (anillos|vibradores|dildos|lubricantes|lenceria|lencería)|"
-    r"de anillos y vibradores|de anillos|estás son|estas son|aquí tienes)",
+    r"opciones de (anillos|vibradores|dildos|lubricantes|lenceria|lencería|"
+    r"succionadores|masturbadores|plugs)|de anillos y vibradores|"
+    r"(te (las )?muestro|est[aá]s son|aqu[ií] tienes)[^\n]{0,30}"
+    r"(opciones|productos|dise[ñn]os|modelos|alternativas))",
     re.IGNORECASE,
 )
 

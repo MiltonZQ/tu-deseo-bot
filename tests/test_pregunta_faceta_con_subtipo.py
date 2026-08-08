@@ -39,7 +39,7 @@ main = importar_main()
 from app import catalog, db, facetas, openai_client, preguntas  # noqa: E402
 
 
-async def _sin_llm(_texto):
+async def _sin_llm(_texto, _history=None):
     return None
 
 

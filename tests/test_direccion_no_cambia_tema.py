@@ -27,7 +27,7 @@ for _m in ("asyncpg", "httpx", "openai", "qdrant_client", "redis", "redis.asynci
 from app import catalog, openai_client  # noqa: E402
 
 
-async def _sin_llm(_texto):
+async def _sin_llm(_texto, _history=None):
     return None
 
 
